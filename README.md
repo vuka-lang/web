@@ -503,7 +503,7 @@ they show immediately, and the push's reply settles them.
 <button
 	class={likedClass(p.liked)}
 	onClick={ui.JS.AddClass(ui.This, "liked").SetText(ui.Ref("likes"), fmt.Sprint(p.likes+1)).
-		Push(p.Like, ui.OnError(ui.JS.Show(ui.Ref("like-error"))))}
+		Push(p.Like).OnError(ui.JS.Show(ui.Ref("like-error")))}
 >
 	Like
 </button>
@@ -514,15 +514,17 @@ they show immediately, and the push's reply settles them.
 - **Success** (a reply without an error): the predictions stay, and
   reconciliation goes on as for any command — wherever the server renders
   something else (the count with everyone else's likes), the server wins.
-  `on_ok` steps run.
+  The `OnSuccess` chain runs.
 - **Failure** (the handler returned an error, an `error` message, no reply
   within the push's timeout — 10s by default — or the connection dropping
   before the reply): each prediction is undone, latest first, except where
   the server has rendered a different value since or a later command
-  changed it. `on_error` steps run, and `vk:error` fires as for any error.
+  changed it. The `OnError` chain runs, and `vk:error` fires as for any
+  error.
   A push made while the page isn't connected isn't sent (the runtime
   doesn't queue events) and fails at once.
-- `keep` never undoes (the hooks still run). A reply that comes after its
+- `Push(h, ui.KeepOnError())` never undoes (the hooks still run);
+  `ui.Timeout(d)` sets how long a push waits. A reply that comes after its
   push timed out is applied as usual, without running hooks again.
 
 What counts: classes, attributes, the `style` display (`Show`/`Hide`, a
@@ -543,8 +545,8 @@ a push waits, its element has `data-vk-pending`; after a failure it has
 **Calling JavaScript.** A chart to redraw, confetti on a save, a date
 picker to open: `Call("name", args…)` calls a page function with
 `ctx` — `{el, event, root, target(spec)}` — and the arguments, which may be
-reads of the page at that moment (a field's value, a checkbox, an
-attribute). Register functions with `vuka.register`; the first line lets a
+reads of the page at that moment (`ui.Ref("q").Value()`, `.Checked()`,
+`.Attr("name")`). Register functions with `vuka.register`; the first line lets a
 script run before the runtime (its registrations wait in `vuka.q`):
 
 ```html
@@ -560,7 +562,7 @@ the rest of the chain until it settles; `false` stops the chain as a
 declined `Confirm` does. An unknown function, a throw or a rejection stops
 the chain and fires `vk:error` on the element (`detail`: `{error, fn}`);
 when it happens among a push's predictions, that push fails without being
-sent — its predictions are undone and its `on_error` runs. (A chain that
+sent — its predictions are undone and its `OnError` chain runs. (A chain that
 waits on a promise doesn't hold back a `data-vk-on-…` handler on the same
 element; put the `Push` in the chain.)
 
