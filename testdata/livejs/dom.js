@@ -321,7 +321,8 @@ function matchComplex(el, parts, i = parts.length - 1) {
 }
 
 // page loads live.js into a fresh context over body: options.live gives
-// the script a token (it connects), options.confirm answers window.confirm.
+// the script a token (it connects), options.confirm answers window.confirm,
+// options.vuka is window.vuka before the runtime loads.
 function page(file, body, options = {}) {
   const doc = new Document();
   doc.body.innerHTML = body;
@@ -375,6 +376,7 @@ function page(file, body, options = {}) {
     },
   };
   ctx.window = ctx;
+  if (options.vuka) ctx.vuka = options.vuka; // what a page's script set up first
   ctx.listeners = {};
   ctx.addEventListener = (t, fn) => { (ctx.listeners[t] ||= []).push(fn); };
   vm.createContext(ctx);

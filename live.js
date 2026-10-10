@@ -7,7 +7,7 @@
 (() => {
   "use strict";
   const script = document.currentScript;
-  if (!script || window.vuka) return;
+  if (!script || window.vuka && window.vuka.connect) return;
   const live = script.hasAttribute("data-vk-token"); // a page with no live parts has none
   const src = new URL(script.src, location.href);
   const url = (src.protocol === "https:" ? "wss://" : "ws://") + src.host +
@@ -16,6 +16,8 @@
   const listening = new Set();
   const busy = new Map(); // ref → {el, form}: elements waiting for their reply
   const pending = new Map(); // el → {timer, msg}: debounced events
+  const preds = new Map(); // ref → a sent push's predictions and hooks
+  let rec = null; // what the running chain changed since its last push
   let ws = null, joined = false, ref = 0, attempt = 0, timer = 0, trees = null;
 
   const state = (s) => document.documentElement.setAttribute("data-vk-state", s);
@@ -34,6 +36,7 @@
       pending.clear();
       busy.forEach((b) => b.el.removeAttribute("aria-busy"));
       busy.clear();
+      [...preds.keys()].forEach((r) => settle(r, true)); // no reply comes
       if (e.code === 4001) return reload(e.reason);
       if (e.code === 4004 || e.code === 1000) return state("closed");
       state("disconnected");
@@ -106,6 +109,7 @@
       busy.delete(m.ref);
       b.el.removeAttribute("aria-busy");
     }
+    if (m.ref && m.type !== "redirect") settle(m.ref, m.type === "error" || !!m.error);
   }
 
   function fail(message, ref) {
@@ -211,6 +215,7 @@
       el.setAttribute("aria-busy", "true");
     }
     ws.send(JSON.stringify(msg));
+    return msg.ref;
   }
 
   const isField = (el) => el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
@@ -238,7 +243,7 @@
     if (el.hasAttribute("data-vk-ignore") && el.id && el.id === next.id) return;
     if (!isField(el)) {
       attrs(el, next);
-      return children(el, next);
+      return keptText(el, next) || children(el, next);
     }
     const focused = el === document.activeElement;
     const seen = fieldState(el), before = serverValue(el);
@@ -282,7 +287,7 @@
     let waiting = false;
     busy.forEach((b) => { waiting = waiting || b.el === el; });
     for (const a of Array.from(el.attributes)) {
-      if (!next.hasAttribute(a.name) && !(waiting && a.name === "aria-busy")) el.removeAttribute(a.name);
+      if (!next.hasAttribute(a.name) && !(waiting && a.name === "aria-busy") && !/^data-vk-(pending|failed)$/.test(a.name)) el.removeAttribute(a.name);
     }
     for (const a of Array.from(next.attributes)) {
       if (el.getAttribute(a.name) !== a.value) el.setAttribute(a.name, a.value);
@@ -472,20 +477,39 @@
   function pushed(list) {
     for (const p of list || []) {
       const root = byID(p.id);
-      if (root) try { run(root, p.ops || [], null); } catch (err) { fail("live: a pushed command failed: " + err.message); }
+      if (root) try { run(root, p.ops || [], null, []); } catch (err) { fail("live: a pushed command failed: " + err.message); }
     }
   }
 
   // run runs ops on behalf of el (this) for event e (null when pushed); false
-  // means a confirm was declined.
-  function run(el, ops, e) {
+  // means a confirm was declined or a call stopped the chain. A chain records
+  // what its steps change (rec) until a push takes the record as its
+  // predictions; a chain run from inside one (exec) shares its record, and r
+  // starts a record of its own (or carries one across a call it waits for).
+  function run(el, ops, e, r) {
+    if (rec && !r) return steps(el, ops, e);
+    const outer = rec;
+    rec = r || [];
+    try { return steps(el, ops, e); } finally { rec = outer; }
+  }
+
+  function steps(el, ops, e) {
     for (let i = 0; i < ops.length; i++) {
       const [name, a = {}] = ops[i];
-      if (name === "if") i = branch(el, ops, i);
+      if (name === "call") {
+        const out = call(el, a, e), rest = ops.slice(i + 1), r = rec;
+        if (out === false) return false;
+        if (out === stop) return refuse(el, rest, r), false;
+        if (out && typeof out.then === "function") {
+          out.then((v) => { if (v !== false) run(el, rest, e, r); },
+            (err) => { fail("live: " + a.fn + ": " + (err && err.message || err)); refuse(el, rest, r); });
+          return;
+        }
+      } else if (name === "if") i = branch(el, ops, i);
       else if (name === "else_if" || name === "else") i = end(ops, i);
       else if (name === "debounce" || name === "throttle") {
-        const rest = ops.slice(i + 1);
-        return pace(name, el, e, a.ms || 0, () => run(el, rest, e));
+        const rest = ops.slice(i + 1), r = rec;
+        return pace(name, el, e, a.ms || 0, () => run(el, rest, e, r));
       } else if (name === "key") {
         if (!e || !(a.keys || []).includes(e.key)) return;
       } else if (name === "confirm") {
@@ -495,6 +519,103 @@
         else warn("unknown JS command " + name);
       }
     }
+  }
+
+  // Calling JavaScript: a function registered with vuka.register, else one
+  // at a dotted path on window, called as fn(ctx, ...args) — never eval'd.
+  const fns = new Map(), stop = {};
+  function call(el, a, e) {
+    const path = String(a.fn || "");
+    let fn = fns.get(path), self = window;
+    if (!fn && /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(path)) {
+      fn = window;
+      for (const k of path.split(".")) { self = fn; fn = fn == null ? undefined : fn[k]; }
+    }
+    if (typeof fn !== "function") {
+      warn("no JavaScript function " + path);
+      fail("live: no JavaScript function " + path);
+      return stop;
+    }
+    const at = a.to ? targets(el, a.to)[0] || null : el;
+    const root = at && at.closest("[data-vk-id]") || document;
+    const ctx = { el: at, event: e, root, target: (to) => targets(at, to) };
+    try {
+      return fn.apply(fns.has(path) ? undefined : self, [ctx, ...(a.args || []).map((v) => arg(el, v))]);
+    } catch (err) {
+      fail("live: " + path + ": " + (err && err.message || err));
+      return stop;
+    }
+  }
+  // arg resolves a read marker — {"$read": {to, value|checked|attr}} — to
+  // what the browser holds now.
+  function arg(el, v) {
+    if (!v || typeof v !== "object" || !v.$read) return v;
+    const c = v.$read, t = targets(el, c.to)[0];
+    if (!t) return null;
+    if ("checked" in c) return !!t.checked;
+    if ("attr" in c) return t.getAttribute(c.attr);
+    return read(t);
+  }
+  // refuse ends a chain a call stopped: the next push's predictions (what
+  // the chain changed since its last push) are undone and the push fails
+  // without being sent.
+  function refuse(el, rest, r) {
+    const p = rest.find((o) => o[0] === "push");
+    if (p) settle(track(el, p[1] || {}, r ? r.splice(0) : []), true);
+  }
+
+  // Optimistic updates: a sent push keeps what its chain changed before it
+  // (its predictions) until its reply. A reply with an error, no reply in
+  // time, or a lost connection undoes them (but not what the server has
+  // changed since) and runs on_error; a reply without one runs on_ok.
+  let local = 0;
+  function track(el, a, recs, sent) {
+    const id = sent || "local" + ++local;
+    const root = el && el.closest("[data-vk-id]");
+    const p = { el, a, recs, root: root && root.getAttribute("data-vk-id") };
+    preds.set(id, p);
+    if (el) {
+      el.removeAttribute("data-vk-failed");
+      el.setAttribute("data-vk-pending", "");
+    }
+    if (sent) p.timer = setTimeout(() => { fail("live: no reply to event " + id, id); settle(id, true); }, a.timeout || 10000);
+    return id;
+  }
+  function settle(id, error) {
+    const p = preds.get(id);
+    if (!p) return;
+    preds.delete(id);
+    clearTimeout(p.timer);
+    const el = p.el;
+    if (el && ![...preds.values()].some((q) => q.el === el)) el.removeAttribute("data-vk-pending");
+    if (error) {
+      if (!p.a.keep) for (let i = p.recs.length; i--;) undo(p.recs[i]);
+      if (el) el.setAttribute("data-vk-failed", "");
+    }
+    const hooks = error ? p.a.on_error : p.a.on_ok;
+    if (hooks) run(el && el.isConnected ? el : p.root && byID(p.root) || document.body, hooks, null, []);
+  }
+  // undo puts back what a prediction changed, unless the server has changed
+  // it since (the reconciliation record is gone, or the field's server value
+  // moved).
+  function undo(r) {
+    const el = r.el, t = running.get(el);
+    if (t) t.finish();
+    if (r.field) {
+      if (serverValue(el) !== r.server) return;
+      if (checkable(el)) el.checked = r.before;
+      else el.value = r.before;
+      return;
+    }
+    const name = r.cls ? "class" : r.name, m = touched.get(el), k = m && m.get(name);
+    if (!k) return;
+    if (r.cls) el.classList[r.had ? "add" : "remove"](r.cls);
+    else if (name === TEXT) el.textContent = r.before;
+    else if (r.before === null) el.removeAttribute(name);
+    else el.setAttribute(name, r.before);
+    k.value = val(el, name);
+    if (k.value === k.server) m.delete(name);
+    if (!m.size) touched.delete(el);
   }
 
   // branch returns the index after which the branch of the if at i that
@@ -552,22 +673,40 @@
     return true;
   }
 
-  // Reconciliation: per element, each attribute a command changed, with the
-  // server's value then and the command's. A morph that renders the
-  // attribute as before puts the command's value back; one that renders it
-  // differently wins, and the attribute is the server's again.
-  const touched = new WeakMap();
-  function touch(el, name, change) {
+  // Reconciliation: per element, each attribute (or its text, TEXT) a
+  // command changed, with the server's value then and the command's. A
+  // morph that renders it as before puts the command's value back; one that
+  // renders it differently wins, and it is the server's again. A running
+  // chain also notes the value before each change (rec), for a push to undo.
+  const touched = new WeakMap(), TEXT = "#text";
+  const val = (el, name) => name === TEXT ? el.textContent : el.getAttribute(name);
+  function note(el, name) {
+    if (rec && !rec.some((r) => r.el === el && r.name === name)) rec.push({ el, name, before: val(el, name) });
+  }
+  function touch(el, name, change, cls) {
+    if (cls) { if (rec) cls.forEach((c) => rec.push({ el, cls: c, had: el.classList.contains(c) })); } else note(el, name);
     let m = touched.get(el);
     if (!m) touched.set(el, (m = new Map()));
-    if (!m.has(name)) m.set(name, { server: el.getAttribute(name) });
+    if (!m.has(name)) m.set(name, { server: val(el, name) });
     change();
-    m.get(name).value = el.getAttribute(name);
+    m.get(name).value = val(el, name);
+  }
+  function keptText(el, next) {
+    const m = touched.get(el), r = m && m.get(TEXT);
+    if (!r) return false;
+    if (next.textContent === r.server) {
+      if (el.textContent !== r.value) el.textContent = r.value;
+      return true;
+    }
+    m.delete(TEXT);
+    if (!m.size) touched.delete(el);
+    return false;
   }
   function keep(el, next) {
     const m = touched.get(el);
     if (m) {
       m.forEach((r, name) => {
+        if (name === TEXT) return;
         if (next.getAttribute(name) !== r.server) return m.delete(name);
         if (r.value === null) el.removeAttribute(name);
         else if (el.getAttribute(name) !== r.value) el.setAttribute(name, r.value);
@@ -579,7 +718,7 @@
   }
 
   const words = (v) => Array.isArray(v) ? v.flatMap(words) : String(v || "").split(/\s+/).filter(Boolean);
-  const classes = (op) => (el, a) => targets(el, a.to).forEach((t) => touch(t, "class", () => words(a.names).forEach((c) => t.classList[op](c))));
+  const classes = (op) => (el, a) => targets(el, a.to).forEach((t) => touch(t, "class", () => words(a.names).forEach((c) => t.classList[op](c)), words(a.names)));
 
   // Display: show and hide edit the style attribute's display (what a
   // morph re-renders and a command must keep); show also removes hidden.
@@ -603,6 +742,7 @@
   const hide = (el) => setDisplay(el, "none");
   const visibly = (el, a, on) => {
     if (!a.transition) return on ? show(el, a) : hide(el);
+    if (!on) note(el, "style"); // hidden at the transition's end
     animate(el, a.transition, a.time, on ? () => show(el, a) : null, on ? null : () => hide(el));
   };
 
@@ -728,18 +868,22 @@
     },
     copy_text: (el, a) => copy(String(a.text), el),
     scroll_to: (el, a) => { const t = targets(el, a.to)[0]; if (t) t.scrollIntoView({ block: "nearest", behavior: "smooth" }); },
+    set_text: each((t, a) => touch(t, TEXT, () => { t.textContent = a.text == null ? "" : String(a.text); })),
     set_value: each((t, a) => {
       if (!isField(t)) return;
+      if (rec) rec.push({ el: t, field: true, before: checkable(t) ? t.checked : t.value, server: serverValue(t) });
       if (t.type === "checkbox" || t.type === "radio") t.checked = a.value === "true";
       else t.value = a.value;
       t.dispatchEvent(new Event("input", { bubbles: true }));
       t.dispatchEvent(new Event("change", { bubbles: true }));
     }),
     // push sends an event to a handler as data-vk-on-<event> would.
+    // Its predictions are what the chain changed since its last push.
     push: (el, a, e) => {
       if (!a.h) return; // rendered without a session
       if (!live) return warn("a push command needs a live page");
-      if (!joined) return;
+      const recs = rec ? rec.splice(0) : [];
+      if (!joined) return settle(track(el, a, recs), true); // not sent: it fails at once
       const type = a.event || (e ? e.type : "push");
       const msg = { type: "event", target: a.h, event: type };
       if (e && typeof e.key === "string") msg.key = e.key;
@@ -748,11 +892,16 @@
       const form = type === "submit" ? (e && e.target.closest("form")) || (el && el.closest("form")) : null;
       if (form) msg.form = formOf(form, e && e.submitter);
       flush();
-      send(msg, el, form);
+      const id = send(msg, el, form);
+      if (id) track(el, a, recs, id);
     },
   };
 
-  window.vuka = { connect, tree, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
+  // register names a function for call; a page's script that runs first
+  // queues its calls on window.vuka.q.
+  const register = (name, fn) => { fns.set(String(name), fn); };
+  ((window.vuka && window.vuka.q) || []).forEach((r) => register(...r));
+  window.vuka = { connect, tree, register, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   listenIn(document.documentElement.outerHTML);
   if (!live) return;
   window.addEventListener("online", () => { if (!ws) { attempt = 0; connect(); } });

@@ -340,12 +340,198 @@ test("reconciliation under protocol v2, and a transition across a morph", () => 
   eq(m.className, "m sel", "the transition's classes went");
 });
 
+// Optimistic updates.
+const sentRef = (p, i) => p.ws().sent[i].ref;
+const errors = (p) => p.logs.filter((l) => l.startsWith("error"));
+
+test("optimistic: predictions show at once; a reply keeps them while the server renders the same, the server's change wins", () => {
+  const html = (n) => `<div data-vk-id="c1"><button class="like" data-vk-js-click='${js([["add_class", { names: ["liked"] }], ["set_text", { to: { sel: "#n" }, text: "6" }],
+    ["push", { h: "c1:0", on_ok: [["add_class", { names: ["ok"] }]] }]])}'>like</button><b id="n">${n}</b></div>`;
+  const p = joined(html(5));
+  const b = () => p.$("button");
+  p.fire("button", "click");
+  eq([b().className, p.$("#n").textContent, b().hasAttribute("data-vk-pending"), b().getAttribute("aria-busy")], ["like liked", "6", true, "true"], "predicted");
+  p.server({ type: "patch", ref: 99, updates: [{ id: "c1", html: html(5) }] }); // another reply: still pending
+  eq([b().className, p.$("#n").textContent, b().hasAttribute("data-vk-pending")], ["like liked", "6", true], "kept through a patch");
+  p.server({ type: "patch", ref: sentRef(p, 1), updates: [{ id: "c1", html: html(5) }] });
+  eq([b().className, p.$("#n").textContent, b().hasAttribute("data-vk-pending"), b().hasAttribute("data-vk-failed")], ["like liked ok", "6", false, false], "the reply: on_ok on this");
+  p.server({ type: "patch", updates: [{ id: "c1", html: html(7) }] });
+  eq([p.$("#n").textContent, b().className], ["7", "like liked ok"], "the server's text wins");
+});
+
+test("optimistic: an error reply undoes attributes, classes, style, hidden, text and values, then runs on_error", () => {
+  const body = `<div data-vk-id="c1"><button class="like on" data-vk-js-click='${js([
+    ["add_class", { names: ["liked"] }], ["remove_class", { names: ["on"] }], ["set_attr", { name: "aria-pressed", value: "true" }],
+    ["hide", { to: { sel: "#x" } }], ["show", { to: { sel: "#y" } }], ["set_text", { to: { sel: "#n" }, text: "6" }],
+    ["set_value", { to: { sel: "#v" }, value: "new" }], ["set_value", { to: { sel: "#c" }, value: "true" }],
+    ["push", { h: "c1:0", on_error: [["show", { to: { sel: "#err" } }]] }]])}'>like</button>
+    <p id="x" style="color: red">x</p><p id="y" hidden>y</p><b id="n">5</b><input id="v" value="old"><input id="c" type="checkbox"><p id="err" hidden>failed</p></div>`;
+  const p = joined(body);
+  p.fire("button", "click");
+  const st = () => [p.$("button").className, p.$("button").getAttribute("aria-pressed"), p.$("#x").getAttribute("style"), p.$("#y").hasAttribute("hidden"),
+    p.$("#n").textContent, p.$("#v").value, p.$("#c").checked];
+  eq(st(), ["like liked", "true", "color: red; display: none", false, "6", "new", true], "predicted");
+  let detail;
+  p.doc.addEventListener("vk:error", (e) => { detail = e.detail; });
+  p.server({ type: "patch", ref: sentRef(p, 1), updates: [], error: "nope" });
+  eq(st(), ["like on", null, "color: red", true, "5", "old", false], "undone");
+  eq([p.$("#err").hasAttribute("hidden"), p.$("button").hasAttribute("data-vk-failed"), p.$("button").hasAttribute("data-vk-pending"), detail.message], [false, true, false, "nope"], "on_error, failed, vk:error");
+  p.server({ type: "patch", updates: [{ id: "c1", html: body.replace("5", "8") }] });
+  eq([p.$("button").className, p.$("#n").textContent, p.$("button").hasAttribute("data-vk-failed")], ["like on", "8", true], "nothing left to reconcile; failed survives a morph");
+});
+
+test("optimistic: what the server changed before the error reply is the server's", () => {
+  const html = (cls, n, title = "a") => `<div data-vk-id="c1"><button class="${cls}" title="${title}" data-vk-js-click='${js([["add_class", { names: ["liked"] }],
+    ["set_attr", { name: "title", value: "b" }], ["set_text", { to: { sel: "#n" }, text: "6" }], ["push", { h: "c1:0" }]])}'>like</button><b id="n">${n}</b></div>`;
+  const p = joined(html("like", "5"));
+  p.fire("button", "click");
+  p.server({ type: "patch", updates: [{ id: "c1", html: html("like big", "9") }] });
+  eq([p.$("button").className, p.$("#n").textContent, p.$("button").title || p.$("button").getAttribute("title")], ["like big", "9", "b"], "the server's patch");
+  p.server({ type: "error", ref: sentRef(p, 1), error: "nope" });
+  eq([p.$("button").className, p.$("#n").textContent, p.$("button").getAttribute("title")], ["like big", "9", "a"], "class and text the server's, the title undone");
+  const q = joined(html("like", "5"));
+  q.fire("button", "click");
+  q.server({ type: "patch", ref: sentRef(q, 1), error: "nope", updates: [{ id: "c1", html: html("like", "7") }] });
+  eq([q.$("button").className, q.$("#n").textContent], ["like", "7"], "the error reply's own patch");
+});
+
+test("optimistic: hooks run on this, or the instance's root once it is gone", () => {
+  const btn = `<button data-vk-js-click='${js([["push", { h: "c1:0", on_ok: [["add_class", { names: ["ok"] }]] }]])}'>x</button>`;
+  const p = joined(`<div data-vk-id="c1">${btn}</div>`);
+  p.fire("button", "click");
+  p.server({ type: "patch", ref: sentRef(p, 1), updates: [{ id: "c1", html: `<div data-vk-id="c1"><p>gone</p></div>` }] });
+  eq(p.$("[data-vk-id=c1]").className, "ok", "the root");
+});
+
+test("optimistic: no reply in time fails the push; a late reply is applied without its hooks", () => {
+  const body = `<div data-vk-id="c1"><button data-vk-js-click='${js([["add_class", { names: ["liked"] }],
+    ["push", { h: "c1:0", timeout: 500, on_ok: [["add_class", { names: ["ok"] }]], on_error: [["add_class", { names: ["err"] }]] }]])}'>x</button><b>one</b></div>`;
+  const p = joined(body);
+  p.fire("button", "click");
+  p.tick(499);
+  eq(p.$("button").className, "liked", "waiting");
+  p.tick(1);
+  eq([p.$("button").className, p.$("button").hasAttribute("data-vk-failed"), errors(p).length], ["err", true, 1], "timed out");
+  p.server({ type: "patch", ref: sentRef(p, 1), updates: [{ id: "c1", html: body.replace("one", "two") }] });
+  eq([p.$("button").className, p.$("b").textContent], ["err", "two"], "late reply");
+});
+
+test("optimistic: keep never undoes; hooks still run", () => {
+  const p = joined(`<button data-vk-js-click='${js([["add_class", { names: ["liked"] }], ["push", { h: "c0:0", keep: true, on_error: [["add_class", { names: ["err"] }]] }]])}'>x</button>`);
+  p.fire("button", "click");
+  p.server({ type: "patch", ref: sentRef(p, 1), updates: [], error: "nope" });
+  eq(p.$("button").className, "liked err");
+});
+
+test("optimistic: each push in a chain settles its own predictions", () => {
+  const p = joined(`<button data-vk-js-click='${js([["add_class", { names: ["a"] }], ["push", { h: "c0:0" }], ["add_class", { names: ["b"] }], ["push", { h: "c0:1" }]])}'>x</button>`);
+  p.fire("button", "click");
+  eq(p.$("button").className, "a b", "both");
+  p.server({ type: "patch", ref: sentRef(p, 2), updates: [] });
+  p.server({ type: "patch", ref: sentRef(p, 1), updates: [], error: "nope" });
+  eq([p.$("button").className, p.$("button").hasAttribute("data-vk-pending")], ["b", false], "the first undone, the second kept");
+});
+
+test("optimistic: data-vk-pending while waiting, data-vk-failed until the next push", () => {
+  const p = joined(`<div data-vk-id="c1"><button data-vk-js-click='${js([["push", { h: "c1:0" }]])}'>x</button></div>`);
+  const b = () => p.$("button"), marks = () => [b().hasAttribute("data-vk-pending"), b().hasAttribute("data-vk-failed")];
+  p.fire("button", "click");
+  eq(marks(), [true, false], "pending");
+  p.server({ type: "patch", ref: sentRef(p, 1), error: "nope", updates: [{ id: "c1", html: `<div data-vk-id="c1"><button>x</button></div>` }] });
+  eq(marks(), [false, true], "failed");
+  p.window.vuka.run(b(), [["push", { h: "c1:0" }]]);
+  eq(marks(), [true, false], "pushed again");
+  p.server({ type: "patch", ref: sentRef(p, 2), updates: [] });
+  eq(marks(), [false, false], "done");
+});
+
+test("optimistic: a pushed chain's push", () => {
+  const body = `<div data-vk-id="c1"><p>x</p></div>`;
+  const p = joined(body);
+  p.server({ type: "patch", updates: [], js: [{ id: "c1", ops: [["add_class", { names: ["saving"] }], ["push", { h: "c1:1", on_error: [["add_class", { names: ["err"] }]] }]] }] });
+  eq([p.ws().sent[1].target, p.$("div").className], ["c1:1", "saving"], "sent");
+  p.server({ type: "patch", ref: sentRef(p, 1), updates: [], error: "nope" });
+  eq(p.$("div").className, "err", "undone");
+});
+
+test("optimistic: a push with no connection fails at once, one in flight when the connection drops too", () => {
+  const ops = [["add_class", { names: ["liked"] }], ["push", { h: "c0:0", on_error: [["add_class", { names: ["err"] }]] }]];
+  const p = open(`<button data-vk-js-click='${js(ops)}'>x</button>`, { live: true });
+  p.fire("button", "click");
+  eq([p.$("button").className, p.$("button").hasAttribute("data-vk-failed"), p.ws().sent.length], ["err", true, 0], "not joined");
+  const q = joined(`<button data-vk-js-click='${js(ops)}'>x</button>`);
+  q.fire("button", "click");
+  q.ws().onclose({ code: 1006 });
+  eq(q.$("button").className, "err", "dropped");
+});
+
+// Calling JavaScript.
+const flush = () => new Promise((r) => setImmediate(r));
+
+test("call: a registered function with the element, the root and read args", () => {
+  const p = open(`<div data-vk-id="c1"><input id="q" value="hi"><input id="c" type="checkbox" checked>
+    <button data-x="7" data-vk-js-click='${js([["call", { fn: "mark", args: [1, { a: "b" }, { $read: { to: { sel: "#q" }, value: true } },
+      { $read: { to: { sel: "#c" }, checked: true } }, { $read: { attr: "data-x" } }] }], ["call", { fn: "mark", to: { sel: "#q" } }], ["add_class", { names: ["after"] }]])}'>x</button></div>`);
+  const got = [];
+  p.window.vuka.register("mark", (ctx, ...args) => { got.push([ctx.el.tagName, ctx.root.getAttribute("data-vk-id"), ctx.event && ctx.event.type, ctx.target({ sel: "#c" }).length, ...args]); });
+  p.fire("button", "click");
+  eq(got, [["BUTTON", "c1", "click", 1, 1, { a: "b" }, "hi", true, "7"], ["INPUT", "c1", "click", 1]]);
+  eq(p.$("button").className, "after");
+});
+
+test("call: the chain waits for a promise; false stops it", async () => {
+  let done;
+  const p = open(`<button id="a" data-vk-js-click='${js([["call", { fn: "wait" }], ["add_class", { names: ["after"] }]])}'>x</button>
+    <button id="b" data-vk-js-click='${js([["call", { fn: "no" }], ["add_class", { names: ["after"] }]])}'>x</button>
+    <button id="c" data-vk-js-click='${js([["call", { fn: "later" }], ["add_class", { names: ["after"] }]])}'>x</button>`,
+    { vuka: { q: [["wait", () => new Promise((r) => { done = r; })]] } });
+  p.window.vuka.register("no", () => false);
+  p.window.vuka.register("later", () => Promise.resolve(false));
+  p.fire("#a", "click");
+  await flush();
+  eq(p.$("#a").className, "", "waiting");
+  done();
+  await flush();
+  eq(p.$("#a").className, "after", "resolved");
+  p.fire("#b", "click");
+  p.fire("#c", "click");
+  await flush();
+  eq([p.$("#b").className, p.$("#c").className], ["", ""], "stopped");
+});
+
+test("call: a throw stops the chain and fails the push it predicts for, unsent", async () => {
+  const p = joined(`<button id="a" data-vk-js-click='${js([["add_class", { names: ["liked"] }], ["call", { fn: "boom" }], ["push", { h: "c0:0", on_error: [["add_class", { names: ["err"] }]] }]])}'>x</button>
+    <button id="b" data-vk-js-click='${js([["add_class", { names: ["liked"] }], ["call", { fn: "reject" }], ["push", { h: "c0:0", on_error: [["add_class", { names: ["err"] }]] }]])}'>x</button>`);
+  p.window.vuka.register("boom", () => { throw new Error("bang"); });
+  p.window.vuka.register("reject", () => Promise.reject(new Error("later bang")));
+  let n = 0;
+  p.doc.addEventListener("vk:error", () => n++);
+  p.fire("#a", "click");
+  eq([p.$("#a").className, p.$("#a").hasAttribute("data-vk-failed"), p.ws().sent.length, n], ["err", true, 1, 1], "throw");
+  p.fire("#b", "click");
+  await flush();
+  eq([p.$("#b").className, p.ws().sent.length, n], ["err", 1, 2], "rejection");
+});
+
+test("call: a dotted path on window; an unknown function stops the chain", () => {
+  const p = open(`<button id="a" data-vk-js-click='${js([["call", { fn: "Picker.refresh", args: [2] }], ["add_class", { names: ["after"] }]])}'>x</button>
+    <button id="b" data-vk-js-click='${js([["call", { fn: "Picker.nope" }], ["add_class", { names: ["after"] }]])}'>x</button>
+    <button id="c" data-vk-js-click='${js([["call", { fn: "alert('x')" }], ["add_class", { names: ["after"] }]])}'>x</button>`);
+  p.window.Picker = { n: 0, refresh(ctx, k) { this.n += k; } };
+  p.fire("#a", "click");
+  eq([p.window.Picker.n, p.$("#a").className], [2, "after"], "called with this");
+  p.fire("#b", "click");
+  p.fire("#c", "click");
+  eq([p.$("#b").className, p.$("#c").className, p.logs.filter((l) => l.startsWith("warn")).length, errors(p).length], ["", "", 2, 2], "unknown");
+});
+
 function window_run(p, ops) { p.window.vuka.run(p.doc.body, ops); }
 
+(async () => {
 let failed = 0;
 for (const t of tests) {
   try {
-    t.fn();
+    await t.fn();
   } catch (err) {
     failed++;
     console.log("FAIL " + t.name + ": " + err.message + (err.stack && !(err.message || "").includes("got") ? "\n" + err.stack : ""));
@@ -353,3 +539,4 @@ for (const t of tests) {
 }
 console.log(`${tests.length} tests, ${failed} failed`);
 process.exit(failed ? 1 : 0);
+})();
