@@ -434,6 +434,73 @@ reloads the page (at most once in 10 seconds) for a fresh one. WebSocket
 upgrades only from the page's own origin, unless `web.LiveOrigins(patterns…)`
 allows more (`"*.example.com"`).
 
+### JS commands
+
+Opening a menu, showing a dialog, moving focus or copying a snippet needs no
+server: a chain of [JS commands](https://github.com/vuka-lang/ui) as an `on…`
+value runs in the browser, at once, and a `Push` step in it calls a handler
+when the server should know too.
+
+```vuka
+func (c *Chores) Render() ui.Node {
+	return <section>
+		<button onClick={ui.JS.RemoveClass(ui.Ref("menu"), "hidden")}>Pick one</button>
+		<ul ref="menu" class="menu hidden">
+			{for _, ch := range c.chores {
+				<li><button value={ch} onClick={ui.JS.AddClass(ui.Ref("menu"), "hidden").Push(c.Pick)}>{ch}</button></li>
+			}}
+		</ul>
+		{for _, ch := range c.chores {
+			<p>{ch} <button value={ch} onClick={ui.JS.Confirm("Delete " + ch + "?").Push(c.Delete)}>delete</button></p>
+		}}
+		<p ref="status">{len(c.chores)} left</p>
+	</section>
+}
+
+func (c *Chores) Delete(e ui.Event) {
+	// …
+	c.PushJS(ui.JS.On(ui.Ref("status")).AddClass("flash")) // runs once the reply is applied
+}
+```
+
+A chain renders as `data-vk-js-<event>="[[name, args], …]"` (the live
+protocol's "JS commands"). The runtime runs it when the event reaches the
+nearest element with commands or a handler for it: classes and attributes,
+`Show`/`Hide`/`Toggle` (the `style` attribute's `display`, with optional
+transition classes `during`/`from`/`to`), `Transition`, `Focus`,
+`FocusFirst`, a focus stack (`PushFocus`/`PopFocus`, for dialogs),
+`Dispatch` (a `CustomEvent`), `Exec` (the commands held in another
+attribute), `Copy`/`CopyText` (the element gets `data-copied` for 1.5s),
+`ScrollTo`, `SetValue` (fires `input` and `change`), and the steps that steer
+the chain: `Key("Escape")` (stop for other keys), `Confirm(msg)` (stop on
+cancel), `Debounce`/`Throttle` (the steps after them, per element and event;
+a debounced step waiting in a form runs before the form's submit), and
+`If`/`ElseIf`/`Else`/`End` over a target's checked state, value, attribute,
+selector match or existence. Targets: the element itself, `ui.Ref(name)` (the
+`ref`ed element of the same component instance, not of the instances inside
+it), `ui.Closest(sel)`, `ui.Inner(sel)`, or a selector. A submit's commands
+`preventDefault` it; a push also does what a handler would (links, a form's
+buttons). An element with both commands and a handler for one event runs the
+commands first, and a declined `Confirm` keeps the event from the server.
+
+**Pushed commands.** `c.PushJS(chain)` in a handler, an `Update` or `Mount`
+rides the reply (`"js":[{"id","ops"}]` on `render` and `patch`, both protocol
+versions) and runs after it is applied, on the component's root element.
+
+**Reconciliation.** What a command changed — a class, an attribute, the
+`style` display — stays across the server's patches while the server keeps
+rendering that attribute as it did when the command ran: an open menu stays
+open while the list in it updates. When the server renders a different value,
+the server wins and the browser's change is dropped. A running transition's
+classes survive a patch until it ends.
+
+**Without a connection.** Commands need no session: a page whose only
+`data-vk-` attributes are commands gets the runtime script without a token,
+runs its commands, and never opens a WebSocket — a static page can have menus
+and dialogs. A `Push` on such a page does nothing (the console warns once). A
+page is live when it renders a stateful component, a handler, or a command
+that pushes to one.
+
 ### Protocol versions
 
 The runtime joins asking for **protocol v2** (`{"type":"join","v":2}`) and
@@ -561,9 +628,11 @@ go test ./...                     # the package
 vuka test ./...                   # also examples/ and internal/vukatest, written in Vuka
 ```
 
-The browser tests (`examples/live`, `TestBrowserReconnect`) drive a headless
-Chrome over the DevTools protocol (`internal/chrome`) and skip when none is
-found; `VUKA_CHROME` names the binary.
+The browser tests (`examples/live`, `TestBrowserReconnect`, `TestBrowserJS…`)
+drive a headless Chrome over the DevTools protocol (`internal/chrome`) and
+skip when none is found; `VUKA_CHROME` names the binary. The runtime's JS
+commands also run in node over a small DOM (`testdata/livejs/js.js`,
+`TestLiveJSCommands`), skipped without node.
 
 ## Limits
 
