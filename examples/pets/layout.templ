@@ -1,0 +1,17 @@
+package main
+
+templ Layout(title string) {
+	<!DOCTYPE html>
+	<html>
+		<head>
+			<title>{ title } · Pets</title>
+			<link rel="stylesheet" href="/assets/app.css"/>
+		</head>
+		<body>
+			<nav><a href="/">Home</a> · <a href="/pets">Pets</a></nav>
+			<main>
+				{ children... }
+			</main>
+		</body>
+	</html>
+}

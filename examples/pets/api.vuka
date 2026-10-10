@@ -1,0 +1,50 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"strconv"
+
+	"github.com/vuka-lang/web"
+)
+
+func itoa(n int) string { return strconv.Itoa(n) }
+
+@web.Get("/api/pets")
+func APIPets(store *PetStore) Result[[]Pet] { return store.All() }
+
+@web.Post("/api/pets")
+func CreatePet(in NewPet, store *PetStore) Result[Pet] { return store.Add(in) }
+
+// requireToken is HTTP middleware for one route, through @web.Use.
+func requireToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer letmein" {
+			http.Error(w, `{"error":"unauthorized","status":401}`, http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// audited is a call decorator: it reaches the request through the handler's
+// context.Context argument.
+decorator audited(c) {
+	r := web.Request(c.Context())
+	c.Next()
+	fmt.Println("audit:", r.Method, r.URL.Path, "err:", c.Err())
+}
+
+@web.Controller("/admin/pets")
+type PetAdmin struct {
+	store *PetStore
+}
+
+@web.Get("/")
+func (a *PetAdmin) Index() Result[[]Pet] { return a.store.All() }
+
+@web.Delete("/{id}")
+@web.Use(requireToken)
+@audited
+func (a *PetAdmin) Remove(ctx context.Context, id int) error { return a.store.Remove(id) }

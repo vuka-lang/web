@@ -1,0 +1,85 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sort"
+	"strings"
+	"sync"
+
+	"github.com/vuka-lang/web"
+)
+
+type Pet struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+type NewPet struct {
+	Name string `json:"name" validate:"required"`
+	Kind string `json:"kind"`
+}
+
+// DB is a stand-in database; Start and Stop run with the app.
+type DB struct {
+	mu   sync.Mutex
+	pets map[int]Pet
+	next int
+}
+
+func OpenDB() *DB {
+	return &DB{pets: map[int]Pet{1: {1, "Rex", "dog"}, 2: {2, "Tom", "cat"}}, next: 3}
+}
+
+func (db *DB) Start(context.Context) error { log.Print("db: open"); return nil }
+func (db *DB) Stop(context.Context) error  { log.Print("db: closed"); return nil }
+
+@web.Service
+type PetStore struct {
+	db *DB
+}
+
+func (s *PetStore) All() Result[[]Pet] {
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+	pets := make([]Pet, 0, len(s.db.pets))
+	for _, p := range s.db.pets {
+		pets = append(pets, p)
+	}
+	sort.Slice(pets, func(i, j int) bool { return pets[i].ID < pets[j].ID })
+	return Ok(pets)
+}
+
+func (s *PetStore) Find(id int) Result[Pet] {
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+	p, ok := s.db.pets[id]
+	if !ok {
+		return Err(web.Status(404, "no pet %d", id))
+	}
+	return Ok(p)
+}
+
+func (s *PetStore) Add(in NewPet) Result[Pet] {
+	if strings.TrimSpace(in.Name) == "" {
+		return Err(web.BadRequest("a pet needs a name"))
+	}
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+	p := Pet{ID: s.db.next, Name: in.Name, Kind: in.Kind}
+	s.db.pets[p.ID] = p
+	s.db.next++
+	return Ok(p)
+}
+
+func (s *PetStore) Remove(id int) error {
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+	if _, ok := s.db.pets[id]; !ok {
+		return fmt.Errorf("removing pet %d: %w", id, web.NotFound)
+	}
+	delete(s.db.pets, id)
+	return nil
+}

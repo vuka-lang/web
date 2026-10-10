@@ -105,7 +105,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 	if err != nil {
 		return nil, fail("%v", err)
 	}
-	htmlPage := s.view != nil || (out.data != nil && out.data.Implements(nodeType) && out.data != redirectType)
+	htmlPage := s.view != nil || (out.data != nil && out.data.Implements(nodeType))
 	var v *view
 	if s.view != nil {
 		if out.data != nil && out.data.Implements(nodeType) {

@@ -1,0 +1,59 @@
+package main
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/vuka-lang/web"
+)
+
+func get(t *testing.T, srv *httptest.Server, method, path, body string, header ...string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+	for i := 0; i+1 < len(header); i += 2 {
+		req.Header.Set(header[i], header[i+1])
+	}
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(b) + res.Header.Get("Location")
+}
+
+func TestPets(t *testing.T) {
+	app := web.New(web.Provide(OpenDB))
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	for _, c := range []struct {
+		method, path, body string
+		header             []string
+		code               int
+		want               string
+	}{
+		{"GET", "/", "", nil, 200, "<title>Home · Pets</title>"},
+		{"GET", "/pets", "", nil, 200, `<li><a href="/pets/1">Rex</a> (dog)</li>`},
+		{"GET", "/pets/2", "", nil, 200, "<p>A cat, pet #2.</p>"},
+		{"GET", "/pets/9", "", nil, 404, "<p>no pet 9</p>"},
+		{"GET", "/pets/x", "", nil, 400, "is not an integer"},
+		{"GET", "/api/pets", "", nil, 200, `{"id":1,"name":"Rex","kind":"dog"}`},
+		{"POST", "/api/pets", `{"name":"Bo","kind":"parrot"}`, []string{"Content-Type", "application/json"}, 200, `{"id":3,"name":"Bo","kind":"parrot"}`},
+		{"POST", "/api/pets", `{"kind":"parrot"}`, []string{"Content-Type", "application/json"}, 400, `"name is required"`},
+		{"POST", "/pets", `name=Kit&kind=cat`, []string{"Content-Type", "application/x-www-form-urlencoded"}, 303, "/pets/4"},
+		{"POST", "/pets", `name=+&kind=cat`, []string{"Content-Type", "application/x-www-form-urlencoded"}, 400, "<p>a pet needs a name</p>"},
+		{"GET", "/admin/pets", "", nil, 200, `"name":"Kit"`},
+		{"DELETE", "/admin/pets/2", "", nil, 401, "unauthorized"},
+		{"DELETE", "/admin/pets/2", "", []string{"Authorization", "Bearer letmein"}, 204, ""},
+		{"DELETE", "/admin/pets/2", "", []string{"Authorization", "Bearer letmein"}, 404, "not found"},
+	} {
+		code, body := get(t, srv, c.method, c.path, c.body, c.header...)
+		if code != c.code || !strings.Contains(body, c.want) {
+			t.Errorf("%s %s: %d %q; want %d containing %q", c.method, c.path, code, body, c.code, c.want)
+		}
+	}
+}

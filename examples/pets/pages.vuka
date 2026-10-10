@@ -1,0 +1,38 @@
+package main
+
+import (
+	"net/http"
+
+	"github.com/vuka-lang/web"
+)
+
+// PetList fills PetsPage's parameters by name: title, pets.
+type PetList struct {
+	Title string
+	Pets  []Pet
+}
+
+@web.Get("/")
+func Home(r *http.Request) vuka.Node {
+	return <Layout title="Home">
+		<h1>Welcome</h1>
+		<p>Try <a href="/pets">the pets</a> or <code>GET /api/pets</code>.</p>
+	</Layout>
+}
+
+@web.Get("/pets")
+@web.Template("pets.templ")
+func ListPets(store *PetStore) Result[PetList] {
+	pets := store.All()?
+	return Ok(PetList{Title: "All pets", Pets: pets})
+}
+
+@web.Template("views/pet.html")
+@web.Get("/pets/{id}")
+func ShowPet(id int, store *PetStore) Result[Pet] { return store.Find(id) }
+
+@web.Post("/pets")
+func AddPet(in NewPet, store *PetStore) (web.Redirect, error) {
+	p := store.Add(in)?
+	return web.Redirect("/pets/" + itoa(p.ID)), nil
+}

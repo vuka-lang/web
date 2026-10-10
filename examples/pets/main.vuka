@@ -1,0 +1,23 @@
+// Command pets is a small web app built with github.com/vuka-lang/web.
+package main
+
+import (
+	"embed"
+	"io/fs"
+	"log"
+
+	"github.com/vuka-lang/web"
+)
+
+//go:embed static
+var static embed.FS
+
+func main() {
+	app := web.New()
+	app.Provide(OpenDB)
+	assets, _ := fs.Sub(static, "static")
+	app.Static("/assets", assets)
+	if err := app.Run(""); err != nil { // ":$PORT", else ":8080"
+		log.Fatal(err)
+	}
+}

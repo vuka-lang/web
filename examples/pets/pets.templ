@@ -1,0 +1,19 @@
+package main
+
+import "strconv"
+
+templ PetsPage(title string, pets []Pet) {
+	@Layout(title) {
+		<h1>{ title }</h1>
+		<ul>
+			for _, p := range pets {
+				<li><a href={ templ.SafeURL("/pets/" + strconv.Itoa(p.ID)) }>{ p.Name }</a> ({ p.Kind })</li>
+			}
+		</ul>
+		<form method="post" action="/pets">
+			<input name="name" placeholder="name"/>
+			<input name="kind" placeholder="kind"/>
+			<button>Add</button>
+		</form>
+	}
+}
