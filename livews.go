@@ -16,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/vuka-lang/vuka"
 	"github.com/vuka-lang/vuka/live"
+	"github.com/vuka-lang/web/internal/liveproto"
 )
 
 // Close codes of a live connection the runtime doesn't retry: 4001 asks it to
@@ -150,7 +151,7 @@ type conn struct {
 	ws     *websocket.Conn
 	r      *http.Request // the upgrade request
 	uri    string        // the page, from its token
-	s      *live.Session
+	s      liveproto.Session
 	topics []string // guarded by the hub's mutex
 
 	mu    sync.Mutex
@@ -246,7 +247,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (c *conn) write(ctx context.Context, m live.ServerMessage) {
+func (c *conn) write(ctx context.Context, m any) {
 	b, _ := json.Marshal(m)
 	wctx, done := context.WithTimeout(ctx, writeTimeout)
 	defer done()
@@ -257,7 +258,10 @@ func (c *conn) write(ctx context.Context, m live.ServerMessage) {
 
 // handle answers a client message; false ends the connection.
 func (c *conn) handle(ctx context.Context, data []byte) bool {
-	var m live.ClientMessage
+	var m struct {
+		live.ClientMessage
+		V int `json:"v,omitempty"` // the newest protocol version the page speaks (a join's)
+	}
 	if err := json.Unmarshal(data, &m); err != nil {
 		c.write(ctx, live.ServerMessage{Type: live.Error, Error: "live: bad message"})
 		return true
@@ -268,16 +272,16 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 			c.s.Close()
 			c.s = nil
 		}
-		reply, code := c.join(ctx, m.Ref)
+		reply, code := c.join(ctx, m.Ref, m.V)
 		c.write(ctx, reply)
 		if code != 0 {
-			c.ws.Close(code, reply.Error)
+			c.ws.Close(code, reply.(live.ServerMessage).Error)
 			return false
 		}
 	case c.s == nil:
 		c.write(ctx, live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: "live: join first"})
 	default:
-		c.write(ctx, c.s.Handle(m))
+		c.write(ctx, c.s.Event(m.ClientMessage))
 	}
 	c.syncTopics()
 	return true
@@ -285,8 +289,9 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 
 // join rebuilds the page: the route its token names runs again, as a GET
 // carrying the upgrade request's headers (cookies, auth), through the app's
-// middleware; the page it renders becomes the session's.
-func (c *conn) join(ctx context.Context, ref int) (live.ServerMessage, websocket.StatusCode) {
+// middleware; the page it renders becomes the session's, speaking protocol
+// version v when the app can (else v1).
+func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode) {
 	u, err := url.ParseRequestURI(c.uri)
 	if err != nil {
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: errBadToken.Error()}, closeReload
@@ -312,8 +317,13 @@ func (c *conn) join(ctx context.Context, ref int) (live.ServerMessage, websocket
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
-	c.s = live.NewSession(j.ctx, func(context.Context) vuka.Node { return j.page })
-	return c.s.Handle(live.ClientMessage{Type: live.Join, Ref: ref}), 0
+	render := func(context.Context) vuka.Node { return j.page }
+	if min(v, c.app.liveMax) >= 2 && liveproto.V2 != nil {
+		c.s = liveproto.V2(j.ctx, render)
+	} else {
+		c.s = liveproto.V1(live.NewSession(j.ctx, render))
+	}
+	return c.s.Join(ref), 0
 }
 
 // drain delivers the broadcasts waiting for the page; before a join there is
@@ -327,12 +337,8 @@ func (c *conn) drain(ctx context.Context) {
 		return
 	}
 	for _, d := range batch {
-		p, err := c.s.Info(d.topic, d.msg)
-		switch {
-		case err != nil:
-			c.write(ctx, live.ServerMessage{Type: live.Error, Error: err.Error()})
-		case len(p.Updates) > 0 || p.Error != "":
-			c.write(ctx, live.PatchMessage(0, p))
+		if m := c.s.Info(d.topic, d.msg); m != nil {
+			c.write(ctx, m)
 		}
 	}
 	c.syncTopics()

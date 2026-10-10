@@ -100,6 +100,13 @@ func LiveOrigins(patterns ...string) Option {
 	return OptionFunc(func(a *App) { a.liveOrigins = append(a.liveOrigins, patterns...) })
 }
 
+// LiveProtocol caps the live protocol version the app speaks: 2 (render
+// trees: a page gets each component's statics once, then only the dynamics
+// that changed) by default, or 1 (each changed component's HTML). A page asks
+// for the newest it knows and gets at most this; v2 also needs a Vuka live
+// session that speaks it, else pages get v1.
+func LiveProtocol(v int) Option { return OptionFunc(func(a *App) { a.liveMax = max(1, v) }) }
+
 // LiveTokenTTL is how long a rendered live page may (re)join; 12 hours by
 // default. A page older than that reloads when it reconnects.
 func LiveTokenTTL(d time.Duration) Option { return OptionFunc(func(a *App) { a.liveTTL = d }) }

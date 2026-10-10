@@ -13,7 +13,7 @@
   const listening = new Set();
   const busy = new Map(); // ref → {el, form}: elements waiting for their reply
   const pending = new Map(); // el → {timer, msg}: debounced events
-  let ws = null, joined = false, ref = 0, attempt = 0, timer = 0;
+  let ws = null, joined = false, ref = 0, attempt = 0, timer = 0, trees = null;
 
   const state = (s) => document.documentElement.setAttribute("data-vk-state", s);
   const emit = (name, detail) => document.dispatchEvent(new CustomEvent(name, { detail }));
@@ -22,7 +22,7 @@
     clearTimeout(timer);
     state("connecting");
     ws = new WebSocket(url);
-    ws.onopen = () => ws.send(JSON.stringify({ type: "join", ref: ++ref }));
+    ws.onopen = join;
     ws.onmessage = (e) => receive(JSON.parse(e.data));
     ws.onclose = (e) => {
       ws = null;
@@ -37,6 +37,10 @@
       timer = setTimeout(connect, Math.min(10000, 250 * 2 ** attempt++) * (0.5 + Math.random()));
     };
   }
+
+  // join asks for the page in protocol v2 (render trees); a server that
+  // doesn't speak it answers in v1 (HTML).
+  const join = () => ws.send(JSON.stringify({ type: "join", ref: ++ref, v: 2 }));
 
   // reload fetches the page again for a fresh token, at most once in 10s.
   function reload(reason) {
@@ -56,15 +60,35 @@
         joined = true;
         attempt = 0;
         state("connected");
-        page(m.html);
+        if (m.trees) {
+          trees = tree();
+          try { page(trees.apply(m.trees, true).c0); } catch (err) { fail("live: " + err.message); }
+        } else {
+          trees = null;
+          page(m.html);
+        }
         emit("vk:patched", { ids: ["c0"] });
         break;
-      case "patch":
-        (m.updates || []).forEach(apply);
+      case "patch": {
+        let ups = m.updates || [];
+        if (m.trees) {
+          try {
+            const html = trees.apply(m.trees, false);
+            ups = m.trees.map((e) => ({ id: e.id, html: html[e.id] }));
+          } catch (err) { // out of step with the server: start over
+            fail("live: " + err.message);
+            joined = false;
+            join();
+            break;
+          }
+        }
+        const done = [];
+        for (const u of ups) if (!done.some((el) => el.isConnected && el.contains(byID(u.id)))) done.push(apply(u));
         if (b && b.form && !m.error && b.form.isConnected) b.form.reset();
         if (m.error) fail(m.error, m.ref);
-        emit("vk:patched", { ids: (m.updates || []).map((u) => u.id) });
+        emit("vk:patched", { ids: ups.map((u) => u.id) });
         break;
+      }
       case "error":
         fail(m.error, m.ref);
         break;
@@ -98,12 +122,16 @@
     children(document.body, next);
   }
 
+  const byID = (id) => id === "c0" ? document.body : document.querySelector('[data-vk-id="' + id + '"]');
+
+  // apply morphs an instance into its new HTML and returns its element.
   function apply(u) {
-    if (u.id === "c0") return page(u.html);
-    const el = document.querySelector('[data-vk-id="' + u.id + '"]');
+    if (u.id === "c0") return page(u.html), document.body;
+    const el = byID(u.id);
     const next = fragment(u.html).firstElementChild;
     listenIn(u.html);
     if (el && next) morph(el, next);
+    return el && el.isConnected ? el : byID(u.id);
   }
 
   function fragment(html) {
@@ -279,7 +307,133 @@
     }
   }
 
-  window.vuka = { connect, state: () => document.documentElement.getAttribute("data-vk-state") };
+  // Protocol v2: the server sends each instance's render tree, frames of
+  // statics (sent once per connection, by id) around dynamics (markup,
+  // nested frames, blocks of item frames, instance references), then only
+  // the changes to it. tree() keeps a connection's trees and turns them back
+  // into each changed instance's HTML for morph, as nexus and LiveView do.
+  function tree() {
+    const statics = new Map(), strs = new Map(), held = new Map(); // id → frame, or {html}
+    const bad = (what) => { throw new Error("bad tree: " + what); };
+    const frame = (o) => {
+      if (o.s) statics.set(o.t, o.s);
+      const s = statics.get(o.t);
+      if (!s || !Array.isArray(o.d) || s.length !== o.d.length + 1) bad("statics " + o.t);
+      return { t: o.t, d: o.d.map(dyn) };
+    };
+    const dyn = (v) => {
+      if (typeof v === "string") return v;
+      if (!v || typeof v !== "object") bad("dynamic");
+      if (v.r !== undefined) {
+        if (v.v !== undefined) strs.set(v.r, v.v);
+        return strs.has(v.r) ? strs.get(v.r) : bad("string " + v.r);
+      }
+      if (v.c) return { c: v.c.map(frame) };
+      if (v.id !== undefined) return { id: v.id };
+      return frame(v);
+    };
+    const update = (f, u) => {
+      if (!f || !f.d) bad("change of a non-frame");
+      for (const k in u) {
+        if (!(+k < f.d.length)) bad("dynamic " + k);
+        f.d[+k] = change(f.d[+k], u[k]);
+      }
+      return f;
+    };
+    const change = (old, x) => {
+      if (x && x.u) return update(old, x.u);
+      if (x && x.k) {
+        if (!old || !old.c) bad("steps on a non-block");
+        const out = [];
+        let i = 0;
+        for (const st of x.k) {
+          if (typeof st === "number") {
+            if (st > 0) {
+              if (i + st > old.c.length) bad("past the items");
+              for (let n = 0; n < st; n++) out.push(old.c[i++]);
+            } else i -= st;
+          } else if (st.m !== undefined) {
+            if (!old.c[st.m]) bad("item " + st.m);
+            out.push(st.u ? update(old.c[st.m], st.u) : old.c[st.m]);
+          } else if (st.u) {
+            if (i >= old.c.length) bad("past the items");
+            out.push(update(old.c[i++], st.u));
+          } else out.push(frame(st));
+        }
+        return { c: out };
+      }
+      if (x && x.p) {
+        if (typeof old !== "string") bad("token patch of a non-string");
+        return patchText(old, x.p);
+      }
+      return dyn(x);
+    };
+    const html = (id, seen) => {
+      const h = held.get(id);
+      if (!h || seen.has(id)) bad("instance " + id);
+      if (h.html !== undefined) return h.html;
+      seen.add(id);
+      const out = frameHTML(h, seen);
+      seen.delete(id);
+      return out;
+    };
+    const frameHTML = (f, seen) => {
+      const s = statics.get(f.t);
+      let out = s[0];
+      f.d.forEach((d, i) => {
+        if (typeof d === "string") out += d;
+        else if (d.c) d.c.forEach((it) => { out += frameHTML(it, seen); });
+        else if (d.id !== undefined) out += html(d.id, seen);
+        else out += frameHTML(d, seen);
+        out += s[i + 1];
+      });
+      return out;
+    };
+    // apply takes a message's entries and returns the new HTML of each
+    // instance they name; render (true) starts over.
+    const apply = (entries, render) => {
+      if (render) { statics.clear(); strs.clear(); held.clear(); }
+      for (const e of entries) {
+        if (e.html !== undefined) held.set(e.id, { html: e.html });
+        else if (e.full) held.set(e.id, frame(e.tree));
+        else if (held.has(e.id) && held.get(e.id).d) update(held.get(e.id), e.tree && e.tree.u);
+        else bad("change of instance " + e.id);
+      }
+      const out = {};
+      for (const e of entries) out[e.id] = html(e.id, new Set());
+      if (render || entries.some((e) => e.full)) prune();
+      return out;
+    };
+    // prune drops the instances c0 no longer reaches.
+    const prune = () => {
+      const keep = new Set(), walk = (d) => {
+        if (!d || typeof d !== "object") return;
+        if (d.id !== undefined) { if (!keep.has(d.id)) { keep.add(d.id); walk(held.get(d.id)); } }
+        else (d.c || d.d || []).forEach(walk);
+      };
+      keep.add("c0");
+      walk(held.get("c0"));
+      for (const id of held.keys()) if (!keep.has(id)) held.delete(id);
+    };
+    return { apply, page: () => html("c0", new Set()) };
+  }
+
+  // patchText applies a token patch: both strings cut before every "<" and
+  // after every ">", '"' and "&#34;"; n copies the next n old tokens, -n
+  // skips them, a string is inserted, [p, n] copies n old tokens from p.
+  function patchText(old, steps) {
+    const toks = old.split(/(?=<)|(?<=>|"|&#34;)/);
+    let out = "", i = 0;
+    for (const st of steps) {
+      if (typeof st === "string") out += st;
+      else if (Array.isArray(st)) out += toks.slice(st[0], st[0] + st[1]).join("");
+      else if (st > 0) { out += toks.slice(i, i + st).join(""); i += st; }
+      else i -= st;
+    }
+    return out;
+  }
+
+  window.vuka = { connect, tree, state: () => document.documentElement.getAttribute("data-vk-state") };
   window.addEventListener("online", () => { if (!ws) { attempt = 0; connect(); } });
   connect();
 })();

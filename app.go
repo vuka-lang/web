@@ -45,6 +45,7 @@ type App struct {
 	liveKey     []byte
 	liveOrigins []string
 	liveTTL     time.Duration
+	liveMax     int // the newest live protocol version spoken
 	relay       Relay
 	hub         *hub
 
@@ -58,7 +59,7 @@ type App struct {
 // the env files into the process environment (see LoadEnv), so constructors
 // and Start methods see their values through os.Getenv.
 func New(opts ...Option) *App {
-	a := &App{c: newContainer(), reg: snapshot(), liveTTL: 12 * time.Hour, hub: newHub()}
+	a := &App{c: newContainer(), reg: snapshot(), liveTTL: 12 * time.Hour, liveMax: 2, hub: newHub()}
 	for _, o := range opts {
 		o.apply(a)
 	}
