@@ -8,4 +8,4 @@ require (
 	github.com/vuka-lang/vuka v0.10.0
 )
 
-require github.com/vuka-lang/ui v0.4.0
+require github.com/vuka-lang/ui v0.5.0
