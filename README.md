@@ -89,6 +89,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.DotEnv(files…)`, `web.NoDotEnv()`, `web.Require(keys…)` | env files and required variables (below) |
 | `web.OnError(f)` | replace the error page / JSON error body |
 | `web.LiveLayout(f)`, `LiveKey(k)`, `LiveOrigins(p…)`, `LiveTokenTTL(d)`, `WithRelay(r)` | live pages (below) |
+| `web.NoTailwind()`, `web.Tailwind(path)` | no stylesheet; or the project's Tailwind stylesheet at another path (below) |
 
 `app.Build()` resolves everything — every parameter of every route, every
 result and view, the whole dependency graph — and returns all problems at
@@ -672,6 +673,52 @@ type Router interface {
 with `web.New(web.WithRouter(r))`. A chi adapter is a dozen lines (`Handle` →
 `r.Method(method, pattern, h)`, `Param` → `chi.URLParam`); the tests carry a
 tiny one.
+
+## Tailwind
+
+Write Tailwind classes anywhere — JSX, `.templ` and `.html` views, the class
+names a JS command adds — and they are styled, with no setup:
+
+```vuka
+@web.Get("/")
+func Home() ui.Node {
+	return <Layout title="Home">
+		<button class="rounded bg-emerald-500 px-4 py-2 text-white"
+			onClick={ui.JS.AddClass(ui.Ref("note"), "opacity-50")}>Save</button>
+		<p ref="note" class="mt-2 text-sm text-gray-500">Unsaved changes</p>
+	</Layout>
+}
+```
+
+The `vuka` command builds the stylesheet with the
+[Tailwind CLI](https://tailwindcss.com/docs/installation/tailwind-cli)
+(`brew install tailwindcss`, or `npm i -D @tailwindcss/cli`) from the module's
+`.vuka`, `.templ`, `.html` and `.go` files and those of the dependencies that
+ship components (github.com/vuka-lang/ui), and every full page the app serves
+links it: `<link rel="stylesheet" href="/_vuka/app.css?v=…">` before
+`</head>`, unless the page links it already. Fragments, JSON and live updates
+don't.
+
+- **`vuka run`** keeps it rebuilt (`tailwindcss --watch`, into
+  `.vuka/tailwind/`) and the app serves it from there; open pages swap in each
+  new build without reloading, live state kept.
+- **`vuka build`** builds it once, minified, and embeds it in the binary:
+  served as `/_vuka/app.css?v=<hash>`, cached for good; revalidated by ETag
+  without the hash. `vuka gen` writes the file that embeds it
+  (`vuka_tailwind_gen.go` in the main package) for plain `go build`.
+
+Your own theme, plugins or components go in `app.css` or `styles/app.css` at
+the module root — any file with `@import "tailwindcss"`; it replaces the
+built-in one, which is just that line. Elsewhere, name it:
+`web.New(web.Tailwind("assets/site.css"))` (a string literal: the `vuka`
+command reads it from the source).
+
+`web.NoTailwind()` turns it all off, as does `VUKA_TAILWIND=off` for the
+`vuka` command. Without the Tailwind CLI, `vuka run` says how to install it
+and serves pages unstyled; `vuka build` fails.
+
+`web.RegisterCSS(name, css)` serves another stylesheet at `/_vuka/<name>`;
+the file `vuka build` generates registers `app.css` with it.
 
 ## Static files
 

@@ -223,7 +223,8 @@ func matchName(names []string, name string) string {
 	return ""
 }
 
-// page answers with a rendered page. A GET page rendering stateful
+// page answers with a rendered page. A full GET page links the app's
+// stylesheet (linkCSS). A GET page rendering stateful
 // components (or event handlers) is live: the runtime script and a join token
 // go before </body>. A page with only JS commands (data-vk-js-*) that push
 // to no handler gets the script without a token: it runs them and never
@@ -249,6 +250,7 @@ func (a *App) page(rq *request, n ui.Node) {
 				bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) // a JS command's push to a handler
 			html = injectScript(html, a.scriptTag(r, live))
 		}
+		html = a.linkCSS(html)
 	} else {
 		var b bytes.Buffer
 		if n != nil {

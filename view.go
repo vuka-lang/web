@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"go/ast"
 	"html/template"
-	"net/http"
 	"path"
 	"reflect"
 	"slices"
@@ -18,7 +17,7 @@ import (
 )
 
 type view struct {
-	render func(w http.ResponseWriter, r *http.Request, v reflect.Value) error
+	render func(v reflect.Value) ([]byte, error)  // an html/template view's page
 	node   func(v reflect.Value) (ui.Node, error) // a templ view's page
 }
 
@@ -46,14 +45,10 @@ func htmlView(dv declView) (*view, error) {
 			return nil, fmt.Errorf("the view %s defines no template %q", dv.file.Path(), dv.name)
 		}
 	}
-	return &view{render: func(w http.ResponseWriter, r *http.Request, v reflect.Value) error {
+	return &view{render: func(v reflect.Value) ([]byte, error) {
 		var buf bytes.Buffer
-		if err := t.Execute(&buf, v.Interface()); err != nil {
-			return err
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, err := w.Write(buf.Bytes())
-		return err
+		err := t.Execute(&buf, v.Interface())
+		return buf.Bytes(), err
 	}}, nil
 }
 

@@ -50,6 +50,10 @@ type App struct {
 	relay       Relay
 	hub         *hub
 
+	noCSS     bool
+	cssSource string      // web.Tailwind's path, for the vuka command
+	css       *stylesheet // nil: pages link no stylesheet
+
 	once    sync.Once
 	handler http.Handler
 	err     error
@@ -74,6 +78,7 @@ func New(opts ...Option) *App {
 	if a.router == nil {
 		a.router = NewServeMux()
 	}
+	a.css = a.appCSS()
 	return a
 }
 
@@ -302,6 +307,7 @@ func (a *App) build() (http.Handler, error) {
 	}
 	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(serveLiveJS))
 	a.router.Handle(http.MethodGet, liveSocket, http.HandlerFunc(a.serveLive))
+	a.routeCSS()
 	if a.relay != nil {
 		a.relay.Subscribe(a.hub.deliver)
 	}
