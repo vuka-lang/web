@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -400,10 +401,17 @@ func dropConnections(a *App) {
 }
 
 func TestBrowserReconnect(t *testing.T) {
-	app := liveApp(LiveTokenTTL(2 * time.Second))
+	for _, v := range []int{1, 2} {
+		t.Run(fmt.Sprint("v", v), func(t *testing.T) { browserReconnect(t, v) })
+	}
+}
+
+func browserReconnect(t *testing.T, v int) {
+	app := liveApp(LiveTokenTTL(2*time.Second), LiveProtocol(v))
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 	p := chrome.Launch(t).Open(srv.URL + "/counter")
+	p.Wait(fmt.Sprintf(`document.documentElement.dataset.vkProtocol === "%d"`, v))
 	p.Click("button")
 	p.WaitText("span", "n=6")
 	p.Eval(`window.marker = 1`, nil)

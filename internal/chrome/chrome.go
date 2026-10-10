@@ -237,13 +237,22 @@ func (b *Browser) Open(url string) *Page {
 
 // wireCounter counts the payload bytes of the page's WebSocket messages.
 const wireCounter = `(() => {
-	const W = window.WebSocket, n = window.__wire = { in: 0, out: 0, msgs: 0 };
+	const W = window.WebSocket, n = window.__wire = { in: 0, out: 0, msgs: 0, sockets: [] };
 	const size = (d) => typeof d === "string" ? new TextEncoder().encode(d).length : d.byteLength || d.size || 0;
 	window.WebSocket = class extends W {
-		constructor(...a) { super(...a); this.addEventListener("message", (e) => { n.in += size(e.data); n.msgs++; }); }
+		constructor(...a) { super(...a); n.sockets.push(this); this.addEventListener("message", (e) => { n.in += size(e.data); n.msgs++; }); }
 		send(d) { n.out += size(d); super.send(d); }
 	};
 })()`
+
+// Drop closes the page's WebSockets from the page's side, as a lost
+// connection does.
+func (p *Page) Drop() {
+	p.b.t.Helper()
+	if err := p.Eval(`window.__wire.sockets.forEach((s) => s.close(4000, "dropped"))`, nil); err != nil {
+		p.b.t.Fatal(err)
+	}
+}
 
 // Wire is what the page's WebSockets carried so far: payload bytes received
 // and sent (before any compression), and messages received.
@@ -253,7 +262,7 @@ type Wire struct{ In, Out, Msgs int }
 func (p *Page) Wire() Wire {
 	p.b.t.Helper()
 	var w Wire
-	if err := p.Eval(`window.__wire`, &w); err != nil {
+	if err := p.Eval(`({in: __wire.in, out: __wire.out, msgs: __wire.msgs})`, &w); err != nil {
 		p.b.t.Fatal(err)
 	}
 	return w

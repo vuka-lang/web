@@ -1,0 +1,93 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math/rand"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"testing"
+
+	"github.com/vuka-lang/vuka/live"
+	"github.com/vuka-lang/web/internal/liveproto"
+)
+
+func protocolPage(context.Context) vuka.Node {
+	return <main>
+		<Todo />
+		<Counter Start={1} />
+	</main>
+}
+
+var handlerRe = regexp.MustCompile(`data-vk-on-(\w+)="(c\d+:\d+)"`)
+
+// The browser runtime's v2 code, in node, over the replies of a v2 session
+// to random events on the example components: after each, the page it
+// renders from its trees is the page a v1 session renders.
+func TestProtocolV2MatchesV1(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	if !liveproto.Native() {
+		t.Log("the Vuka session doesn't speak v2: checking livetree's stand-in")
+	}
+	type step struct {
+		Name string `json:"name"`
+		Msg  any    `json:"msg"`
+		Page string `json:"page"`
+	}
+	type fixture struct {
+		Name  string `json:"name"`
+		Steps []step `json:"steps"`
+	}
+	var fixtures []fixture
+	texts := []string{"milk", "eggs", "bread", "apples", "", "e", "g", "milk & honey", "<b>"}
+	for seed := 1; seed <= 40; seed++ {
+		r := rand.New(rand.NewSource(int64(seed)))
+		ctx := context.Background()
+		v1 := live.NewSession(ctx, protocolPage)
+		v2 := liveproto.New(ctx, protocolPage, 2)
+		html, err := v1.Render()
+		if err != nil {
+			t.Fatal(err)
+		}
+		fx := fixture{Name: fmt.Sprint("seed ", seed), Steps: []step{{Msg: v2.Join(1), Page: html}}}
+		for i := 0; i < 30; i++ {
+			hs := handlerRe.FindAllStringSubmatch(html, -1)
+			h := hs[r.Intn(len(hs))]
+			m := live.ClientMessage{Type: live.EventMsg, Ref: i + 2}
+			m.Target, m.Event.Type = h[2], h[1]
+			switch h[1] {
+			case "submit":
+				m.Form = map[string][]string{"text": {texts[r.Intn(len(texts))]}}
+			case "change":
+				m.Value = fmt.Sprint(r.Intn(2) == 0)
+			case "input":
+				m.Value = texts[r.Intn(len(texts))]
+			}
+			if _, err := v1.Event(m.Event); err != nil {
+				t.Fatalf("seed %d: v1 %s: %v", seed, h[0], err)
+			}
+			reply := v2.Event(m)
+			if html, err = v1.Render(); err != nil {
+				t.Fatal(err)
+			}
+			fx.Steps = append(fx.Steps, step{Name: h[0], Msg: reply, Page: html})
+		}
+		v1.Close()
+		v2.Close()
+		fixtures = append(fixtures, fx)
+	}
+	file := filepath.Join(t.TempDir(), "examples.json")
+	b, _ := json.Marshal(fixtures)
+	os.WriteFile(file, b, 0o644)
+	out, err := exec.Command(node, "../../testdata/livejs/run.js", "../../live.js", file).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s", out)
+	}
+	t.Logf("node: %s", out)
+}

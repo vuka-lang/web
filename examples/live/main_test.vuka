@@ -141,6 +141,25 @@ func TestBrowserTodo(t *testing.T) {
 	})
 }
 
+func TestBrowserReconnect(t *testing.T) {
+	protocols(t, func(t *testing.T, open func(string) *chrome.Page) {
+		p := open("/todo")
+		p.Type("input[name=text]", "milk")
+		p.Press("Enter")
+		p.WaitText("#todo-1 span", "milk")
+		p.Eval(`window.marker = 1`, nil)
+		p.Drop()
+		p.Wait(`document.documentElement.dataset.vkState !== "connected"`)
+		p.Wait(`document.documentElement.dataset.vkState === "connected" && !document.querySelector("li")`) // a fresh mount
+		p.Type("input[name=text]", "eggs")
+		p.Press("Enter")
+		p.WaitText("#todo-1 span", "eggs")
+		p.Click("#todo-1 input[type=checkbox]")
+		p.WaitText(".left", "0 left")
+		p.Wait(`window.marker === 1`)
+	})
+}
+
 func TestBrowserChat(t *testing.T) {
 	protocols(t, func(t *testing.T, open func(string) *chrome.Page) {
 		ann, bob := open("/chat/go"), open("/chat/go")

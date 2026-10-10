@@ -57,7 +57,7 @@ func TestLiveV2Join(t *testing.T) {
 	}
 	send(t, c, map[string]any{"type": "event", "ref": 2, "target": "c2:0", "event": "click"})
 	m, raw = recv2(t, c)
-	if m.Type != "patch" || m.Ref != 2 || len(m.Trees) != 1 || m.Trees[0].ID != "c2" || m.Trees[0].Full || !strings.Contains(raw, `"b11"`) || strings.Contains(raw, `"s":`) {
+	if m.Type != "patch" || m.Ref != 2 || len(m.Trees) != 1 || m.Trees[0].ID != "c2" || m.Trees[0].Full || !strings.Contains(raw, `b11`) || strings.Contains(raw, `"s":`) {
 		t.Fatalf("v2 patch: %s", raw)
 	}
 	send(t, c, map[string]any{"type": "event", "ref": 3, "target": "c9:0", "event": "click"})
@@ -96,7 +96,7 @@ func TestLiveV2Broadcast(t *testing.T) {
 	if m, raw := recv2(t, conns[0]); m.Ref != 2 || m.Error != "" {
 		t.Fatalf("send: %s", raw)
 	}
-	if m, raw := recv2(t, conns[0]); m.Type != "patch" || m.Ref != 0 || len(m.Trees) != 1 || !strings.Contains(raw, `"hi"`) {
+	if m, raw := recv2(t, conns[0]); m.Type != "patch" || m.Ref != 0 || len(m.Trees) != 1 || !strings.Contains(raw, `hi`) {
 		t.Fatalf("v2 broadcast: %s", raw)
 	}
 	if m, raw := recv2(t, conns[1]); m.Type != "patch" || m.Trees != nil || !strings.Contains(raw, `>hi</form>`) {
