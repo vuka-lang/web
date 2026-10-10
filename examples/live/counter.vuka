@@ -1,12 +1,15 @@
 package main
 
-import "github.com/vuka-lang/web"
+import (
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui"
+)
 
 // Counter is a page of its own at /counter (?start=3 sets its Start), and a
 // component anywhere else.
 @web.Live("/counter")
 type Counter struct {
-	vuka.Live
+	ui.Live
 	Start int
 	n     int
 }
@@ -16,7 +19,7 @@ func (c *Counter) Mount() { c.n = c.Start }
 func (c *Counter) Inc() { c.n++ }
 func (c *Counter) Dec() { c.n-- }
 
-func (c *Counter) Render() vuka.Node {
+func (c *Counter) Render() ui.Node {
 	return <div class="counter">
 		<button type="button" onClick={c.Dec}>−</button>
 		<output>{c.n}</output>

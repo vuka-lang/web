@@ -182,7 +182,9 @@ func Provide(ctors ...any) Option { return OptionFunc(func(a *App) { a.Provide(c
 func Eager(ctors ...any) Option { return OptionFunc(func(a *App) { a.Eager(ctors...) }) }
 
 // OnStart adds a hook Start runs; see App.OnStart.
-func OnStart(fn func(context.Context) error) Option { return OptionFunc(func(a *App) { a.OnStart(fn) }) }
+func OnStart(fn func(context.Context) error) Option {
+	return OptionFunc(func(a *App) { a.OnStart(fn) })
+}
 
 // OnStop adds a hook Stop runs; see App.OnStop.
 func OnStop(fn func(context.Context) error) Option { return OptionFunc(func(a *App) { a.OnStop(fn) }) }

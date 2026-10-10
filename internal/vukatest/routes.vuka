@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui"
 )
 
 type Dog struct {
@@ -40,6 +41,6 @@ decorator tagged(c) {
 func badge(ctx context.Context, label string) string { return label }
 
 @web.Get("/hello")
-func hello(r *http.Request, who string) vuka.Node {
+func hello(r *http.Request, who string) ui.Node {
 	return <p>hello {who}</p>
 }

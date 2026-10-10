@@ -11,11 +11,12 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/vuka-lang/vuka/live"
+	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/web/internal/liveproto"
+	"github.com/vuka-lang/ui"
 )
 
-func protocolPage(context.Context) vuka.Node {
+func protocolPage(context.Context) ui.Node {
 	return <main>
 		<Todo />
 		<Counter Start={1} />

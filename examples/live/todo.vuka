@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui"
 )
 
 type Item struct {
@@ -21,7 +22,7 @@ type NewItem struct {
 
 @web.Live("/todo")
 type Todo struct {
-	vuka.Live
+	ui.Live
 	items  []Item
 	next   int
 	filter string
@@ -73,7 +74,7 @@ func (t *Todo) left() int {
 	return n
 }
 
-func (t *Todo) Render() vuka.Node {
+func (t *Todo) Render() ui.Node {
 	return <section class="todo">
 		<form onSubmit={t.Add}>
 			<input

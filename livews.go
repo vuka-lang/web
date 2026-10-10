@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/live"
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/web/internal/liveproto"
 )
 
@@ -179,7 +179,7 @@ func (c *conn) post(topic string, msg any) {
 type joinKey struct{}
 
 type join struct {
-	page vuka.Node
+	page ui.Node
 	ctx  context.Context
 }
 
@@ -321,7 +321,7 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
-	c.s = liveproto.New(j.ctx, func(context.Context) vuka.Node { return j.page }, min(v, c.app.liveMax))
+	c.s = liveproto.New(j.ctx, func(context.Context) ui.Node { return j.page }, min(v, c.app.liveMax))
 	return c.s.Join(ref), 0
 }
 

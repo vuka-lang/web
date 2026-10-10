@@ -4,10 +4,11 @@ import (
 	"net/http"
 
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui"
 )
 
 // Shell is the pages' document.
-func Shell(title string, children vuka.Node) vuka.Node {
+func Shell(title string, children ui.Node) ui.Node {
 	return <html lang="en">
 		<head>
 			<meta charset="utf-8" />
@@ -28,7 +29,7 @@ func Shell(title string, children vuka.Node) vuka.Node {
 }
 
 // livePage is the layout of the @web.Live pages.
-func livePage(page vuka.Node) vuka.Node {
+func livePage(page ui.Node) ui.Node {
 	return <Shell title="Live">{page}</Shell>
 }
 
@@ -38,7 +39,7 @@ html[data-vk-state=disconnected] body::before { content: "reconnecting…"; posi
 
 // Home is an ordinary route: the counter in it makes the page live.
 @web.Get("/")
-func Home(r *http.Request) vuka.Node {
+func Home(r *http.Request) ui.Node {
 	return <Shell title="Home">
 		<h1>Vuka live</h1>
 		<p>A counter inside an ordinary <code>@web.Get</code> page:</p>

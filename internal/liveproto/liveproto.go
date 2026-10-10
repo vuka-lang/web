@@ -9,8 +9,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/live"
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/live"
 )
 
 // Session is one connected page's live session.
@@ -23,7 +23,7 @@ type Session interface {
 }
 
 // Render is a page's render function.
-type Render = func(context.Context) vuka.Node
+type Render = func(context.Context) ui.Node
 
 // V2 replaces the Vuka session for v2 joins when set (a test's stand-in).
 var V2 func(ctx context.Context, render Render) Session
@@ -56,7 +56,7 @@ func (x native) Join(ref int) any {
 
 // Native reports whether the Vuka live session speaks protocol v2.
 func Native() bool {
-	x := native{live.NewSession(context.Background(), func(context.Context) vuka.Node { return vuka.Text("") }), 2}
+	x := native{live.NewSession(context.Background(), func(context.Context) ui.Node { return ui.Text("") }), 2}
 	defer x.Close()
 	b, _ := json.Marshal(x.Join(1))
 	return bytes.Contains(b, []byte(`"trees"`))

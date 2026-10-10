@@ -16,8 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/live"
 )
 
 // Live serves a stateful component as a page at path, a GET route:
@@ -58,7 +59,7 @@ func (u Uses) liveOption(s *liveSpec) {
 }
 
 // Layout wraps a Live page's component: the page is layout(component).
-func Layout(layout func(page vuka.Node) vuka.Node) LiveOption {
+func Layout(layout func(page ui.Node) ui.Node) LiveOption {
 	return liveOptionFunc(func(s *liveSpec) { s.layout = layout })
 }
 
@@ -66,13 +67,13 @@ type liveSpec struct {
 	path, name, pkg string
 	typ             reflect.Type // the struct
 	template        reflect.Value
-	layout          func(vuka.Node) vuka.Node
+	layout          func(ui.Node) ui.Node
 	mw              []Middleware
 }
 
 // Live serves component (a pointer to a stateful component, whose fields are
 // the defaults) as a page at path, as the Live decorator does.
-func (a *App) Live(path string, component vuka.Stateful, opts ...LiveOption) *App {
+func (a *App) Live(path string, component ui.Stateful, opts ...LiveOption) *App {
 	a.mutable("Live")
 	v := reflect.ValueOf(component)
 	ls := &liveSpec{path: path, typ: v.Type().Elem(), name: v.Type().Elem().String(), template: v.Elem()}
@@ -84,7 +85,7 @@ func (a *App) Live(path string, component vuka.Stateful, opts ...LiveOption) *Ap
 }
 
 // LiveLayout is the layout of every Live page without its own.
-func LiveLayout(layout func(page vuka.Node) vuka.Node) Option {
+func LiveLayout(layout func(page ui.Node) ui.Node) Option {
 	return OptionFunc(func(a *App) { a.liveLayout = layout })
 }
 
@@ -125,7 +126,7 @@ var liveJSTag = func() string {
 	return base64.RawURLEncoding.EncodeToString(sum[:6])
 }()
 
-var statefulType = typeOf[vuka.Stateful]()
+var statefulType = typeOf[ui.Stateful]()
 
 func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	ls := s.live
@@ -166,12 +167,12 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	}
 	if layout == nil {
 		title := ls.typ.Name()
-		layout = func(page vuka.Node) vuka.Node {
-			return vuka.El("html", nil,
-				vuka.El("head", nil, vuka.El("meta", []vuka.Attr{{Name: "charset", Value: "utf-8"}}),
-					vuka.El("meta", []vuka.Attr{{Name: "name", Value: "viewport"}, {Name: "content", Value: "width=device-width, initial-scale=1"}}),
-					vuka.El("title", nil, vuka.Text(title))),
-				vuka.El("body", nil, page))
+		layout = func(page ui.Node) ui.Node {
+			return ui.El("html", nil,
+				ui.El("head", nil, ui.El("meta", []ui.Attr{{Name: "charset", Value: "utf-8"}}),
+					ui.El("meta", []ui.Attr{{Name: "name", Value: "viewport"}, {Name: "content", Value: "width=device-width, initial-scale=1"}}),
+					ui.El("title", nil, ui.Text(title))),
+				ui.El("body", nil, page))
 		}
 	}
 	site := "web.Live " + s.path
@@ -209,7 +210,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 				}
 			}
 		}
-		a.page(rq, layout(vuka.Component(site, nil, c.Interface().(vuka.Stateful))))
+		a.page(rq, layout(ui.Component(site, nil, c.Interface().(ui.Stateful))))
 	}), nil
 }
 
@@ -225,7 +226,7 @@ func matchName(names []string, name string) string {
 // page answers with a rendered page. A GET page rendering stateful
 // components (or event handlers) is live: the runtime script and a join token
 // go before </body>. Under a join the page is the session's instead.
-func (a *App) page(rq *request, n vuka.Node) {
+func (a *App) page(rq *request, n ui.Node) {
 	w, r := rq.w, rq.r
 	if j, ok := r.Context().Value(joinKey{}).(*join); ok {
 		j.page, j.ctx = n, rq.ctx
@@ -233,7 +234,7 @@ func (a *App) page(rq *request, n vuka.Node) {
 	}
 	var html []byte
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
-		s := live.NewSession(rq.ctx, func(context.Context) vuka.Node { return n })
+		s := live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
 		out, err := s.Render()
 		s.Close()
 		if err != nil {

@@ -13,12 +13,13 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/templx"
 )
 
 type view struct {
 	render func(w http.ResponseWriter, r *http.Request, v reflect.Value) error
-	node   func(v reflect.Value) (vuka.Node, error) // a templ view's page
+	node   func(v reflect.Value) (ui.Node, error) // a templ view's page
 }
 
 func compileView(dv declView, data reflect.Type) (*view, error) {
@@ -57,11 +58,11 @@ func htmlView(dv declView) (*view, error) {
 }
 
 func templView(dv declView, data reflect.Type) (*view, error) {
-	comps, ok := vuka.TemplComponents(dv.file)
+	comps, ok := templx.Components(dv.file)
 	if !ok {
 		return nil, fmt.Errorf("%s is not a .templ file Vuka compiled", dv.file.Path())
 	}
-	var comp *vuka.TemplComponent
+	var comp *templx.Component
 	if dv.name == "" {
 		var exported []string
 		for i, c := range comps {
@@ -73,7 +74,7 @@ func templView(dv declView, data reflect.Type) (*view, error) {
 			return nil, fmt.Errorf("%s has %d exported components %v; name one: @web.Template(%q, \"Name\")",
 				dv.file.Path(), len(exported), exported, dv.file.Path())
 		}
-	} else if i := slices.IndexFunc(comps, func(c vuka.TemplComponent) bool { return c.Name == dv.name }); i >= 0 {
+	} else if i := slices.IndexFunc(comps, func(c templx.Component) bool { return c.Name == dv.name }); i >= 0 {
 		comp = &comps[i]
 	} else {
 		return nil, fmt.Errorf("%s has no component %s", dv.file.Path(), dv.name)
@@ -83,12 +84,12 @@ func templView(dv declView, data reflect.Type) (*view, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &view{node: func(v reflect.Value) (vuka.Node, error) {
+	return &view{node: func(v reflect.Value) (ui.Node, error) {
 		in, err := args(v)
 		if err != nil {
 			return nil, err
 		}
-		n, _ := fn.Call(in)[0].Interface().(vuka.Node)
+		n, _ := fn.Call(in)[0].Interface().(ui.Node)
 		return n, nil
 	}}, nil
 }

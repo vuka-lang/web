@@ -14,13 +14,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/live"
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/web/internal/chrome"
 )
 
 type counter struct {
-	vuka.Live
+	ui.Live
 	Start int
 	Label string
 	n     int
@@ -28,9 +28,9 @@ type counter struct {
 
 func (c *counter) Mount() { c.n = c.Start }
 func (c *counter) Inc()   { c.n++ }
-func (c *counter) Render() vuka.Node {
-	return vuka.El("div", nil, vuka.El("span", nil, vuka.Text(c.Label), vuka.Text(c.n)),
-		vuka.El("button", []vuka.Attr{{Name: "onClick", Value: vuka.On(c.Inc)}}, vuka.Text("+")))
+func (c *counter) Render() ui.Node {
+	return ui.El("div", nil, ui.El("span", nil, ui.Text(c.Label), ui.Text(c.n)),
+		ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(c.Inc)}}, ui.Text("+")))
 }
 
 type todoForm struct {
@@ -38,7 +38,7 @@ type todoForm struct {
 }
 
 type todo struct {
-	vuka.Live
+	ui.Live
 	items []string
 }
 
@@ -50,27 +50,27 @@ func (t *todo) Add(f todoForm) error {
 	return nil
 }
 
-func (t *todo) Render() vuka.Node {
-	var lis []vuka.Node
+func (t *todo) Render() ui.Node {
+	var lis []ui.Node
 	for _, it := range t.items {
-		lis = append(lis, vuka.El("li", nil, vuka.Text(it)))
+		lis = append(lis, ui.El("li", nil, ui.Text(it)))
 	}
-	return vuka.El("form", []vuka.Attr{{Name: "onSubmit", Value: vuka.On(t.Add)}},
-		vuka.El("input", []vuka.Attr{{Name: "name", Value: "name"}}), vuka.El("ul", nil, lis...))
+	return ui.El("form", []ui.Attr{{Name: "onSubmit", Value: ui.On(t.Add)}},
+		ui.El("input", []ui.Attr{{Name: "name", Value: "name"}}), ui.El("ul", nil, lis...))
 }
 
 type said struct{ Text string }
 
 type chat struct {
-	vuka.Live
+	ui.Live
 	Room string
 	log  []string
 }
 
 func (c *chat) Mount()        { c.Subscribe("room:" + c.Room) }
 func (c *chat) Update(m said) { c.log = append(c.log, m.Text) }
-func (c *chat) Render() vuka.Node {
-	return vuka.El("form", []vuka.Attr{{Name: "onSubmit", Value: vuka.On(c.Send)}}, vuka.Text(strings.Join(c.log, "|")))
+func (c *chat) Render() ui.Node {
+	return ui.El("form", []ui.Attr{{Name: "onSubmit", Value: ui.On(c.Send)}}, ui.Text(strings.Join(c.log, "|")))
 }
 func (c *chat) Send(ctx context.Context, f chatForm) error {
 	return Broadcast(ctx, "room:"+c.Room, said{f.Text})
@@ -85,12 +85,12 @@ func liveApp(opts ...Option) *App {
 	app.Live("/counter", &counter{Start: 5, Label: "n="})
 	app.Live("/todo", &todo{})
 	app.Live("/chat/{room}", &chat{})
-	app.Get("/two", func() vuka.Node {
-		return vuka.El("main", nil, vuka.Component("two#1", nil, &counter{Label: "a"}), vuka.Component("two#2", nil, &counter{Label: "b", Start: 10}))
+	app.Get("/two", func() ui.Node {
+		return ui.El("main", nil, ui.Component("two#1", nil, &counter{Label: "a"}), ui.Component("two#2", nil, &counter{Label: "b", Start: 10}))
 	})
-	app.Get("/plain", func() vuka.Node { return vuka.El("p", nil, vuka.Text("static")) })
+	app.Get("/plain", func() ui.Node { return ui.El("p", nil, ui.Text("static")) })
 	app.Get("/json", func() Pet { return Pet{1, "Rex"} })
-	app.Post("/two", func() vuka.Node { return vuka.Component("p#1", nil, &counter{}) })
+	app.Post("/two", func() ui.Node { return ui.Component("p#1", nil, &counter{}) })
 	needCookie := func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if _, err := r.Cookie("user"); err != nil {
@@ -100,7 +100,7 @@ func liveApp(opts ...Option) *App {
 			h.ServeHTTP(w, r)
 		})
 	}
-	app.Get("/private", func() vuka.Node { return vuka.Component("private#1", nil, &counter{}) }, Wrap(needCookie))
+	app.Get("/private", func() ui.Node { return ui.Component("private#1", nil, &counter{}) }, Wrap(needCookie))
 	app.Live("/guarded", &counter{}, Use(needCookie))
 	return app
 }

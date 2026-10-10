@@ -12,6 +12,8 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/templx"
 	"github.com/vuka-lang/vuka"
 )
 
@@ -137,15 +139,15 @@ func TestResults(t *testing.T) {
 	}, "fail"))
 	Get("/pair/{id}")(decl(p, "pair", func(id int) (Pet, error) { return s.Find(id).Get() }, "id"))
 	Get("/result/{id}")(decl(p, "result", func(id int) vuka.Result[Pet] { return s.Find(id) }, "id"))
-	Get("/node")(decl(p, "node", func(r *http.Request) vuka.Node { return vuka.El("h1", nil, vuka.Text("Hi "+r.URL.Query().Get("n"))) }, "r"))
-	Get("/node-err")(decl(p, "nodeErr", func() (vuka.Node, error) { return nil, Forbidden }))
+	Get("/node")(decl(p, "node", func(r *http.Request) ui.Node { return ui.El("h1", nil, ui.Text("Hi "+r.URL.Query().Get("n"))) }, "r"))
+	Get("/node-err")(decl(p, "nodeErr", func() (ui.Node, error) { return nil, Forbidden }))
 	Get("/go")(decl(p, "goto", func() Redirect { return "/there" }))
 	Post("/go")(decl(p, "post", func() (Pet, error) { return Pet{}, Redirect("/pets/1") }))
-	Get("/maybe")(decl(p, "maybe", func(away bool) vuka.Node {
+	Get("/maybe")(decl(p, "maybe", func(away bool) ui.Node {
 		if away {
 			return Redirect("/away")
 		}
-		return vuka.Text("here")
+		return ui.Text("here")
 	}, "away"))
 	Get("/boom")(decl(p, "boom", func() (int, error) { return 0, errors.New("db password leaked") }))
 	Get("/panic")(decl(p, "panic", func() int { panic("x") }))
@@ -199,9 +201,9 @@ func TestHTMLView(t *testing.T) {
 	expect(t, h, "GET", "/missing", "", 404, `<h1>Not Found</h1>`)
 }
 
-func templ(name string) func(...any) vuka.Node {
-	return func(args ...any) vuka.Node {
-		return vuka.NodeFunc(func(ctx context.Context, w io.Writer) error {
+func templ(name string) func(...any) ui.Node {
+	return func(args ...any) ui.Node {
+		return ui.NodeFunc(func(ctx context.Context, w io.Writer) error {
 			_, err := fmt.Fprint(w, name, args)
 			return err
 		})
@@ -223,10 +225,10 @@ templ (x T) Ignored() {}
 
 templ footer() {}
 `)
-	vuka.RegisterTempl(key,
-		vuka.TemplComponent{Name: "PetList", Func: func(title string, pets []Pet) vuka.Node { return templ("list")(title, len(pets)) }, Params: []string{"title", "pets"}},
-		vuka.TemplComponent{Name: "Card", Func: func(pet Pet) vuka.Node { return templ("card")(pet.Name) }, Params: []string{"pet"}},
-		vuka.TemplComponent{Name: "footer", Func: func() vuka.Node { return templ("footer")() }})
+	templx.Register(key,
+		templx.Component{Name: "PetList", Func: func(title string, pets []Pet) ui.Node { return templ("list")(title, len(pets)) }, Params: []string{"title", "pets"}},
+		templx.Component{Name: "Card", Func: func(pet Pet) ui.Node { return templ("card")(pet.Name) }, Params: []string{"pet"}},
+		templx.Component{Name: "footer", Func: func() ui.Node { return templ("footer")() }})
 	page := Page{"Pets", []Pet{{1, "Rex"}}}
 	route := func(path string, fn any, name ...string) {
 		d := decl(p, path, fn)

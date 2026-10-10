@@ -7,7 +7,10 @@ name, and `web.New()` gathers everything into an app.
 ```vuka
 package main
 
-import "github.com/vuka-lang/web"
+import (
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+)
 
 @web.Service
 type PetStore struct{ db *DB }            // built from its fields, a lazy singleton
@@ -21,7 +24,7 @@ func ListPets(store *PetStore) Result[PetList] { … }
 func ShowPet(id int, store *PetStore) Result[Pet] { return store.Find(id) }
 
 @web.Get("/")
-func Home(r *http.Request) vuka.Node {    // JSX
+func Home(r *http.Request) ui.Node {    // JSX
 	return <Layout title="Home"><h1>Hi</h1></Layout>
 }
 
@@ -239,18 +242,18 @@ A handler returns nothing, `error`, `T`, `(T, error)` or `Result[T]`.
 | result | response |
 |---|---|
 | nothing, a nil error | 204 — unless the handler wrote the response itself through its `http.ResponseWriter` |
-| `vuka.Node` (JSX, templ) | HTML |
+| `ui.Node` (JSX, templ) | HTML |
 | `T` with `@web.Template` | the view, HTML |
 | `T` without | JSON, 200 |
 | `web.Redirect(url)` (as a value or an error) | 302 for GET/HEAD, else 303 |
 | `*web.Error`, wrapped or not | its status and message |
 | any other error | 500; its message only in dev |
 
-Errors are an HTML page on HTML routes (a view, a `vuka.Node` or a redirect
+Errors are an HTML page on HTML routes (a view, a `ui.Node` or a redirect
 result) and `{"error": …, "status": …}` elsewhere. `web.NotFound`,
 `Unauthorized`, `Forbidden`, `Conflict`, `web.BadRequest(msg)`,
 `web.Status(code, format, args…)`; `errors.Is(err, web.NotFound)` matches by
-status. `web.Redirect` is also a `vuka.Node`, so a page handler can return it.
+status. `web.Redirect` is also a `ui.Node`, so a page handler can return it.
 Panics answer 500. A handler that wrote the response and then returns an
 error can't change it any more: the error is logged.
 
@@ -274,7 +277,7 @@ type PetList struct { Title string; Pets []Pet }
 **html/template.** Any other file is parsed once at Build and executed with the
 result; a second argument names a `{{define}}`d template to execute.
 
-**JSX / render functions.** Return a `vuka.Node`; no view needed.
+**JSX / render functions.** Return a `ui.Node`; no view needed.
 
 Views are embedded at compile time (`vuka.File`), so the binary carries them,
 from the handler's package directory or below it. A `.templ` file beside the
@@ -299,13 +302,13 @@ subfolder's component through its import, `<views.Layout title="Home">`.
 ## Live components
 
 A [stateful component](https://github.com/vuka-lang/vuka/blob/main/docs/features/components.md#stateful-components)
-(a struct embedding `vuka.Live`) keeps its state on the server and answers
+(a struct embedding `ui.Live`) keeps its state on the server and answers
 its elements' events over a WebSocket; the page changes in place.
 
 ```vuka
 @web.Live("/counter")
 type Counter struct {
-	vuka.Live
+	ui.Live
 	Start int // ?start=3
 	n     int
 }
@@ -313,7 +316,7 @@ type Counter struct {
 func (c *Counter) Mount() { c.n = c.Start }
 func (c *Counter) Inc()   { c.n++ }
 
-func (c *Counter) Render() vuka.Node {
+func (c *Counter) Render() ui.Node {
 	return <div><output>{c.n}</output><button onClick={c.Inc}>+</button></div>
 }
 ```
@@ -325,15 +328,15 @@ func (c *Counter) Render() vuka.Node {
   bind from the path segment or query parameter of their name (`form` tag,
   else the field name, ignoring case). The page is the component inside the
   layout `web.Layout(f)` names, else the app's `web.LiveLayout(f)`, else a bare
-  document — `f` is `func(page vuka.Node) vuka.Node`. `web.Use(mw…)` adds
+  document — `f` is `func(page ui.Node) ui.Node`. `web.Use(mw…)` adds
   middleware. From Go: `app.Live("/counter", &Counter{Start: 1})` (the
   value's fields are the defaults).
-- Any GET route whose page — a `vuka.Node` result, or a templ view —
+- Any GET route whose page — a `ui.Node` result, or a templ view —
   renders a stateful component or an event handler is live by itself:
 
   ```vuka
   @web.Get("/")
-  func Home() vuka.Node { return <Shell title="Home"><Counter Start={10} /></Shell> }
+  func Home() ui.Node { return <Shell title="Home"><Counter Start={10} /></Shell> }
   ```
 
   A Vuka component rendered from a templ view is live too: templ passes the
@@ -358,7 +361,7 @@ page is rendered again after every event. State belongs in the components.
 listens on the document for each event type a page names and sends the
 nearest handler's id, the element's value (a checkbox's `"true"`/`"false"`),
 the key of a keyboard event, and a submitted form's fields. What a handler
-receives follows its type (Vuka's rules: nothing, the value, `vuka.Event`,
+receives follows its type (Vuka's rules: nothing, the value, `ui.Event`,
 `url.Values`, a struct bound from the form). Two attributes tune it:
 
 | attribute | |
@@ -398,7 +401,7 @@ Delivery is in-process; `web.WithRelay(r)` sends broadcasts through a `Relay`
 ```vuka
 @web.Live("/chat/{room}")
 type Chat struct {
-	vuka.Live
+	ui.Live
 	Room  string   // the path segment
 	Log   *ChatLog // injected
 	lines []string

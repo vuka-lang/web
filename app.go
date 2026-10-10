@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
 )
 
@@ -41,7 +42,7 @@ type App struct {
 	env      *envLoad
 	required []string
 
-	liveLayout  func(vuka.Node) vuka.Node
+	liveLayout  func(ui.Node) ui.Node
 	liveKey     []byte
 	liveOrigins []string
 	liveTTL     time.Duration

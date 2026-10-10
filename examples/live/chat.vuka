@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui"
 )
 
 // Said and Joined are what the chat broadcasts; each reaches its own Update.
@@ -43,7 +44,7 @@ func (l *ChatLog) History(room string) []string {
 // Chat is a room at /chat/{room}: Room binds from the path, Log is injected.
 @web.Live("/chat/{room}")
 type Chat struct {
-	vuka.Live
+	ui.Live
 	Room  string
 	Log   *ChatLog
 	lines []string
@@ -78,7 +79,7 @@ func (c *Chat) Send(ctx context.Context, f ChatForm) error {
 	return web.Broadcast(ctx, c.topic(), Said{c.name, f.Text})
 }
 
-func (c *Chat) Render() vuka.Node {
+func (c *Chat) Render() ui.Node {
 	return <section class="chat">
 		<h2>#{c.Room}</h2>
 		<ul class="lines">

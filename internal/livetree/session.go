@@ -3,7 +3,7 @@ package livetree
 import (
 	"context"
 
-	"github.com/vuka-lang/vuka/live"
+	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/web/internal/liveproto"
 )
 

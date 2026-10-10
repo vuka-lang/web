@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
 )
 
@@ -71,7 +72,7 @@ var (
 	requestType  = typeOf[*http.Request]()
 	writerType   = typeOf[http.ResponseWriter]()
 	contextType  = typeOf[context.Context]()
-	nodeType     = typeOf[vuka.Node]()
+	nodeType     = typeOf[ui.Node]()
 	redirectType = typeOf[Redirect]()
 	textType     = typeOf[encoding.TextUnmarshaler]()
 )
@@ -181,7 +182,7 @@ func (a *App) respond(rq *request, val reflect.Value, err error, v *view, htmlPa
 	case Redirect:
 		redirect(w, r, n)
 		return
-	case vuka.Node:
+	case ui.Node:
 		a.page(rq, n)
 		return
 	}
