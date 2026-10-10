@@ -368,6 +368,7 @@ func (a *App) Start(ctx context.Context) error {
 // OnStop hook, in the reverse order of the start sequence.
 func (a *App) Stop(ctx context.Context) error {
 	a.hub.closeAll()
+	a.css.close()
 	return a.c.stop(ctx)
 }
 
