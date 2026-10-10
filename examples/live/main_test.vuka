@@ -226,3 +226,33 @@ func TestBrowserChores(t *testing.T) {
 		p.Wait(`document.querySelector("[data-vk-ref=status]").className === "status flash"`) // the server renders it as before
 	})
 }
+
+func TestBrowserLikes(t *testing.T) {
+	protocols(t, func(t *testing.T, open func(string) *chrome.Page) {
+		p := open("/likes")
+		count := `document.querySelector("[data-vk-ref=count]").textContent`
+		like := `document.querySelector("#like")`
+
+		// Closed: the like shows, then is taken back, and the error shows.
+		p.Click("#toggle")
+		p.WaitText("#toggle", "Open likes")
+		p.Click("#like")
+		p.Wait(count + ` === "6" && ` + like + `.className === "like liked"`)
+		p.Wait(count + ` === "5" && ` + like + `.className === "like" && ` + like + `.hasAttribute("data-vk-failed") && !document.querySelector("[data-vk-ref=like-error]").hidden`)
+
+		// Open: the predicted count, which the server's render confirms.
+		p.Click("#toggle")
+		p.WaitText("#toggle", "Close likes")
+		p.Click("#like")
+		p.Wait(count + ` === "6" && ` + like + `.className === "like liked"`)
+		p.Wait(`!` + like + `.hasAttribute("data-vk-pending") && !` + like + `.hasAttribute("data-vk-failed")`)
+		p.Click("#like")
+		p.Wait(count + ` === "7" && !` + like + `.hasAttribute("data-vk-pending")`)
+
+		// A note goes at once; the one the server keeps comes back.
+		p.Click("#note-milk button")
+		p.Wait(`!document.querySelector("#note-milk")`)
+		p.Click("#note-keep button")
+		p.Wait(`!document.querySelector("[data-vk-ref=note-error]").hidden && getComputedStyle(document.querySelector("#note-keep")).display !== "none"`)
+	})
+}

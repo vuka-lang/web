@@ -21,7 +21,7 @@ func Shell(title string, children ui.Node) ui.Node {
 		</head>
 		<body>
 			<nav>
-				<a href="/">Home</a> <a href="/counter">Counter</a> <a href="/todo">Todo</a> <a href="/chat/lobby">Chat</a> <a href="/commands">Commands</a> <a href="/chores">Chores</a>
+				<a href="/">Home</a> <a href="/counter">Counter</a> <a href="/todo">Todo</a> <a href="/chat/lobby">Chat</a> <a href="/commands">Commands</a> <a href="/chores">Chores</a> <a href="/likes">Likes</a>
 			</nav>
 			<main>{children}</main>
 		</body>
