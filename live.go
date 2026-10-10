@@ -225,7 +225,9 @@ func matchName(names []string, name string) string {
 
 // page answers with a rendered page. A GET page rendering stateful
 // components (or event handlers) is live: the runtime script and a join token
-// go before </body>. Under a join the page is the session's instead.
+// go before </body>. A page with only JS commands (data-vk-js-*) gets the
+// script without a token: it runs them and never connects. Under a join the
+// page is the session's instead.
 func (a *App) page(rq *request, n ui.Node) {
 	w, r := rq.w, rq.r
 	if j, ok := r.Context().Value(joinKey{}).(*join); ok {
@@ -243,7 +245,8 @@ func (a *App) page(rq *request, n ui.Node) {
 		}
 		html = []byte(out)
 		if bytes.Contains(html, []byte(" data-vk-")) {
-			html = injectScript(html, a.scriptTag(r))
+			live := bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-"))
+			html = injectScript(html, a.scriptTag(r, live))
 		}
 	} else {
 		var b bytes.Buffer
@@ -261,7 +264,10 @@ func (a *App) page(rq *request, n ui.Node) {
 	w.Write(html)
 }
 
-func (a *App) scriptTag(r *http.Request) string {
+func (a *App) scriptTag(r *http.Request, live bool) string {
+	if !live {
+		return `<script src="` + liveScript + `?v=` + liveJSTag + `" defer></script>`
+	}
 	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + a.signToken(r.URL.RequestURI()) + `" defer></script>`
 }
 

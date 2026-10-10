@@ -1,11 +1,14 @@
 // The Vuka live runtime: it connects a page rendered with stateful components
 // to its session over a WebSocket, sends the events its elements declare
 // (data-vk-on-<event>), and morphs the page into what the server sends back,
-// keeping focus, selection and what the user is typing.
+// keeping focus, selection and what the user is typing. It also runs JS
+// commands (data-vk-js-<event>): changes to the page made in the browser,
+// with or without a live connection.
 (() => {
   "use strict";
   const script = document.currentScript;
   if (!script || window.vuka) return;
+  const live = script.hasAttribute("data-vk-token"); // a page with no live parts has none
   const src = new URL(script.src, location.href);
   const url = (src.protocol === "https:" ? "wss://" : "ws://") + src.host +
     src.pathname.replace(/\.js$/, "") + "?t=" + encodeURIComponent(script.dataset.vkToken || "");
@@ -69,6 +72,7 @@
           page(m.html);
         }
         emit("vk:patched", { ids: ["c0"] });
+        pushed(m.js);
         break;
       case "patch": {
         let ups = m.updates || [];
@@ -88,6 +92,7 @@
         if (b && b.form && !m.error && b.form.isConnected) b.form.reset();
         if (m.error) fail(m.error, m.ref);
         emit("vk:patched", { ids: ups.map((u) => u.id) });
+        if (!m.error) pushed(m.js);
         break;
       }
       case "error":
@@ -142,27 +147,38 @@
   }
 
   // Events: one capturing listener on the document per event type the pages
-  // name, finding the element whose data-vk-on-<type> handles it.
+  // name, finding the elements whose data-vk-js-<type> and data-vk-on-<type>
+  // handle it. The JS commands run first; a confirm the user declines also
+  // keeps the event from the server.
   function listenIn(html) {
-    for (const m of html.matchAll(/ data-vk-on-([\w-]+)=/g)) {
+    for (const m of html.matchAll(/ data-vk-(?:on|js)-([\w-]+)=/g)) {
       if (listening.has(m[1])) continue;
       listening.add(m[1]);
       document.addEventListener(m[1], handle, true);
     }
   }
 
-  function handle(e) {
-    const attr = "data-vk-on-" + e.type;
-    let el = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
-    if (el && nobubble.has(e.type)) el = el.hasAttribute(attr) ? el : null;
-    else el = el && el.closest("[" + attr + "]");
-    if (!el) return;
+  const owner = (el, attr, type) =>
+    !el ? null : nobubble.has(type) ? (el.hasAttribute(attr) ? el : null) : el.closest("[" + attr + "]");
+
+  // prevent keeps an event the server answers from doing what the browser
+  // would: a submit, a link followed, a form's button submitting it.
+  function prevent(el, e) {
     if (e.type === "submit" || e.type === "click" && (el.tagName === "A" ||
         el.tagName === "BUTTON" && el.form && !el.form.hasAttribute("data-vk-on-submit"))) e.preventDefault();
+  }
+
+  function handle(e) {
+    const t = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
+    const js = owner(t, "data-vk-js-" + e.type, e.type);
+    if (js && commands(js, e) === false) return;
+    const el = owner(t, "data-vk-on-" + e.type, e.type);
+    if (!el) return;
+    prevent(el, e);
     const keys = el.getAttribute("data-vk-key");
     if (keys && e.key !== undefined && !keys.split(/\s+/).includes(e.key)) return;
     if (!joined) return; // the join's render will replace what was clicked
-    const msg = { type: "event", target: el.getAttribute(attr), event: e.type };
+    const msg = { type: "event", target: el.getAttribute("data-vk-on-" + e.type), event: e.type };
     if (typeof e.key === "string") msg.key = e.key;
     const v = valueOf(el);
     if (v !== undefined) msg.value = v;
@@ -267,6 +283,7 @@
     for (const a of Array.from(next.attributes)) {
       if (el.getAttribute(a.name) !== a.value) el.setAttribute(a.name, a.value);
     }
+    keep(el, next);
   }
 
   function serverValue(el) {
@@ -434,7 +451,303 @@
     return out;
   }
 
-  window.vuka = { connect, tree, state: () => document.documentElement.getAttribute("data-vk-state") };
+  // JS commands: data-vk-js-<event>='[[name, args], …]' changes the page in
+  // the browser, in order; a render or patch may carry commands to run once
+  // it is applied ("js": [{"id", "ops"}]), on that instance's root.
+  const warned = new Set();
+  const warn = (what) => { if (!warned.has(what)) { warned.add(what); console.warn("vuka: " + what); } };
+
+  function commands(el, e) {
+    let ops;
+    try { ops = JSON.parse(el.getAttribute("data-vk-js-" + e.type)); } catch (_) {}
+    if (!Array.isArray(ops)) return warn("bad JS commands in data-vk-js-" + e.type);
+    if (ops.some((o) => o[0] === "push")) prevent(el, e);
+    return run(el, ops, e);
+  }
+
+  function pushed(list) {
+    for (const p of list || []) {
+      try { run(byID(p.id), p.ops || [], null); } catch (err) { fail("live: a pushed command failed: " + err.message); }
+    }
+  }
+
+  // run runs ops on behalf of el (this) for event e (null when pushed); false
+  // means a confirm was declined.
+  function run(el, ops, e) {
+    for (let i = 0; i < ops.length; i++) {
+      const [name, a = {}] = ops[i];
+      if (name === "if") i = branch(el, ops, i);
+      else if (name === "else_if" || name === "else") i = end(ops, i);
+      else if (name === "debounce" || name === "throttle") {
+        const rest = ops.slice(i + 1);
+        return pace(name, el, e, a.ms || 0, () => run(el, rest, e));
+      } else if (name === "key") {
+        if (!e || !(a.keys || []).includes(e.key)) return;
+      } else if (name === "confirm") {
+        if (!window.confirm(a.msg)) return false;
+      } else if (name !== "end") {
+        if (jsOps[name]) jsOps[name](el, a, e);
+        else warn("unknown JS command " + name);
+      }
+    }
+  }
+
+  // branch returns the index after which the branch of the if at i that
+  // holds starts, or its end when none does; end, from an else_if or else
+  // reached while running a branch, the end of its block.
+  function branch(el, ops, i) {
+    for (let j = i, depth = 0; j < ops.length; j++) {
+      const n = ops[j][0];
+      if (j > i && n === "if") depth++;
+      else if (n === "end" && depth-- === 0) return j;
+      else if (depth === 0 && (n === "else" || (n === "if" || n === "else_if") && holds(el, (ops[j][1] || {}).cond || {}))) return j;
+    }
+    return ops.length;
+  }
+  function end(ops, i) {
+    for (let j = i + 1, depth = 0; j < ops.length; j++) {
+      if (ops[j][0] === "if") depth++;
+      else if (ops[j][0] === "end" && depth-- === 0) return j;
+    }
+    return ops.length;
+  }
+
+  // targets finds what a command acts on: el, or elements by ref (within
+  // el's instance, not the instances inside it), selector, closest ancestor,
+  // or selector inside el.
+  function targets(el, to) {
+    if (!to) return el ? [el] : [];
+    try {
+      if (to.ref !== undefined) {
+        const scope = el && el.closest("[data-vk-id]");
+        const own = (x) => x === scope || (x.parentElement && x.parentElement.closest("[data-vk-id]")) === scope;
+        const all = Array.from((scope || document).querySelectorAll("[data-vk-ref]"));
+        if (scope && scope.hasAttribute("data-vk-ref")) all.unshift(scope);
+        return all.filter((x) => x.getAttribute("data-vk-ref") === String(to.ref) && own(x));
+      }
+      if (to.sel) return Array.from(document.querySelectorAll(to.sel));
+      if (to.closest) { const c = el && el.closest(to.closest); return c ? [c] : []; }
+      if (to.inner) return el ? Array.from(el.querySelectorAll(to.inner)) : [];
+    } catch (err) { warn(err.message); }
+    return [];
+  }
+
+  const read = (t) => "value" in t ? t.value : t.getAttribute("value");
+  function holds(el, c) {
+    const found = targets(el, c.to), some = (f) => found.some(f);
+    if ("checked" in c) return some((t) => !!t.checked === !!c.checked);
+    if ("value_eq" in c) return some((t) => read(t) === String(c.value_eq));
+    if ("value" in c) return some((t) => !!read(t) === !!c.value);
+    if ("is" in c) return some((t) => t.matches(c.is));
+    if ("attr" in c) return some((t) => t.hasAttribute(c.attr));
+    if ("exists" in c) return (found.length > 0) === !!c.exists;
+    return found.length > 0;
+  }
+
+  // Reconciliation: per element, each attribute a command changed, with the
+  // server's value then and the command's. A morph that renders the
+  // attribute as before puts the command's value back; one that renders it
+  // differently wins, and the attribute is the server's again.
+  const touched = new WeakMap();
+  function touch(el, name, change) {
+    let m = touched.get(el);
+    if (!m) touched.set(el, (m = new Map()));
+    if (!m.has(name)) m.set(name, { server: el.getAttribute(name) });
+    change();
+    m.get(name).value = el.getAttribute(name);
+  }
+  function keep(el, next) {
+    const m = touched.get(el);
+    if (m) {
+      m.forEach((r, name) => {
+        if (next.getAttribute(name) !== r.server) return m.delete(name);
+        if (r.value === null) el.removeAttribute(name);
+        else if (el.getAttribute(name) !== r.value) el.setAttribute(name, r.value);
+      });
+      if (!m.size) touched.delete(el);
+    }
+    const t = running.get(el); // a transition's classes outlive a morph
+    if (t) t.cls.forEach((c) => el.classList.add(c));
+  }
+
+  const words = (v) => Array.isArray(v) ? v.flatMap(words) : String(v || "").split(/\s+/).filter(Boolean);
+  const classes = (op) => (el, a) => targets(el, a.to).forEach((t) => touch(t, "class", () => words(a.names).forEach((c) => t.classList[op](c))));
+
+  // Display: show and hide edit the style attribute's display (what a
+  // morph re-renders and a command must keep) and the hidden attribute.
+  const displayRe = /(^|;)\s*display\s*:[^;]*;?/i;
+  const display = (el) => (/(?:^|;)\s*display\s*:\s*([^;]*)/i.exec(el.getAttribute("style") || "") || [])[1] || "";
+  function setDisplay(el, v) {
+    touch(el, "style", () => {
+      const rest = (el.getAttribute("style") || "").replace(displayRe, "$1").replace(/^\s*;|;\s*$/g, "").trim();
+      const style = v ? (rest ? rest + "; " : "") + "display: " + v : rest;
+      if (style) el.setAttribute("style", style);
+      else el.removeAttribute("style");
+    });
+  }
+  const shown = (el) => !el.hasAttribute("hidden") && display(el).trim() !== "none" &&
+    (typeof getComputedStyle !== "function" || getComputedStyle(el).display !== "none");
+  function show(el, a) {
+    if (el.hasAttribute("hidden")) touch(el, "hidden", () => el.removeAttribute("hidden"));
+    setDisplay(el, a.display || "");
+    if (!a.display && typeof getComputedStyle === "function" && getComputedStyle(el).display === "none") setDisplay(el, "block");
+  }
+  function hide(el) {
+    setDisplay(el, "none");
+    if (!el.hasAttribute("hidden")) touch(el, "hidden", () => el.setAttribute("hidden", ""));
+  }
+  const visibly = (el, a, on) => {
+    if (!a.transition) return on ? show(el, a) : hide(el);
+    animate(el, a.transition, a.time, on ? () => show(el, a) : null, on ? null : () => hide(el));
+  };
+
+  // Transitions: during and from go on, a frame later from gives way to to,
+  // and after time all three come off. Their classes are the browser's
+  // alone; a new transition on an element finishes the one running there.
+  const running = new WeakMap();
+  const frame = (fn) => typeof requestAnimationFrame === "function"
+    ? requestAnimationFrame(() => requestAnimationFrame(fn)) : setTimeout(fn, 16);
+  function animate(el, tr, time, before, after) {
+    const prev = running.get(el);
+    if (prev) prev.finish();
+    const [during, from, to] = [0, 1, 2].map((i) => words((tr || [])[i]));
+    let done = false, timer = 0;
+    const r = { cls: new Set([...during, ...from]), finish() {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      running.delete(el);
+      [...during, ...from, ...to].forEach((c) => el.classList.remove(c));
+      if (after) after();
+    } };
+    running.set(el, r);
+    r.cls.forEach((c) => el.classList.add(c));
+    if (before) before();
+    frame(() => {
+      if (done) return;
+      from.forEach((c) => { el.classList.remove(c); r.cls.delete(c); });
+      to.forEach((c) => { el.classList.add(c); r.cls.add(c); });
+      timer = setTimeout(r.finish, time == null ? 200 : time);
+    });
+  }
+
+  const focusStack = [];
+  const focusable = "a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
+  const first = (t) => t.querySelector("[autofocus]") || t.querySelector(focusable);
+
+  // Debounce and throttle run the steps after them at a pace kept per
+  // element and event type. A debounced step waiting in a form runs before
+  // the form's submit; throttling a field's input still sends its last one.
+  const paced = new WeakMap(), debouncing = new Set();
+  function pace(kind, el, e, ms, fn) {
+    const type = e ? e.type : "";
+    if (type === "submit" && kind === "debounce") e.preventDefault();
+    let m = paced.get(el);
+    if (!m) paced.set(el, (m = {}));
+    const p = m[kind + " " + type] ||= { el, type };
+    if (kind === "debounce") {
+      clearTimeout(p.timer);
+      p.run = () => { clearTimeout(p.timer); debouncing.delete(p); fn(); };
+      debouncing.add(p);
+      p.timer = setTimeout(p.run, ms);
+      return;
+    }
+    if (p.closed) {
+      if (type === "submit") e.preventDefault();
+      if (type === "input" || type === "change") p.last = fn;
+      return;
+    }
+    p.closed = true;
+    const reopen = () => {
+      const last = p.last;
+      p.last = null;
+      if (!last) return void (p.closed = false);
+      last();
+      setTimeout(reopen, ms);
+    };
+    setTimeout(reopen, ms);
+    fn();
+  }
+  document.addEventListener("submit", (e) => {
+    debouncing.forEach((p) => { if (p.type !== "submit" && e.target.contains(p.el)) p.run(); });
+  }, true);
+
+  function copy(text, el) {
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("style", "position: fixed; opacity: 0");
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (_) {}
+      ta.remove();
+    };
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).catch(fallback);
+    else fallback();
+    if (el) {
+      el.setAttribute("data-copied", "");
+      setTimeout(() => el.removeAttribute("data-copied"), 1500);
+    }
+  }
+
+  const each = (fn) => (el, a, e) => targets(el, a.to).forEach((t) => fn(t, a, e));
+  const jsOps = {
+    add_class: classes("add"),
+    remove_class: classes("remove"),
+    toggle_class: classes("toggle"),
+    set_attr: each((t, a) => touch(t, a.name, () => t.setAttribute(a.name, a.value))),
+    remove_attr: each((t, a) => touch(t, a.name, () => t.removeAttribute(a.name))),
+    toggle_attr: each((t, a) => touch(t, a.name, () => {
+      const [on, off] = a.values || [];
+      if (off === undefined) t.hasAttribute(a.name) ? t.removeAttribute(a.name) : t.setAttribute(a.name, on == null ? "" : on);
+      else t.setAttribute(a.name, t.getAttribute(a.name) === on ? off : on);
+    })),
+    show: each((t, a) => visibly(t, a, true)),
+    hide: each((t, a) => visibly(t, a, false)),
+    toggle: each((t, a) => visibly(t, a, !shown(t))),
+    transition: each((t, a) => animate(t, a.transition, a.time)),
+    focus: (el, a) => { const t = targets(el, a.to)[0]; if (t) t.focus(); },
+    focus_first: (el, a) => { const t = targets(el, a.to)[0], f = t && first(t); if (f) f.focus(); },
+    push_focus: (el, a) => { const t = a.to ? targets(el, a.to)[0] : document.activeElement; if (t) focusStack.push(t); },
+    pop_focus: () => { const t = focusStack.pop(); if (t && t.isConnected) t.focus(); },
+    dispatch: each((t, a) => t.dispatchEvent(new CustomEvent(a.event, { bubbles: a.bubbles !== false, detail: a.detail }))),
+    exec: each((t, a, e) => {
+      let ops;
+      try { ops = JSON.parse(t.getAttribute(a.attr) || "[]"); } catch (_) {}
+      if (Array.isArray(ops)) run(t, ops, e);
+      else warn("bad JS commands in " + a.attr);
+    }),
+    copy: (el, a) => {
+      const t = targets(el, a.to)[0];
+      if (t) copy("value" in t && t.tagName !== "BUTTON" ? t.value : t.textContent.trim(), el);
+    },
+    copy_text: (el, a) => copy(String(a.text), el),
+    scroll_to: (el, a) => { const t = targets(el, a.to)[0]; if (t) t.scrollIntoView({ block: "nearest", behavior: "smooth" }); },
+    set_value: each((t, a) => {
+      if (!("value" in t)) return;
+      t.value = a.value;
+      t.dispatchEvent(new Event("input", { bubbles: true }));
+      t.dispatchEvent(new Event("change", { bubbles: true }));
+    }),
+    // push sends an event to a handler as data-vk-on-<event> would.
+    push: (el, a, e) => {
+      if (!live) return warn("a push command needs a live page");
+      if (!joined) return;
+      const type = a.event || (e ? e.type : "push");
+      const msg = { type: "event", target: a.h, event: type };
+      if (e && typeof e.key === "string") msg.key = e.key;
+      const v = "value" in a ? a.value : el && valueOf(el);
+      if (v !== undefined && v !== null) msg.value = typeof v === "string" ? v : JSON.stringify(v);
+      const form = type === "submit" ? (e && e.target.closest("form")) || (el && el.closest("form")) : null;
+      if (form) msg.form = formOf(form, e && e.submitter);
+      flush();
+      send(msg, el, form);
+    },
+  };
+
+  window.vuka = { connect, tree, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
+  listenIn(document.documentElement.outerHTML);
+  if (!live) return;
   window.addEventListener("online", () => { if (!ws) { attempt = 0; connect(); } });
   connect();
 })();

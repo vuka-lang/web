@@ -215,6 +215,18 @@ type Page struct {
 // Open opens url in a new tab and waits for the page to be live.
 func (b *Browser) Open(url string) *Page {
 	b.t.Helper()
+	return b.open(url, `document.documentElement.dataset.vkState === "connected"`)
+}
+
+// Visit opens url in a new tab and waits for it to load and its runtime to
+// run: a page that never connects (one with only JS commands).
+func (b *Browser) Visit(url string) *Page {
+	b.t.Helper()
+	return b.open(url, `document.readyState === "complete" && window.vuka`)
+}
+
+func (b *Browser) open(url, ready string) *Page {
+	b.t.Helper()
 	var target struct {
 		TargetID string `json:"targetId"`
 	}
@@ -231,7 +243,7 @@ func (b *Browser) Open(url string) *Page {
 	p.must("Page.enable", nil, nil)
 	p.must("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": wireCounter}, nil)
 	p.must("Page.navigate", map[string]any{"url": url}, nil)
-	p.Wait(`document.documentElement.dataset.vkState === "connected"`)
+	p.Wait(ready)
 	return p
 }
 

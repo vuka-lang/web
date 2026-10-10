@@ -12,8 +12,8 @@ function load(file) {
   const ctx = {
     window, URL, console, setTimeout, clearTimeout,
     document: {
-      currentScript: { src: "http://test/_vuka/live.js", dataset: {} },
-      documentElement: { setAttribute: noop, getAttribute: () => null },
+      currentScript: { src: "http://test/_vuka/live.js", dataset: {}, hasAttribute: () => false },
+      documentElement: { setAttribute: noop, getAttribute: () => null, outerHTML: "" },
       addEventListener: noop, dispatchEvent: noop,
     },
     location: { href: "http://test/" },
