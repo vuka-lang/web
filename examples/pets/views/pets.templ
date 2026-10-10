@@ -1,8 +1,12 @@
-package main
+package views
 
-import "strconv"
+import (
+	"strconv"
 
-templ PetsPage(title string, pets []Pet) {
+	"github.com/vuka-lang/web/examples/pets/model"
+)
+
+templ PetsPage(title string, pets []model.Pet) {
 	@Layout(title) {
 		<h1>{ title }</h1>
 		<ul>

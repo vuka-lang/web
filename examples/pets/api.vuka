@@ -7,15 +7,16 @@ import (
 	"strconv"
 
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/pets/model"
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
 @web.Get("/api/pets")
-func APIPets(store *PetStore) Result[[]Pet] { return store.All() }
+func APIPets(store *PetStore) Result[[]model.Pet] { return store.All() }
 
 @web.Post("/api/pets")
-func CreatePet(in NewPet, store *PetStore) Result[Pet] { return store.Add(in) }
+func CreatePet(in model.NewPet, store *PetStore) Result[model.Pet] { return store.Add(in) }
 
 // requireToken is HTTP middleware for one route, through @web.Use.
 func requireToken(next http.Handler) http.Handler {
@@ -42,7 +43,7 @@ type PetAdmin struct {
 }
 
 @web.Get("/")
-func (a *PetAdmin) Index() Result[[]Pet] { return a.store.All() }
+func (a *PetAdmin) Index() Result[[]model.Pet] { return a.store.All() }
 
 @web.Delete("/{id}")
 @web.Use(requireToken)

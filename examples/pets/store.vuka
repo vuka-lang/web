@@ -9,28 +9,19 @@ import (
 	"sync"
 
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/pets/model"
 )
 
-type Pet struct {
-	ID   int    `json:"id"`
-	Name string `json:"name"`
-	Kind string `json:"kind"`
-}
-
-type NewPet struct {
-	Name string `json:"name" validate:"required"`
-	Kind string `json:"kind"`
-}
 
 // DB is a stand-in database; Start and Stop run with the app.
 type DB struct {
 	mu   sync.Mutex
-	pets map[int]Pet
+	pets map[int]model.Pet
 	next int
 }
 
 func OpenDB() *DB {
-	return &DB{pets: map[int]Pet{1: {1, "Rex", "dog"}, 2: {2, "Tom", "cat"}}, next: 3}
+	return &DB{pets: map[int]model.Pet{1: {1, "Rex", "dog"}, 2: {2, "Tom", "cat"}}, next: 3}
 }
 
 func (db *DB) Start(context.Context) error { log.Print("db: open"); return nil }
@@ -41,10 +32,10 @@ type PetStore struct {
 	db *DB
 }
 
-func (s *PetStore) All() Result[[]Pet] {
+func (s *PetStore) All() Result[[]model.Pet] {
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
-	pets := make([]Pet, 0, len(s.db.pets))
+	pets := make([]model.Pet, 0, len(s.db.pets))
 	for _, p := range s.db.pets {
 		pets = append(pets, p)
 	}
@@ -52,7 +43,7 @@ func (s *PetStore) All() Result[[]Pet] {
 	return Ok(pets)
 }
 
-func (s *PetStore) Find(id int) Result[Pet] {
+func (s *PetStore) Find(id int) Result[model.Pet] {
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
 	p, ok := s.db.pets[id]
@@ -62,13 +53,13 @@ func (s *PetStore) Find(id int) Result[Pet] {
 	return Ok(p)
 }
 
-func (s *PetStore) Add(in NewPet) Result[Pet] {
+func (s *PetStore) Add(in model.NewPet) Result[model.Pet] {
 	if strings.TrimSpace(in.Name) == "" {
 		return Err(web.BadRequest("a pet needs a name"))
 	}
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
-	p := Pet{ID: s.db.next, Name: in.Name, Kind: in.Kind}
+	p := model.Pet{ID: s.db.next, Name: in.Name, Kind: in.Kind}
 	s.db.pets[p.ID] = p
 	s.db.next++
 	return Ok(p)

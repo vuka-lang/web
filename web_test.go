@@ -223,11 +223,10 @@ templ (x T) Ignored() {}
 
 templ footer() {}
 `)
-	vuka.RegisterTempl(key, map[string]any{
-		"PetList": func(title string, pets []Pet) vuka.Node { return templ("list")(title, len(pets)) },
-		"Card":    func(pet Pet) vuka.Node { return templ("card")(pet.Name) },
-		"footer":  func() vuka.Node { return templ("footer")() },
-	})
+	vuka.RegisterTempl(key,
+		vuka.TemplComponent{Name: "PetList", Func: func(title string, pets []Pet) vuka.Node { return templ("list")(title, len(pets)) }, Params: []string{"title", "pets"}},
+		vuka.TemplComponent{Name: "Card", Func: func(pet Pet) vuka.Node { return templ("card")(pet.Name) }, Params: []string{"pet"}},
+		vuka.TemplComponent{Name: "footer", Func: func() vuka.Node { return templ("footer")() }})
 	page := Page{"Pets", []Pet{{1, "Rex"}}}
 	route := func(path string, fn any, name ...string) {
 		d := decl(p, path, fn)
@@ -266,7 +265,7 @@ templ footer() {}
 	err := New(Only(bad)).Build()
 	for _, want := range []string{
 		`/ambiguous (main./ambiguous at t.vuka:`,
-		`has 2 exported components [Card PetList]; name one`,
+		`has 2 exported components [PetList Card]; name one`,
 		`component PetList: web.Pet has no field for parameter title`,
 		`field .Pets is string; parameter pets is []web.Pet`,
 		`the view pets.templ needs a result to render`,

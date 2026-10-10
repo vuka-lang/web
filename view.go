@@ -4,14 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
-	"go/parser"
-	"go/token"
 	"html/template"
 	"net/http"
 	"path"
 	"reflect"
-	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -27,17 +24,17 @@ func compileView(dv declView, data reflect.Type) (*view, error) {
 	if data == nil {
 		return nil, fmt.Errorf("the view %s needs a result to render", dv.file.Path())
 	}
+	if strings.HasSuffix(dv.file.Path(), ".templ") {
+		return templView(dv, data)
+	}
+	return htmlView(dv)
+}
+
+func htmlView(dv declView) (*view, error) {
 	src, err := dv.file.Bytes()
 	if err != nil {
 		return nil, fmt.Errorf("reading the view %s: %w", dv.file.Path(), err)
 	}
-	if strings.HasSuffix(dv.file.Path(), ".templ") {
-		return templView(dv, src, data)
-	}
-	return htmlView(dv, src)
-}
-
-func htmlView(dv declView, src []byte) (*view, error) {
 	t, err := template.New(path.Base(dv.file.Path())).Parse(string(src))
 	if err != nil {
 		return nil, fmt.Errorf("parsing the view %s: %w", dv.file.Path(), err)
@@ -58,32 +55,30 @@ func htmlView(dv declView, src []byte) (*view, error) {
 	}}, nil
 }
 
-func templView(dv declView, src []byte, data reflect.Type) (*view, error) {
+func templView(dv declView, data reflect.Type) (*view, error) {
 	comps, ok := vuka.TemplComponents(dv.file)
 	if !ok {
-		return nil, fmt.Errorf("%s is not a .templ file Vuka compiled with this package", dv.file.Path())
+		return nil, fmt.Errorf("%s is not a .templ file Vuka compiled", dv.file.Path())
 	}
-	name := dv.name
-	if name == "" {
+	var comp *vuka.TemplComponent
+	if dv.name == "" {
 		var exported []string
-		for n := range comps {
-			if ast.IsExported(n) {
-				exported = append(exported, n)
+		for i, c := range comps {
+			if ast.IsExported(c.Name) {
+				exported, comp = append(exported, c.Name), &comps[i]
 			}
 		}
 		if len(exported) != 1 {
-			sort.Strings(exported)
 			return nil, fmt.Errorf("%s has %d exported components %v; name one: @web.Template(%q, \"Name\")",
 				dv.file.Path(), len(exported), exported, dv.file.Path())
 		}
-		name = exported[0]
+	} else if i := slices.IndexFunc(comps, func(c vuka.TemplComponent) bool { return c.Name == dv.name }); i >= 0 {
+		comp = &comps[i]
+	} else {
+		return nil, fmt.Errorf("%s has no component %s", dv.file.Path(), dv.name)
 	}
-	comp, ok := comps[name]
-	if !ok {
-		return nil, fmt.Errorf("%s has no component %s", dv.file.Path(), name)
-	}
-	fn := reflect.ValueOf(comp)
-	args, err := componentArgs(fn.Type(), templParams(src, name), data, name)
+	fn := reflect.ValueOf(comp.Func)
+	args, err := componentArgs(fn.Type(), comp.Params, data, comp.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -168,41 +163,4 @@ func signature(ft reflect.Type, names []string) string {
 		ps = append(ps, p)
 	}
 	return "(" + strings.Join(ps, ", ") + ")"
-}
-
-var templDecl = regexp.MustCompile(`(?m)^templ\s+([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*\(`)
-
-// templParams reads a component's parameter names from its .templ source;
-// the compiled function keeps only their types.
-func templParams(src []byte, name string) []string {
-	for _, m := range templDecl.FindAllSubmatchIndex(src, -1) {
-		if string(src[m[2]:m[3]]) != name {
-			continue
-		}
-		start, depth := m[1], 1
-		end := start
-		for ; end < len(src) && depth > 0; end++ {
-			switch src[end] {
-			case '(':
-				depth++
-			case ')':
-				depth--
-			}
-		}
-		f, err := parser.ParseFile(token.NewFileSet(), "", "package p; func _("+string(src[start:end-1])+") {}", 0)
-		if err != nil {
-			return nil
-		}
-		var names []string
-		for _, field := range f.Decls[0].(*ast.FuncDecl).Type.Params.List {
-			if len(field.Names) == 0 {
-				names = append(names, "")
-			}
-			for _, n := range field.Names {
-				names = append(names, n.Name)
-			}
-		}
-		return names
-	}
-	return nil
 }

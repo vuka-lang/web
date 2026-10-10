@@ -13,7 +13,7 @@ import "github.com/vuka-lang/web"
 type PetStore struct{ db *DB }            // built from its fields, a lazy singleton
 
 @web.Get("/pets")
-@web.Template("pets.templ")               // a templ component renders the result
+@web.Template("views/pets.templ")         // a templ component renders the result
 func ListPets(store *PetStore) Result[PetList] { … }
 
 @web.Get("/pets/{id}")
@@ -149,7 +149,7 @@ Panics answer 500.
 
 ## Views
 
-**templ.** `@web.Template("pets.templ")` uses the file's one exported
+**templ.** `@web.Template("views/pets.templ")` uses the file's one exported
 component; with several, name one: `@web.Template("cards.templ", "Card")`. The
 result fills the component's parameters: whole, when it has one parameter the
 result is assignable to; otherwise the result is a struct (or pointer to one)
@@ -169,9 +169,25 @@ result; a second argument names a `{{define}}`d template to execute.
 
 **JSX / render functions.** Return a `vuka.Node`; no view needed.
 
-Views are embedded at compile time (`vuka.File`), so the binary carries them.
-A `.templ` file must sit in the handler's package directory (it is compiled
-into that package); `.html` files may be anywhere below it.
+Views are embedded at compile time (`vuka.File`), so the binary carries them,
+from the handler's package directory or below it. A `.templ` file beside the
+handler is part of its package; one in a subfolder is that folder's package,
+as Go has it — `views/pets.templ` starts with `package views` — and Vuka
+compiles it and imports it for you:
+
+```
+examples/pets/
+  pages.vuka        @web.Template("views/pets.templ"), @web.Template("views/pet.html")
+  model/pet.go      package model: Pet, shared by handlers and views
+  views/layout.templ  package views: Layout
+  views/pets.templ    package views: PetsPage, composed with @Layout
+  views/pet.html
+```
+
+Only the subfolder's exported components can be views, and its types can't
+come from the handler's package (`package main` can't be imported): put shared
+types in a package of their own, like `model` here. A JSX page uses a
+subfolder's component through its import, `<views.Layout title="Home">`.
 
 ## Dependency injection
 
@@ -235,7 +251,8 @@ vuka test ./...                   # also examples/ and internal/vukatest, writte
 
 - One struct parameter per handler; scalars bind from the path or query only
   (use `*http.Request` for headers and cookies).
-- A `.templ` view must be in the handler's package directory.
+- Views live in the handler's package directory or below it (`go:embed`
+  doesn't reach up); `../shared/x.templ` is an error.
 - A `vuka.File` literal is embedded only where a decorator or attribute takes
   one, so there is no `web.Layout(file)` option; compose layouts in templ, or
   `{{define}}` them in one html file.
