@@ -18,6 +18,7 @@ import (
 
 type view struct {
 	render func(w http.ResponseWriter, r *http.Request, v reflect.Value) error
+	node   func(v reflect.Value) (vuka.Node, error) // a templ view's page
 }
 
 func compileView(dv declView, data reflect.Type) (*view, error) {
@@ -44,7 +45,7 @@ func htmlView(dv declView) (*view, error) {
 			return nil, fmt.Errorf("the view %s defines no template %q", dv.file.Path(), dv.name)
 		}
 	}
-	return &view{func(w http.ResponseWriter, r *http.Request, v reflect.Value) error {
+	return &view{render: func(w http.ResponseWriter, r *http.Request, v reflect.Value) error {
 		var buf bytes.Buffer
 		if err := t.Execute(&buf, v.Interface()); err != nil {
 			return err
@@ -82,13 +83,13 @@ func templView(dv declView, data reflect.Type) (*view, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &view{func(w http.ResponseWriter, r *http.Request, v reflect.Value) error {
+	return &view{node: func(v reflect.Value) (vuka.Node, error) {
 		in, err := args(v)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		n, _ := fn.Call(in)[0].Interface().(vuka.Node)
-		return vuka.Write(w, r, n)
+		return n, nil
 	}}, nil
 }
 

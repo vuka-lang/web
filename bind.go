@@ -24,12 +24,20 @@ type routeSpec struct {
 	params       []vuka.Param
 	view         *declView
 	mw           []Middleware
+	live         *liveSpec // a Live page
 }
 
 type request struct {
 	w   http.ResponseWriter
 	r   *http.Request
 	ctx context.Context
+	app *App
+}
+
+func (a *App) newRequest(w http.ResponseWriter, r *http.Request) *request {
+	rq := &request{w: w, r: r, app: a}
+	rq.ctx = context.WithValue(r.Context(), ctxKey{}, rq)
+	return rq
 }
 
 type ctxKey struct{}
@@ -65,6 +73,9 @@ var (
 )
 
 func (a *App) compile(s *routeSpec) (http.Handler, error) {
+	if s.live != nil {
+		return a.compileLive(s)
+	}
 	fail := func(format string, args ...any) error {
 		return fmt.Errorf("web: %s %s (%s): %s", s.method, s.path, s.where, fmt.Sprintf(format, args...))
 	}
@@ -124,8 +135,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 				a.writeError(w, r, fmt.Errorf("panic: %v", p), htmlPage)
 			}
 		}()
-		rq := &request{w: w, r: r}
-		rq.ctx = context.WithValue(r.Context(), ctxKey{}, rq)
+		rq := a.newRequest(w, r)
 		args := make([]reflect.Value, len(binders))
 		for i, b := range binders {
 			v, err := b(rq)
@@ -136,11 +146,12 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 			args[i] = v
 		}
 		val, err := out.split(s.fn.Call(args))
-		a.respond(w, r, val, err, v, htmlPage)
+		a.respond(rq, val, err, v, htmlPage)
 	}), nil
 }
 
-func (a *App) respond(w http.ResponseWriter, r *http.Request, val reflect.Value, err error, v *view, htmlPage bool) {
+func (a *App) respond(rq *request, val reflect.Value, err error, v *view, htmlPage bool) {
+	w, r := rq.w, rq.r
 	var to Redirect
 	if errors.As(err, &to) {
 		redirect(w, r, to)
@@ -160,9 +171,16 @@ func (a *App) respond(w http.ResponseWriter, r *http.Request, val reflect.Value,
 		redirect(w, r, n)
 		return
 	case vuka.Node:
-		if err := vuka.Write(w, r, n); err != nil {
+		a.page(rq, n)
+		return
+	}
+	if v != nil && v.node != nil {
+		n, err := v.node(val)
+		if err != nil {
 			a.writeError(w, r, err, true)
+			return
 		}
+		a.page(rq, n)
 		return
 	}
 	if v != nil {

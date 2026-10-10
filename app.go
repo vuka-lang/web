@@ -35,6 +35,13 @@ type App struct {
 	statics []func()
 	needs   []reflect.Type
 
+	liveLayout  func(vuka.Node) vuka.Node
+	liveKey     []byte
+	liveOrigins []string
+	liveTTL     time.Duration
+	relay       Relay
+	hub         *hub
+
 	once    sync.Once
 	handler http.Handler
 	err     error
@@ -43,9 +50,13 @@ type App struct {
 // New makes an app of every route, service and controller declared so far
 // (each app takes its own snapshot, with its own singletons).
 func New(opts ...Option) *App {
-	a := &App{c: newContainer(), dev: os.Getenv("VUKA_ENV") == "development", reg: snapshot()}
+	a := &App{c: newContainer(), dev: os.Getenv("VUKA_ENV") == "development", reg: snapshot(),
+		liveTTL: 12 * time.Hour, hub: newHub()}
 	for _, o := range opts {
 		o.apply(a)
+	}
+	if a.liveKey == nil {
+		a.liveKey = randomKey()
 	}
 	if a.router == nil {
 		a.router = NewServeMux()
@@ -193,6 +204,11 @@ func (a *App) build() (http.Handler, error) {
 		}
 		specs = append(specs, s)
 	}
+	for _, ls := range a.reg.lives {
+		if a.take(ls.pkg) {
+			specs = append(specs, &routeSpec{method: http.MethodGet, path: ls.path, where: "live page " + ls.name, live: ls, mw: ls.mw})
+		}
+	}
 	specs = append(specs, a.specs...)
 	errs := slices.Clone(a.c.errs)
 	seen := map[string]string{}
@@ -218,6 +234,11 @@ func (a *App) build() (http.Handler, error) {
 	}
 	for _, f := range a.statics {
 		f()
+	}
+	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(serveLiveJS))
+	a.router.Handle(http.MethodGet, liveSocket, http.HandlerFunc(a.serveLive))
+	if a.relay != nil {
+		a.relay.Subscribe(a.hub.deliver)
 	}
 	var h http.Handler = a.router
 	for i := len(a.mw) - 1; i >= 0; i-- {
@@ -264,7 +285,10 @@ func (a *App) Start(ctx context.Context) error {
 
 // Stop calls Stop on each built value implementing Stopper, in reverse
 // order of construction.
-func (a *App) Stop(ctx context.Context) error { return a.c.stop(ctx) }
+func (a *App) Stop(ctx context.Context) error {
+	a.hub.closeAll()
+	return a.c.stop(ctx)
+}
 
 // Run serves the app on addr (":" + $PORT, else ":8080", when empty) until
 // SIGINT or SIGTERM, then shuts down gracefully and stops the services.
@@ -285,6 +309,7 @@ func (a *App) Run(addr string) error {
 		return err
 	}
 	srv := &http.Server{Handler: a.handler, ReadHeaderTimeout: 10 * time.Second}
+	srv.RegisterOnShutdown(a.hub.closeAll)
 	log.Printf("web: listening on http://%s", ln.Addr())
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
