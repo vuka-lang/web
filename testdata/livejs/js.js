@@ -340,6 +340,18 @@ test("reconciliation under protocol v2, and a transition across a morph", () => 
   eq(m.className, "m sel", "the transition's classes went");
 });
 
+test("a branch that changes element keeps the field after it, focus and all", () => {
+  const p = joined(`<div data-vk-id="c1"><p>who?</p><input name="name"></div>`);
+  const input = p.$("input");
+  input.focus();
+  p.server({ type: "patch", updates: [{ id: "c1", html: `<div data-vk-id="c1"><h1>Hello, A!</h1><input name="name"></div>` }] });
+  eq([p.$("input") === input, p.doc.activeElement === input, p.$("h1").textContent, p.doc.querySelectorAll("p").length], [true, true, "Hello, A!", 0], "error → heading");
+  p.server({ type: "patch", updates: [{ id: "c1", html: `<div data-vk-id="c1"><p>who?</p><input name="name"></div>` }] });
+  eq([p.$("input") === input, p.doc.activeElement === input, p.doc.querySelectorAll("h1").length], [true, true, 0], "heading → error");
+  p.server({ type: "patch", updates: [{ id: "c1", html: `<div data-vk-id="c1"><span>new</span><p>who?</p><input name="name"></div>` }] });
+  eq([p.$("input") === input, p.$("span").textContent, p.$("p").textContent], [true, "new", "who?"], "an inserted node keeps the ones after it");
+});
+
 // Optimistic updates.
 const sentRef = (p, i) => p.ws().sent[i].ref;
 const errors = (p) => p.logs.filter((l) => l.startsWith("error"));

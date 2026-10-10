@@ -282,6 +282,15 @@
   const keyOf = (n) => n.nodeType === 1 ? n.id || n.getAttribute("data-vk-id") || "" : "";
   const same = (a, b) => a.nodeType === b.nodeType && (a.nodeType !== 1 || a.tagName === b.tagName);
 
+  // ahead is an unkeyed node of n's kind past cur, when cur isn't the next
+  // node's: the nodes before it are gone (a branch that changed element),
+  // so the nodes after — a field with focus — stay the same elements.
+  function ahead(cur, n) {
+    if (keyOf(cur) || (n.nextSibling && same(cur, n.nextSibling))) return null;
+    for (let c = cur.nextSibling; c && !keyOf(c); c = c.nextSibling) if (same(c, n)) return c;
+    return null;
+  }
+
   function children(el, next) {
     let cur = el.firstChild;
     for (const n of Array.from(next.childNodes)) {
@@ -289,6 +298,13 @@
       const k = keyOf(n);
       if (k) match = Array.from(el.children).find((c) => keyOf(c) === k && c.tagName === n.tagName) || null;
       if (!match && cur && same(cur, n)) match = cur;
+      if (!match && cur && !k && (match = ahead(cur, n))) {
+        while (cur !== match) {
+          const gone = cur;
+          cur = cur.nextSibling;
+          el.removeChild(gone);
+        }
+      }
       if (match) {
         if (match !== cur) el.insertBefore(match, cur);
         if (n.nodeType === 1) morph(match, n);
