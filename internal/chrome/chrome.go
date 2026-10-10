@@ -153,13 +153,17 @@ func (b *Browser) read() {
 }
 
 func (b *Browser) call(session, method string, params, out any) error {
+	return b.callWithin(Timeout, session, method, params, out)
+}
+
+func (b *Browser) callWithin(d time.Duration, session, method string, params, out any) error {
 	b.mu.Lock()
 	b.next++
 	id, ch := b.next, make(chan message, 1)
 	b.pending[id] = ch
 	b.mu.Unlock()
 	data, _ := json.Marshal(message{ID: id, Method: method, Params: params, SessionID: session})
-	ctx, cancel := context.WithTimeout(b.ctx, Timeout)
+	ctx, cancel := context.WithTimeout(b.ctx, d)
 	defer cancel()
 	if err := b.ws.Write(ctx, websocket.MessageText, data); err != nil {
 		return err
@@ -176,6 +180,9 @@ func (b *Browser) call(session, method string, params, out any) error {
 		}
 		return nil
 	case <-ctx.Done():
+		b.mu.Lock()
+		delete(b.pending, id)
+		b.mu.Unlock()
 		return fmt.Errorf("%s: %w", method, ctx.Err())
 	}
 }
@@ -234,7 +241,9 @@ func (p *Page) must(method string, params, out any) {
 
 // Eval evaluates a JavaScript expression (awaiting a promise) and decodes its
 // value into out, when not nil.
-func (p *Page) Eval(js string, out any) error {
+func (p *Page) Eval(js string, out any) error { return p.eval(Timeout, js, out) }
+
+func (p *Page) eval(d time.Duration, js string, out any) error {
 	var r struct {
 		Result struct {
 			Value json.RawMessage `json:"value"`
@@ -246,7 +255,7 @@ func (p *Page) Eval(js string, out any) error {
 			} `json:"exception"`
 		} `json:"exceptionDetails"`
 	}
-	if err := p.b.call(p.session, "Runtime.evaluate", map[string]any{"expression": js, "returnByValue": true, "awaitPromise": true}, &r); err != nil {
+	if err := p.b.callWithin(d, p.session, "Runtime.evaluate", map[string]any{"expression": js, "returnByValue": true, "awaitPromise": true}, &r); err != nil {
 		return err
 	}
 	if r.Exception != nil {
@@ -264,7 +273,7 @@ func (p *Page) Wait(js string) {
 	var last error
 	for end := time.Now().Add(Timeout); time.Now().Before(end); time.Sleep(25 * time.Millisecond) {
 		var ok bool
-		if last = p.Eval("!!("+js+")", &ok); last == nil && ok {
+		if last = p.eval(time.Second, "!!("+js+")", &ok); last == nil && ok {
 			return
 		}
 	}

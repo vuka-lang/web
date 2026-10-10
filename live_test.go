@@ -15,6 +15,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/vuka-lang/vuka"
 	"github.com/vuka-lang/vuka/live"
+	"github.com/vuka-lang/web/internal/chrome"
 )
 
 type counter struct {
@@ -99,6 +100,7 @@ func liveApp(opts ...Option) *App {
 		})
 	}
 	app.Get("/private", func() vuka.Node { return vuka.Component("private#1", nil, &counter{}) }, Wrap(needCookie))
+	app.Live("/guarded", &counter{}, Use(needCookie))
 	return app
 }
 
@@ -344,6 +346,9 @@ func TestLiveRejoinAndMiddleware(t *testing.T) {
 		t.Fatalf("rejoin: %+v", m)
 	}
 
+	if html, _ := pageToken(t, srv, "/guarded"); strings.Contains(html, "data-vk-id") {
+		t.Errorf("Use on a live page: %s", html)
+	}
 	_, tok = pageToken(t, srv, "/private", "Cookie", "user=7")
 	if tok == "" {
 		t.Fatal("/private with the cookie isn't live")
@@ -384,4 +389,33 @@ func TestLiveStopClosesConnections(t *testing.T) {
 	if _, err := recv(c, 5*time.Second); websocket.CloseStatus(err) != websocket.StatusGoingAway {
 		t.Fatalf("after Stop: %v", err)
 	}
+}
+
+func dropConnections(a *App) {
+	a.hub.mu.Lock()
+	defer a.hub.mu.Unlock()
+	for c := range a.hub.conns {
+		c.ws.CloseNow()
+	}
+}
+
+func TestBrowserReconnect(t *testing.T) {
+	app := liveApp(LiveTokenTTL(2 * time.Second))
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	p := chrome.Launch(t).Open(srv.URL + "/counter")
+	p.Click("button")
+	p.WaitText("span", "n=6")
+	p.Eval(`window.marker = 1`, nil)
+	dropConnections(app)
+	p.Wait(`document.documentElement.dataset.vkState !== "connected"`)
+	p.WaitText("span", "n=5") // rejoined: the state starts over
+	p.Wait(`window.marker === 1 && document.documentElement.dataset.vkState === "connected"`)
+	p.Click("button")
+	p.WaitText("span", "n=6")
+
+	time.Sleep(3100 * time.Millisecond) // the token (whole seconds) expires: reconnecting reloads the page
+	dropConnections(app)
+	p.Wait(`window.marker === undefined && document.documentElement.dataset.vkState === "connected"`)
+	p.WaitText("span", "n=5")
 }

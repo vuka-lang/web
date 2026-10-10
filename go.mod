@@ -8,4 +8,5 @@ require (
 	github.com/vuka-lang/vuka v0.6.0
 )
 
+// The live components need vuka main (package live, unreleased after v0.6.0).
 replace github.com/vuka-lang/vuka => ../vuka
