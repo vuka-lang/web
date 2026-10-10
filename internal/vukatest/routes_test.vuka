@@ -1,0 +1,41 @@
+package vukatest
+
+import (
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/vuka-lang/web"
+)
+
+const pkg = "github.com/vuka-lang/web/internal/vukatest"
+
+func TestTranspiled(t *testing.T) {
+	h := web.New(web.Only(pkg)).Handler()
+	for path, want := range map[string]string{
+		"/dogs/rex":     "<b>rex</b> <i>3</i>",
+		"/badge?label=x": "<span>x</span>",
+		"/hello?who=ann": "<p>hello ann</p>",
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("%s: %d %q; want %q", path, rec.Code, rec.Body.String(), want)
+		}
+		if path == "/badge?label=x" && rec.Header().Get("X-Tag") != "/badge" {
+			t.Errorf("X-Tag %q", rec.Header().Get("X-Tag"))
+		}
+	}
+}
+
+type Missing interface{ M() }
+
+func TestBuildErrors(t *testing.T) {
+	err := web.New(web.Only(pkg)).Get("/bad", func(m Missing) int { return 0 }).Build()
+	if err == nil || !strings.Contains(err.Error(), "no provider for vukatest.Missing") {
+		t.Errorf("Build: %v", err)
+	}
+	if r := web.New(web.Only("elsewhere")).Handler(); r == nil {
+		t.Error("nil handler")
+	}
+}

@@ -1,0 +1,45 @@
+// Package vukatest exercises the web package through the Vuka transpiler.
+package vukatest
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/vuka-lang/web"
+)
+
+type Dog struct {
+	Name string
+	Age  int
+}
+
+@web.Service
+type Kennel struct {
+	dogs map[string]Dog `inject:"-"`
+}
+
+@web.Template("cards.templ", "Card")
+@web.Get("/dogs/{name}")
+func dog(name string, k *Kennel) Result[Dog] {
+	if name == "" {
+		return Err(web.NotFound)
+	}
+	return Ok(Dog{Name: name, Age: len(name)})
+}
+
+decorator tagged(c) {
+	c.Next()
+	if r := web.Request(c.Context()); r != nil {
+		web.ResponseWriter(c.Context()).Header().Set("X-Tag", r.URL.Path)
+	}
+}
+
+@web.Get("/badge")
+@web.Template("cards.templ", "Badge")
+@tagged
+func badge(ctx context.Context, label string) string { return label }
+
+@web.Get("/hello")
+func hello(r *http.Request, who string) vuka.Node {
+	return <p>hello {who}</p>
+}
