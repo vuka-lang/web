@@ -33,6 +33,7 @@ type Message struct {
 	Trees []Entry       `json:"trees,omitempty"`
 	JS    []live.JSPush `json:"js,omitempty"`
 	Error string        `json:"error,omitempty"`
+	URL   string        `json:"url,omitempty"`
 }
 
 func (x *session) Join(ref int) any {
@@ -52,6 +53,16 @@ func (x *session) Event(m live.ClientMessage) any {
 		return live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: err.Error()}
 	}
 	return x.patch(m.Ref, p)
+}
+
+func (x *session) Navigate(ref int, url string, rt live.Route, patch bool) (any, bool) {
+	p, err := x.s.Navigate(rt, patch)
+	if err != nil {
+		return live.ServerMessage{Type: live.Error, Ref: ref, Error: err.Error()}, false
+	}
+	m := x.patch(ref, p)
+	m.URL = url
+	return m, true
 }
 
 func (x *session) Info(topic string, msg any) any {

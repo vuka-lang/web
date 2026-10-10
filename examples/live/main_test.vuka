@@ -256,3 +256,77 @@ func TestBrowserLikes(t *testing.T) {
 		p.Wait(`!document.querySelector("[data-vk-ref=note-error]").hidden && getComputedStyle(document.querySelector("#note-keep")).display !== "none"`)
 	})
 }
+
+func TestBrowserNavigation(t *testing.T) {
+	protocols(t, func(t *testing.T, open func(string) *chrome.Page) {
+		p := open("/books")
+		p.Eval(`window.marker = 1; window.navs = []; addEventListener("vk:navigate", (e) => navs.push(e.detail))`, nil)
+		same := `window.marker === 1 && __wire.sockets.length === 1 && !document.documentElement.hasAttribute("data-vk-navigating")` // no page load
+		shelf := p.Text(".mount")
+		w := p.Wire()
+
+		// The pager patches the shelf: the same component, on another page.
+		p.Click(".pager .next")
+		p.WaitText(".pager .at", "page 2 of 4")
+		p.WaitText(".mount", strings.Replace(shelf, "0 times", "1 times", 1))
+		p.Wait(same + ` && location.search === "?page=2" && navs.length === 1 && navs[0].patch`)
+
+		// A book's link navigates: the book's page in its layout, at the
+		// top, focus on its main content; back comes to where the shelf was.
+		p.Eval(`document.documentElement.style.minHeight = "4000px"; scrollTo(0, 500); document.querySelector("ol a").click()`, nil)
+		p.WaitText("h1", "Paradise")
+		p.Wait(same + ` && location.pathname === "/books/6" && document.title === "Book · Vuka live" && scrollY === 0`)
+		p.Wait(`document.activeElement.tagName === "MAIN" && document.querySelectorAll("head style").length === 2 && !navs[1].patch`)
+		p.Click(".book .next")
+		p.WaitText("h1", "Nervous Conditions")
+		p.Wait(same + ` && location.pathname === "/books/7"`)
+		p.Eval(`history.back()`, nil)
+		p.WaitText("h1", "Paradise")
+		p.Eval(`history.back()`, nil)
+		p.WaitText(".pager .at", "page 2 of 4")
+		p.Wait(same + ` && location.search === "?page=2" && scrollY === 500 && document.title === "Live · Vuka live" && document.querySelectorAll("head style").length === 2`)
+		if p.Text(".mount") == strings.Replace(shelf, "0 times", "1 times", 1) {
+			t.Errorf("back to the shelf from another page mounts it again: %s", p.Text(".mount"))
+		}
+		p.Eval(`history.forward()`, nil)
+		p.WaitText("h1", "Paradise")
+
+		// The server's PushNavigate, and a JS command's patch.
+		p.Click("#done")
+		p.WaitText(".pager .at", "page 2 of 4")
+		p.Wait(same + ` && location.pathname === "/books"`)
+		p.Click("ol li:last-child a")
+		p.WaitText("h1", "The Beautyful Ones Are Not Yet Born")
+		p.Click("#first")
+		p.WaitText("h1", "Things Fall Apart")
+		p.Wait(same + ` && location.pathname === "/books/1"`)
+
+		// The nav's links move between the example's pages on one connection.
+		p.Click(`nav a[href="/counter"]`)
+		p.WaitText("output", "0")
+		p.Click(".counter button:last-of-type")
+		p.WaitText("output", "1")
+		p.Wait(same + ` && location.pathname === "/counter" && document.title === "Live · Vuka live"`)
+		perEvent(t, p, w, "navigation")
+
+		// A reconnect joins the page the connection moved to.
+		p.Drop()
+		p.Wait(`__wire.sockets.length === 2 && document.documentElement.dataset.vkState === "connected"`)
+		p.WaitText("output", "0")
+		p.Wait(`window.marker === 1 && location.pathname === "/counter"`)
+
+		// What the runtime leaves to the browser: a modified click, a URL
+		// that isn't a page.
+		var prevented bool
+		p.Eval(`(() => { let prevented; addEventListener("click", (e) => { prevented = e.defaultPrevented; e.preventDefault(); }, { once: true });
+			document.querySelector('nav a[href="/todo"]').dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ctrlKey: true }));
+			return prevented; })()`, &prevented)
+		if prevented {
+			t.Error("a ctrl-click on a link is the runtime's")
+		}
+		p.Click(`nav a[href="/books"]`)
+		p.WaitText(".pager .at", "page 1 of 4")
+		p.Click(`a[href="/books.json"]`)
+		p.Wait(`!window.marker && location.pathname === "/books.json" && document.body.textContent.includes("Things Fall Apart")`)
+	})
+}

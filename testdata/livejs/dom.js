@@ -210,6 +210,7 @@ class Document extends Node {
   createElement(tag) { return new Element(this, tag); }
   createTextNode(v) { return new Text(this, v); }
   importNode(n, deep) { return n.cloneNode(deep); }
+  getElementById(id) { return this.querySelectorAll("*").find((e) => e.id === id) || null; }
   execCommand() { return true; }
 }
 
@@ -322,7 +323,8 @@ function matchComplex(el, parts, i = parts.length - 1) {
 
 // page loads live.js into a fresh context over body: options.live gives
 // the script a token (it connects), options.confirm answers window.confirm,
-// options.vuka is window.vuka before the runtime loads.
+// options.vuka is window.vuka before the runtime loads, options.url the
+// page's address (http://test/ by default).
 function page(file, body, options = {}) {
   const doc = new Document();
   doc.body.innerHTML = body;
@@ -342,6 +344,20 @@ function page(file, body, options = {}) {
     now = until;
   };
   const sockets = [], logs = [], confirms = [];
+  // The address and the session history: loads are the page loads asked
+  // for, entries what pushState added.
+  const at = new URL(options.url || "http://test/"), loads = [], entries = [];
+  const location = {
+    get href() { return at.href; }, get origin() { return at.origin; }, get pathname() { return at.pathname; },
+    get search() { return at.search; }, get hash() { return at.hash; }, set hash(h) { at.hash = h; },
+    reload() { loads.push(["reload"]); }, assign(u) { loads.push(["assign", u]); }, replace(u) { loads.push(["replace", u]); },
+  };
+  const history = {
+    state: null,
+    pushState(st, _, u) { this.state = st; at.href = new URL(u, at.href).href; entries.push(at.href); },
+    replaceState(st, _, u) { this.state = st; if (u) at.href = new URL(u, at.href).href; },
+  };
+  const scrolls = [];
   const copied = [];
   class WebSocket {
     constructor(url) { this.url = url; this.sent = []; sockets.push(this); }
@@ -365,7 +381,7 @@ function page(file, body, options = {}) {
   const ctx = {
     document: doc, Element, Node, Event, CustomEvent, KeyboardEvent, URL, FormData, WebSocket,
     setTimeout, clearTimeout, requestAnimationFrame: (fn) => setTimeout(fn, 16),
-    location: { href: "http://test/", reload() {}, assign() {} },
+    location, history, scrollX: 0, scrollY: 0, scrollTo: (x, y) => scrolls.push([x, y]),
     sessionStorage: { getItem: () => null, setItem() {} },
     navigator: { clipboard: { writeText: (t) => { copied.push(t); return Promise.resolve(); } } },
     isSecureContext: true,
@@ -379,6 +395,7 @@ function page(file, body, options = {}) {
   if (options.vuka) ctx.vuka = options.vuka; // what a page's script set up first
   ctx.listeners = {};
   ctx.addEventListener = (t, fn) => { (ctx.listeners[t] ||= []).push(fn); };
+  ctx.dispatchEvent = (e) => { (ctx.listeners[e.type] || []).forEach((fn) => fn(e)); return !e.defaultPrevented; };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(file, "utf8"), ctx, { filename: file });
   const $ = (sel) => doc.querySelector(sel);
@@ -394,7 +411,13 @@ function page(file, body, options = {}) {
   // server delivers a server message to the page's socket (joined first).
   const ws = () => sockets[sockets.length - 1];
   const server = (m) => ws().onmessage({ data: JSON.stringify(m) });
-  return { doc, $, fire, tick, ws, server, sockets, logs, confirms, copied, window: ctx, options };
+  // pop goes back or forward to an entry: its address and state, then popstate.
+  const pop = (url, state) => {
+    at.href = new URL(url, at.href).href;
+    history.state = state;
+    ctx.dispatchEvent(Object.assign(new Event("popstate"), { state }));
+  };
+  return { doc, $, fire, tick, ws, server, pop, sockets, logs, confirms, copied, loads, entries, scrolls, history, location, window: ctx, options };
 }
 
 module.exports = { page };

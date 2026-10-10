@@ -7,8 +7,9 @@ import (
 	"github.com/vuka-lang/ui"
 )
 
-// Shell is the pages' document.
-func Shell(title string, children ui.Node) ui.Node {
+// Shell is the pages' document; head adds to its head. Its links move a
+// live page over its connection.
+func Shell(title string, head ui.Node, children ui.Node) ui.Node {
 	return <html lang="en">
 		<head>
 			<meta charset="utf-8" />
@@ -18,10 +19,13 @@ func Shell(title string, children ui.Node) ui.Node {
 			/>
 			<title>{title} · Vuka live</title>
 			<style>{css}</style>
+			{head}
 		</head>
 		<body>
 			<nav>
-				<a href="/">Home</a> <a href="/counter">Counter</a> <a href="/todo">Todo</a> <a href="/chat/lobby">Chat</a> <a href="/commands">Commands</a> <a href="/chores">Chores</a> <a href="/likes">Likes</a>
+				<ui.Link href="/">Home</ui.Link> <ui.Link href="/counter">Counter</ui.Link> <ui.Link href="/todo">Todo</ui.Link>
+				<ui.Link href="/chat/lobby">Chat</ui.Link> <ui.Link href="/commands">Commands</ui.Link> <ui.Link href="/chores">Chores</ui.Link>
+				<ui.Link href="/likes">Likes</ui.Link> <ui.Link href="/books">Books</ui.Link>
 			</nav>
 			<main>{children}</main>
 		</body>
@@ -36,6 +40,7 @@ func livePage(page ui.Node) ui.Node {
 const css = `body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem }
 nav a { margin-right: 1rem } [aria-busy=true] { opacity: .6 } .done { text-decoration: line-through; color: #888 }
 .hidden, #menu:not(.open) { display: none } .dialog { border: 1px solid #ccc; padding: 1rem } .fade { transition: opacity .2s } .faded { opacity: 0 } .flash { background: #ffd }
+html[data-vk-navigating] main { opacity: .6 }
 html[data-vk-state=disconnected] body::before { content: "reconnecting…"; position: fixed; top: 0; right: 0; background: #fd0; padding: .2rem .6rem }`
 
 // Home is an ordinary route: the counter in it makes the page live.

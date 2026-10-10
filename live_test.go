@@ -80,10 +80,36 @@ type chatForm struct {
 	Text string `form:"text"`
 }
 
+// pager is a Live page whose Update takes its URL's params on a patch.
+type pager struct {
+	ui.Live
+	Page   int
+	mounts int
+	got    []int
+}
+
+type pagerParams struct {
+	URLParams
+	Page int
+}
+
+func (p *pager) Mount() { p.mounts++ }
+func (p *pager) Update(q pagerParams) error {
+	if q.Page < 0 {
+		return errors.New("no such page")
+	}
+	p.got = append(p.got, q.Page)
+	return nil
+}
+func (p *pager) Render() ui.Node {
+	return ui.El("p", nil, ui.Text(fmt.Sprintf("page %d, mounts %d, got %v", p.Page, p.mounts, p.got)))
+}
+
 func liveApp(opts ...Option) *App {
 	app := New(append([]Option{Only("none")}, opts...)...)
 	app.Live("/counter", &counter{Start: 5, Label: "n="})
 	app.Live("/todo", &todo{})
+	app.Live("/pager", &pager{})
 	app.Live("/chat/{room}", &chat{})
 	app.Get("/two", func() ui.Node {
 		return ui.El("main", nil, ui.Component("two#1", nil, &counter{Label: "a"}), ui.Component("two#2", nil, &counter{Label: "b", Start: 10}))
@@ -378,6 +404,83 @@ func TestLiveRejoinAndMiddleware(t *testing.T) {
 	m := must(t, c5)
 	if _, err := recv(c5, time.Second); m.Type != live.Error || websocket.CloseStatus(err) != closeRefused {
 		t.Fatalf("join of a page that isn't live: %+v, %v", m, err)
+	}
+}
+
+func TestLiveNavigate(t *testing.T) {
+	srv := httptest.NewServer(liveApp().Handler())
+	defer srv.Close()
+	c, _ := joined(t, srv, "/pager?page=1")
+	nav := func(ref int, url string, patch bool) (live.ServerMessage, string) {
+		t.Helper()
+		send(t, c, map[string]any{"type": "navigate", "ref": ref, "url": url, "patch": patch})
+		_, b, err := c.Read(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m struct {
+			live.ServerMessage
+			Token string `json:"token"`
+		}
+		json.Unmarshal(b, &m)
+		if m.Ref != ref {
+			t.Fatalf("reply to %d: %s", ref, b)
+		}
+		return m.ServerMessage, m.Token
+	}
+
+	// A patch: the same instance, its props and Update from the new URL.
+	m, tok := nav(2, "/pager?page=2", true)
+	if m.Type != live.PatchMsg || m.URL != "/pager?page=2" || tok == "" || len(m.Updates) != 1 || m.Updates[0].ID != "c1" ||
+		!strings.Contains(m.Updates[0].HTML, "page 2, mounts 1, got [2]") {
+		t.Fatalf("patch: %+v %q", m, tok)
+	}
+	if m, _ := nav(3, "/pager?page=-1", true); m.Type != live.PatchMsg || m.Error != "no such page" {
+		t.Fatalf("Update's error: %+v", m)
+	}
+	if m, _ := nav(4, "/pager?page=x", true); m.Type != live.Redirect || m.URL != "/pager?page=x" {
+		t.Fatalf("params that don't bind: %+v", m)
+	}
+
+	// What isn't a page is the browser's to load.
+	for url, want := range map[string]string{"/json": "/json", "/private": "/login", "//evil.example/x": "//evil.example/x", "https://evil.example/": "https://evil.example/", "/nope": "/nope"} {
+		if m, tok := nav(5, url, false); m.Type != live.Redirect || m.URL != want || tok != "" {
+			t.Errorf("navigate to %s: %+v %q", url, m, tok)
+		}
+	}
+
+	// A navigate: another page on the same connection, whose token rejoins it.
+	m, tok = nav(6, "/counter", false)
+	if m.Type != live.PatchMsg || len(m.Updates) != 1 || m.Updates[0].ID != "c0" || !strings.Contains(m.Updates[0].HTML, "<span>n=5</span>") {
+		t.Fatalf("navigate: %+v", m)
+	}
+	send(t, c, map[string]any{"type": "event", "ref": 7, "target": handlerOf(t, m.Updates[0].HTML, "click", 0), "event": "click"})
+	if m := must(t, c); len(m.Updates) != 1 || !strings.Contains(m.Updates[0].HTML, "n=6") {
+		t.Fatalf("an event on the page navigated to: %+v", m)
+	}
+	c2, err := dial(t, srv, tok, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	send(t, c2, map[string]any{"type": "join", "ref": 1})
+	if m := must(t, c2); m.Type != live.Render || !strings.Contains(m.HTML, "<span>n=5</span>") {
+		t.Fatalf("the navigation's token joins its page: %+v", m)
+	}
+}
+
+type twoUpdates struct {
+	ui.Live
+}
+
+func (*twoUpdates) Update(pagerParams)     {}
+func (*twoUpdates) Update__p(*pagerParams) {}
+func (*twoUpdates) Render() ui.Node        { return nil }
+
+func TestLiveTwoParamsUpdates(t *testing.T) {
+	app := New(Only("none"))
+	app.Live("/x", &twoUpdates{})
+	if err := app.Build(); err == nil || !strings.Contains(err.Error(), "two Update methods taking web.URLParams structs") {
+		t.Fatalf("%v", err)
 	}
 }
 

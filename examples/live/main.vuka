@@ -1,6 +1,7 @@
 // Command live shows stateful components served live by
 // github.com/vuka-lang/web: a counter page, a todo list, a chat whose tabs see
-// each other's messages, and a counter inside an ordinary page.
+// each other's messages, a counter inside an ordinary page, and a paged list
+// of books with a page per book, moved between over one connection.
 package main
 
 import (

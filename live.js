@@ -3,15 +3,16 @@
 // (data-vk-on-<event>), and morphs the page into what the server sends back,
 // keeping focus, selection and what the user is typing. It also runs JS
 // commands (data-vk-js-<event>): changes to the page made in the browser,
-// with or without a live connection.
+// with or without a live connection. Links marked data-vk-link move a live
+// page to another URL over its connection.
 (() => {
   "use strict";
   const script = document.currentScript;
   if (!script || window.vuka && window.vuka.connect) return;
   const live = script.hasAttribute("data-vk-token"); // a page with no live parts has none
   const src = new URL(script.src, location.href);
-  const url = (src.protocol === "https:" ? "wss://" : "ws://") + src.host +
-    src.pathname.replace(/\.js$/, "") + "?t=" + encodeURIComponent(script.dataset.vkToken || "");
+  const url = (src.protocol === "https:" ? "wss://" : "ws://") + src.host + src.pathname.replace(/\.js$/, "") + "?t=";
+  let token = script.dataset.vkToken || ""; // the page's: a navigation brings the next one
   const nobubble = new Set(["focus", "blur", "mouseenter", "mouseleave", "load", "error", "scroll"]);
   const listening = new Set();
   const busy = new Map(); // ref → {el, form}: elements waiting for their reply
@@ -26,12 +27,13 @@
   function connect() {
     clearTimeout(timer);
     state("connecting");
-    ws = new WebSocket(url);
+    ws = new WebSocket(url + encodeURIComponent(token));
     ws.onopen = join;
     ws.onmessage = (e) => receive(JSON.parse(e.data));
     ws.onclose = (e) => {
       ws = null;
       joined = false;
+      if (nav) return load(nav.href, nav.pop); // the page it was going to, the long way
       pending.forEach((p) => clearTimeout(p.timer));
       pending.clear();
       busy.forEach((b) => b.el.removeAttribute("aria-busy"));
@@ -60,7 +62,7 @@
   }
 
   function receive(m) {
-    const b = m.ref && busy.get(m.ref);
+    const b = m.ref && busy.get(m.ref), n = nav && m.ref === nav.ref ? nav : null;
     switch (m.type) {
       case "render":
         joined = true;
@@ -85,6 +87,7 @@
             ups = m.trees.map((e) => ({ id: e.id, html: html[e.id] }));
           } catch (err) { // out of step with the server: start over
             fail("live: " + err.message);
+            if (n) return load(n.href, n.pop);
             joined = false;
             join();
             break;
@@ -94,15 +97,17 @@
         for (const u of ups) if (!done.some((el) => el && el.isConnected && el.contains(byID(u.id)))) done.push(apply(u));
         if (b && b.form && !m.error && b.form.isConnected) b.form.reset();
         if (m.error) fail(m.error, m.ref);
+        if (n) arrived(n, m);
         emit("vk:patched", { ids: ups.map((u) => u.id) });
         if (!m.error) pushed(m.js);
         break;
       }
       case "error":
+        if (n) return load(n.href, n.pop);
         fail(m.error, m.ref);
         break;
       case "redirect":
-        location.assign(m.url);
+        load(m.url, n && n.pop);
         break;
     }
     if (b) {
@@ -123,13 +128,30 @@
     let next;
     if (/<(html|body)[\s>]/i.test(html)) {
       const doc = new DOMParser().parseFromString(html, "text/html");
-      if (doc.querySelector("title") && doc.title !== document.title) document.title = doc.title;
+      head(doc);
       next = doc.body;
     } else {
       next = fragment(html);
     }
     listenIn(html);
     children(document.body, next);
+  }
+
+  // head takes a page's title, and the elements of its head the document
+  // lacks (a stylesheet, a script — run once added — a meta tag).
+  function head(doc) {
+    if (doc.querySelector("title") && doc.title !== document.title) document.title = doc.title;
+    const have = new Set(Array.from(document.head.children, (e) => e.outerHTML));
+    for (const e of Array.from(doc.head.children)) {
+      if (e.tagName === "TITLE" || have.has(e.outerHTML)) continue;
+      let n = document.importNode(e, true);
+      if (e.tagName === "SCRIPT") {
+        n = document.createElement("script");
+        for (const a of e.attributes) n.setAttribute(a.name, a.value);
+        n.textContent = e.textContent;
+      }
+      document.head.appendChild(n);
+    }
   }
 
   const byID = (id) => id === "c0" ? document.body : document.querySelector('[data-vk-id="' + id + '"]');
@@ -208,7 +230,7 @@
   }
 
   function send(msg, el, form) {
-    if (!ws || !joined) return;
+    if (!ws || !joined || nav) return; // a page on its way out sends nothing
     msg.ref = ++ref;
     if (el && (form || msg.event === "click")) {
       busy.set(msg.ref, { el, form });
@@ -893,6 +915,8 @@
       t.dispatchEvent(new Event("input", { bubbles: true }));
       t.dispatchEvent(new Event("change", { bubbles: true }));
     }),
+    patch: (el, a) => go(String(a.href), true),
+    navigate: (el, a) => go(String(a.href), false),
     // push sends an event to a handler as data-vk-on-<event> would.
     // Its predictions are what the chain changed since its last push.
     push: (el, a, e) => {
@@ -913,6 +937,63 @@
     },
   };
 
+  // Navigation: a link marked data-vk-link, a patch or navigate command, and
+  // the back and forward buttons move a live page over its connection; the
+  // reply is applied as any patch, then the address, scroll and focus
+  // follow. What can't go that way — no connection, another origin, a URL
+  // that isn't a page, a failure — is an ordinary page load. A patch stays
+  // on the page (its history entries share the page's id); a navigate
+  // makes a new one.
+  let nav = null, here = location.pathname + location.search, saving = 0;
+  const newPage = () => Math.random().toString(36).slice(2);
+  let pageID = newPage();
+  const load = (href, pop) => pop ? location.replace(href) : location.assign(href);
+  const save = () => history.replaceState({ ...history.state, x: scrollX, y: scrollY }, "");
+
+  // go moves the page to href; pop is the history state back or forward
+  // brought, the address being href already.
+  function go(href, patch, pop) {
+    const u = new URL(href, location.href), at = u.pathname + u.search;
+    if (!pop && at === here && u.hash) return void (location.hash = u.hash);
+    if (!live || !joined || u.origin !== location.origin) return load(u.href, pop);
+    if (!pop) save();
+    flush();
+    if (nav) clearTimeout(nav.timer);
+    nav = { ref: ++ref, href: u.href, patch, pop, timer: setTimeout(() => load(u.href, pop), 10000) };
+    document.documentElement.setAttribute("data-vk-navigating", "");
+    ws.send(JSON.stringify({ type: "navigate", ref: nav.ref, url: at, patch: patch || undefined }));
+  }
+
+  // arrived follows a navigation's applied reply: the next token, the
+  // address, scroll (the top, the #hash, or where the entry was) and focus
+  // (a new page's [autofocus], main, or live root). A new page drops the
+  // optimistic pushes of the old one still waiting, their hooks unrun.
+  function arrived(n, m) {
+    nav = null;
+    clearTimeout(n.timer);
+    document.documentElement.removeAttribute("data-vk-navigating");
+    if (m.token) token = m.token;
+    const u = new URL(n.href);
+    here = u.pathname + u.search;
+    if (!n.patch) {
+      preds.forEach((p) => clearTimeout(p.timer));
+      preds.clear();
+      pageID = n.pop && n.pop.vk || newPage();
+    }
+    if (n.pop) history.replaceState({ ...history.state, vk: pageID }, "");
+    else history.pushState({ vk: pageID }, "", u.href);
+    const t = u.hash && document.getElementById(decodeURIComponent(u.hash.slice(1)));
+    if (n.pop && n.pop.y != null) scrollTo(n.pop.x || 0, n.pop.y);
+    else if (t) t.scrollIntoView();
+    else if (!n.patch) scrollTo(0, 0);
+    if (!n.patch) {
+      const f = document.querySelector("[autofocus]") || document.querySelector("main") || document.body.querySelector("[data-vk-id]") || document.body;
+      if (!f.matches(focusable) && !f.hasAttribute("tabindex")) touch(f, "tabindex", () => f.setAttribute("tabindex", "-1"));
+      f.focus({ preventScroll: true });
+    }
+    window.dispatchEvent(new CustomEvent("vk:navigate", { detail: { url: u.href, patch: !!n.patch } }));
+  }
+
   // register names a function for call; a page's script that runs first
   // queues its calls on window.vuka.q.
   const register = (name, fn) => { fns.set(String(name), fn); };
@@ -920,6 +1001,23 @@
   window.vuka = { connect, tree, register, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   listenIn(document.documentElement.outerHTML);
   if (!live) return;
+  history.replaceState({ ...history.state, vk: pageID }, "");
+  document.addEventListener("click", (e) => {
+    const t = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
+    const a = t && t.closest("a[data-vk-link]"), href = a && a.getAttribute("href");
+    if (!href || !joined || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey ||
+      /^(?!_self$)./.test(a.getAttribute("target") || "") || a.hasAttribute("download")) return;
+    const u = new URL(href, location.href);
+    if (u.origin !== location.origin || u.pathname + u.search === here && u.hash) return;
+    e.preventDefault();
+    go(u.href, a.getAttribute("data-vk-link") === "patch");
+  });
+  window.addEventListener("popstate", (e) => {
+    const st = e.state || {};
+    if (location.pathname + location.search === here && (!st.vk || st.vk === pageID)) return; // a #hash
+    go(location.href, st.vk === pageID, st);
+  });
+  window.addEventListener("scroll", () => { clearTimeout(saving); saving = setTimeout(save, 200); }, { passive: true });
   window.addEventListener("online", () => { if (!ws) { attempt = 0; connect(); } });
   connect();
 })();
