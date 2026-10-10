@@ -7,6 +7,7 @@ package chrome
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -349,17 +350,53 @@ func (p *Page) WaitText(sel, want string) {
 // Click clicks the middle of the element matching sel with the mouse.
 func (p *Page) Click(sel string) {
 	p.b.t.Helper()
+	p.ClickElement(fmt.Sprintf(`document.querySelector(%q)`, sel))
+}
+
+// ClickElement clicks the middle of the element a JavaScript expression
+// finds (waiting for it) with the mouse: one in a shadow root, say.
+func (p *Page) ClickElement(expr string) {
+	p.b.t.Helper()
 	var at struct{ X, Y float64 }
-	p.Wait(fmt.Sprintf(`document.querySelector(%q)`, sel))
+	p.Wait(expr)
 	p.front()
-	js := fmt.Sprintf(`(() => { const el = document.querySelector(%q); el.scrollIntoView({block: "center"});
-		const r = el.getBoundingClientRect(); return {X: r.x + r.width / 2, Y: r.y + r.height / 2}; })()`, sel)
+	js := fmt.Sprintf(`(() => { const el = %s; el.scrollIntoView({block: "center"});
+		const r = el.getBoundingClientRect(); return {X: r.x + r.width / 2, Y: r.y + r.height / 2}; })()`, expr)
 	if err := p.Eval(js, &at); err != nil {
 		p.b.t.Fatal(err)
 	}
 	for _, typ := range []string{"mouseMoved", "mousePressed", "mouseReleased"} {
 		p.must("Input.dispatchMouseEvent", map[string]any{"type": typ, "x": at.X, "y": at.Y, "button": "left", "clickCount": 1}, nil)
 	}
+}
+
+// Screenshot saves a PNG of the page's viewport at path.
+func (p *Page) Screenshot(path string) {
+	p.b.t.Helper()
+	p.front()
+	var shot struct {
+		Data string `json:"data"`
+	}
+	p.must("Page.captureScreenshot", map[string]any{"format": "png"}, &shot)
+	b, err := base64.StdEncoding.DecodeString(shot.Data)
+	if err == nil {
+		err = os.WriteFile(path, b, 0o644)
+	}
+	if err != nil {
+		p.b.t.Fatal(err)
+	}
+}
+
+// Viewport sets the page's size in CSS pixels, and whether it prefers a
+// dark color scheme.
+func (p *Page) Viewport(width, height int, dark bool) {
+	p.b.t.Helper()
+	p.must("Emulation.setDeviceMetricsOverride", map[string]any{"width": width, "height": height, "deviceScaleFactor": 1, "mobile": false}, nil)
+	scheme := "light"
+	if dark {
+		scheme = "dark"
+	}
+	p.must("Emulation.setEmulatedMedia", map[string]any{"features": []map[string]string{{"name": "prefers-color-scheme", "value": scheme}}}, nil)
 }
 
 // Type focuses the element matching sel and types text into it.

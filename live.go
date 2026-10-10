@@ -169,11 +169,16 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	site := "web.Live " + s.path
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rq := a.newRequest(w, r)
+		if a.tb != nil {
+			noteRoute(rq.ctx, "GET "+s.path, s.where)
+		}
+		end := a.span(rq.ctx, "handler", s.where)
 		c := reflect.New(ls.typ)
 		if ls.template.IsValid() {
 			c.Elem().Set(ls.template)
 		}
 		if err := a.bindProps(c.Elem(), props, pathNames, r); err != nil {
+			end()
 			a.writeError(w, r, err, true)
 			return
 		}
@@ -181,6 +186,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		if j, ok := r.Context().Value(joinKey{}).(*join); ok && params != nil {
 			pv := reflect.New(params.typ)
 			if err := a.bindProps(pv.Elem(), paramProps, pathNames, r); err != nil {
+				end()
 				a.writeError(w, r, err, true)
 				return
 			}
@@ -189,7 +195,9 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 			}
 			j.updates = map[ui.Stateful]any{comp: pv.Interface()}
 		}
-		a.page(rq, layout(ui.Component(site, nil, comp)))
+		page := layout(ui.Component(site, nil, comp))
+		end()
+		a.page(rq, page)
 	}), nil
 }
 
@@ -336,7 +344,9 @@ func (a *App) page(rq *request, n ui.Node) {
 	var html []byte
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		s := live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
+		end := a.span(rq.ctx, "render", "page")
 		out, err := s.Render()
+		end()
 		s.Close()
 		if err != nil {
 			a.writeError(w, r, err, true)
@@ -348,10 +358,11 @@ func (a *App) page(rq *request, n ui.Node) {
 		if live || bytes.Contains(html, []byte(" data-vk-js-")) {
 			html = injectScript(html, a.scriptTag(r, live))
 		}
-		html = a.linkCSS(html)
+		html = a.linkCSS(r, html)
 	} else {
 		var b bytes.Buffer
 		if n != nil {
+			defer a.span(rq.ctx, "render", "page")()
 			if err := n.Render(rq.ctx, &b); err != nil {
 				a.writeError(w, r, err, true)
 				return
@@ -369,7 +380,13 @@ func (a *App) scriptTag(r *http.Request, live bool) string {
 	if !live {
 		return `<script src="` + liveScript + `?v=` + liveJSTag + `" defer></script>`
 	}
-	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + a.signToken(r.URL.RequestURI()) + `" defer></script>`
+	var tb string
+	if a.tb != nil {
+		if e := entryOf(r.Context()); e != nil {
+			tb = ` data-vk-toolbar="` + e.ID + `"` // the socket's messages join the page's record
+		}
+	}
+	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + a.signToken(r.URL.RequestURI()) + `"` + tb + ` defer></script>`
 }
 
 func injectScript(html []byte, tag string) []byte {

@@ -154,6 +154,8 @@ type conn struct {
 	uri    string        // the page, from its token
 	s      liveproto.Session
 	topics []string // guarded by the hub's mutex
+	tb     *tbSink  // the development toolbar's record of the page, its messages under it
+	out    []byte   // with tb, the last message written
 
 	mu    sync.Mutex
 	inbox []delivery
@@ -199,6 +201,11 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	c := &conn{app: a, ws: ws, r: r, uri: uri, wake: make(chan struct{}, 1)}
+	if a.tb != nil {
+		if c.tb = a.tb.liveSink(r.URL.Query().Get("tb"), uri); c.tb != nil {
+			ctx = context.WithValue(ctx, tbKey{}, c.tb)
+		}
+	}
 	if !a.hub.add(c) {
 		ws.Close(websocket.StatusGoingAway, "the server is shutting down")
 		return
@@ -255,6 +262,9 @@ func (c *conn) write(ctx context.Context, m any) {
 	e.SetEscapeHTML(false) // markup as markup, not \u003c…
 	e.Encode(m)
 	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+	if c.tb != nil {
+		c.out = b
+	}
 	wctx, done := context.WithTimeout(ctx, writeTimeout)
 	defer done()
 	if c.ws.Write(wctx, websocket.MessageText, b) != nil {
@@ -271,6 +281,9 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 	if err := json.Unmarshal(data, &m); err != nil {
 		c.write(ctx, live.ServerMessage{Type: live.Error, Error: "live: bad message"})
 		return true
+	}
+	if c.tb != nil {
+		defer c.record(m.ClientMessage)()
 	}
 	switch {
 	case m.Type == live.Join:
@@ -402,9 +415,14 @@ func (c *conn) drain(ctx context.Context) {
 		return
 	}
 	for _, d := range batch {
+		end := noop
+		if c.tb != nil {
+			end = c.recordInfo(d)
+		}
 		if m := c.s.Info(d.topic, d.msg); m != nil {
 			c.write(ctx, m)
 		}
+		end()
 	}
 	c.syncTopics()
 }
@@ -419,6 +437,47 @@ func (c *conn) syncTopics() {
 	c.app.hub.mu.Unlock()
 	if !same {
 		c.app.hub.setTopics(c, ts)
+	}
+}
+
+// record starts recording a client message for the development toolbar:
+// what it ran (statements, spans, logs) and its reply, ended by the
+// function returned.
+func (c *conn) record(m live.ClientMessage) func() {
+	typ, subject := m.Type, c.uri
+	switch m.Type {
+	case live.Join:
+	case live.Navigate:
+		subject = m.URL
+		if m.Patch {
+			typ = "patch"
+		}
+	default:
+		subject = m.Target
+		if h, ok := c.s.(interface{ Handler(string) any }); ok {
+			subject = cmp.Or(handlerName(h.Handler(m.Target)), m.Target)
+		}
+		if m.Event.Type != "" {
+			subject += " (" + m.Event.Type + ")"
+		}
+	}
+	return c.recording(typ, subject, m.Ref)
+}
+
+// recordInfo starts recording a broadcast's delivery.
+func (c *conn) recordInfo(d delivery) func() {
+	return c.recording("broadcast", fmt.Sprintf("%s %T", cmp.Or(d.topic, `""`), d.msg), 0)
+}
+
+func (c *conn) recording(typ, subject string, ref int) func() {
+	m := c.tb.message(typ, subject, ref)
+	unbind := bindGoroutine(c.tb)
+	end := m.span(typ, subject) // the message's whole handling, what it ran inside
+	c.out = nil
+	return func() {
+		end()
+		unbind()
+		c.tb.done(m, c.out)
 	}
 }
 
