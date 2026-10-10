@@ -1,0 +1,48 @@
+package main
+
+import (
+	"net/http"
+
+	"github.com/vuka-lang/web"
+)
+
+// Shell is the pages' document.
+func Shell(title string, children vuka.Node) vuka.Node {
+	return <html lang="en">
+		<head>
+			<meta charset="utf-8" />
+			<meta
+				name="viewport"
+				content="width=device-width, initial-scale=1"
+			/>
+			<title>{title} · Vuka live</title>
+			<style>{css}</style>
+		</head>
+		<body>
+			<nav>
+				<a href="/">Home</a> <a href="/counter">Counter</a> <a href="/todo">Todo</a> <a href="/chat/lobby">Chat</a>
+			</nav>
+			<main>{children}</main>
+		</body>
+	</html>
+}
+
+// livePage is the layout of the @web.Live pages.
+func livePage(page vuka.Node) vuka.Node {
+	return <Shell title="Live">{page}</Shell>
+}
+
+const css = `body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem }
+nav a { margin-right: 1rem } [aria-busy=true] { opacity: .6 } .done { text-decoration: line-through; color: #888 }
+html[data-vk-state=disconnected] body::before { content: "reconnecting…"; position: fixed; top: 0; right: 0; background: #fd0; padding: .2rem .6rem }`
+
+// Home is an ordinary route: the counter in it makes the page live.
+@web.Get("/")
+func Home(r *http.Request) vuka.Node {
+	return <Shell title="Home">
+		<h1>Vuka live</h1>
+		<p>A counter inside an ordinary <code>@web.Get</code> page:</p>
+		<Counter Start={10} />
+		<p>Open <a href="/chat/lobby">the chat</a> in two tabs.</p>
+	</Shell>
+}

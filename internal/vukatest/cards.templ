@@ -7,3 +7,7 @@ templ Card(name string, age int) {
 templ Badge(label string) {
 	<span>{ label }</span>
 }
+
+templ Board(title string) {
+	<section><h1>{ title }</h1>@tally()</section>
+}

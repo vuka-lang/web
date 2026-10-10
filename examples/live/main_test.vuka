@@ -1,0 +1,107 @@
+package main
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/internal/chrome"
+)
+
+func server(t *testing.T) *httptest.Server {
+	srv := httptest.NewServer(web.New(web.LiveLayout(livePage)).Handler())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestPages(t *testing.T) {
+	srv := server(t)
+	for path, want := range map[string]string{
+		"/":                `<output>10</output>`,
+		"/counter?start=3": `<output>3</output>`,
+		"/todo":            `<p class="left">0 left</p>`,
+		"/chat/go":         `<h2>#go</h2>`,
+	} {
+		res, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != 200 || !strings.Contains(string(b), want) || !strings.Contains(string(b), "data-vk-token=") {
+			t.Errorf("GET %s: %d %s", path, res.StatusCode, b)
+		}
+	}
+}
+
+func TestBrowserCounter(t *testing.T) {
+	srv := server(t)
+	b := chrome.Launch(t)
+	p := b.Open(srv.URL + "/counter?start=3")
+	p.Click(".counter button:last-of-type")
+	p.WaitText("output", "4")
+	p.Click(".counter button:first-of-type")
+	p.Click(".counter button:first-of-type")
+	p.WaitText("output", "2")
+
+	home := b.Open(srv.URL + "/")
+	home.Click(".counter button:last-of-type")
+	home.WaitText("output", "11")
+}
+
+func TestBrowserTodo(t *testing.T) {
+	srv := server(t)
+	p := chrome.Launch(t).Open(srv.URL + "/todo")
+	p.Eval(`window.errs = []; document.addEventListener("vk:error", (e) => errs.push(e.detail.message))`, nil)
+	p.Type("input[name=text]", "milk")
+	p.Press("Enter")
+	p.WaitText("#todo-1 span", "milk")
+	p.Wait(`document.querySelector("input[name=text]").value === ""`)
+	p.Type("input[name=text]", "eggs")
+	p.Click("form button")
+	p.WaitText("#todo-2 span", "eggs")
+	p.WaitText(".left", "2 left")
+
+	p.Click("#todo-1 input[type=checkbox]")
+	p.WaitText(".left", "1 left")
+	p.Wait(`document.querySelector("#todo-1").className === "done" && document.querySelector("#todo-1 input").checked`)
+
+	p.Type("input[type=search]", "eg")
+	p.Wait(`document.querySelectorAll("li").length === 1`)
+	p.Wait(`document.activeElement.type === "search" && document.activeElement.value === "eg"`)
+	p.Click("#todo-2 button")
+	p.Wait(`document.querySelectorAll("li").length === 0`)
+	p.WaitText(".left", "0 left")
+
+	p.Click("input[name=text]")
+	p.Press("Enter")
+	p.Wait(`errs[0] === "write something first"`)
+}
+
+func TestBrowserChat(t *testing.T) {
+	srv := server(t)
+	b := chrome.Launch(t)
+	ann, bob := b.Open(srv.URL+"/chat/go"), b.Open(srv.URL+"/chat/go")
+	ann.Type("form.name input", "ann")
+	ann.Press("Enter")
+	ann.Wait(`document.querySelector("form.say")`)
+	bob.WaitText(".lines li:last-child", "ann joined")
+	bob.Type("form.name input", "bob")
+	bob.Press("Enter")
+	ann.WaitText(".lines li:last-child", "bob joined")
+
+	ann.Type("form.say input", "hello bob")
+	ann.Press("Enter")
+	bob.WaitText(".lines li:last-child", "ann: hello bob")
+	ann.WaitText(".lines li:last-child", "ann: hello bob")
+
+	late := b.Open(srv.URL + "/chat/go")
+	late.WaitText(".lines li:last-child", "ann: hello bob")
+	other := b.Open(srv.URL + "/chat/rust")
+	if n := other.Text(".lines"); n != "" {
+		t.Errorf("another room shows %q", n)
+	}
+}

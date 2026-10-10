@@ -160,11 +160,11 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	if layout == nil {
 		title := ls.typ.Name()
 		layout = func(page vuka.Node) vuka.Node {
-			return vuka.Fragment(vuka.RawHTML("<!doctype html>"), vuka.El("html", nil,
+			return vuka.El("html", nil,
 				vuka.El("head", nil, vuka.El("meta", []vuka.Attr{{Name: "charset", Value: "utf-8"}}),
 					vuka.El("meta", []vuka.Attr{{Name: "name", Value: "viewport"}, {Name: "content", Value: "width=device-width, initial-scale=1"}}),
 					vuka.El("title", nil, vuka.Text(title))),
-				vuka.El("body", nil, page)))
+				vuka.El("body", nil, page))
 		}
 	}
 	site := "web.Live " + s.path

@@ -1,0 +1,17 @@
+// Command live shows stateful components served live by
+// github.com/vuka-lang/web: a counter page, a todo list, a chat whose tabs see
+// each other's messages, and a counter inside an ordinary page.
+package main
+
+import (
+	"log"
+
+	"github.com/vuka-lang/web"
+)
+
+func main() {
+	app := web.New(web.LiveLayout(livePage))
+	if err := app.Run(""); err != nil { // ":$PORT", else ":8080"
+		log.Fatal(err)
+	}
+}

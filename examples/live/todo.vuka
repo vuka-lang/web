@@ -1,0 +1,114 @@
+package main
+
+import (
+	"errors"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/vuka-lang/web"
+)
+
+type Item struct {
+	ID   int
+	Text string
+	Done bool
+}
+
+type NewItem struct {
+	Text string `form:"text"`
+}
+
+@web.Live("/todo")
+type Todo struct {
+	vuka.Live
+	items  []Item
+	next   int
+	filter string
+}
+
+func (t *Todo) Add(f NewItem) error {
+	text := strings.TrimSpace(f.Text)
+	if text == "" {
+		return errors.New("write something first")
+	}
+	t.next++
+	t.items = append(t.items, Item{ID: t.next, Text: text})
+	return nil
+}
+
+func (t *Todo) Remove(id int) {
+	t.items = slices.DeleteFunc(t.items, func(it Item) bool { return it.ID == id })
+}
+
+func (t *Todo) Toggle(id int, done bool) {
+	for i := range t.items {
+		if t.items[i].ID == id {
+			t.items[i].Done = done
+		}
+	}
+}
+
+func (t *Todo) Filter(q string) { t.filter = q }
+
+func (t *Todo) shown() []Item {
+	q := strings.ToLower(t.filter)
+	return slices.DeleteFunc(slices.Clone(t.items), func(it Item) bool { return !strings.Contains(strings.ToLower(it.Text), q) })
+}
+
+func (t *Todo) left() int {
+	n := 0
+	for _, it := range t.items {
+		if !it.Done {
+			n++
+		}
+	}
+	return n
+}
+
+func (t *Todo) Render() vuka.Node {
+	return <section class="todo">
+		<form onSubmit={t.Add}>
+			<input
+				name="text"
+				placeholder="What needs doing?"
+				autocomplete="off"
+			/>
+			<button>Add</button>
+		</form>
+		<input
+			type="search"
+			placeholder="Filter"
+			value={t.filter}
+			onInput={t.Filter}
+			data-vk-debounce="150"
+		/>
+		<ul>
+			{for _, it := range t.shown() {
+				<li
+					key={it.ID}
+					id={"todo-" + strconv.Itoa(it.ID)}
+					class={doneClass(it.Done)}
+				>
+					<input
+						type="checkbox"
+						checked={it.Done}
+						onChange={func(done bool) { t.Toggle(it.ID, done) }}
+					/>
+					<span>{it.Text}</span>
+					<button type="button" onClick={func() { t.Remove(it.ID) }}>
+						×
+					</button>
+				</li>
+			}}
+		</ul>
+		<p class="left">{t.left()} left</p>
+	</section>
+}
+
+func doneClass(done bool) string {
+	if done {
+		return "done"
+	}
+	return ""
+}

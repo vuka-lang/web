@@ -196,7 +196,7 @@ func TestLivePageRenders(t *testing.T) {
 	srv := httptest.NewServer(liveApp().Handler())
 	defer srv.Close()
 	html, tok := pageToken(t, srv, "/counter?start=7")
-	if tok == "" || !strings.Contains(html, "<span>n=7</span>") || !strings.Contains(html, "<!doctype html>") ||
+	if tok == "" || !strings.Contains(html, "<span>n=7</span>") || !strings.Contains(html, "<!DOCTYPE html>") ||
 		!strings.Contains(html, `src="/_vuka/live.js?v=`) || strings.Index(html, "<script") > strings.Index(html, "</body>") {
 		t.Fatalf("live page: %s", html)
 	}

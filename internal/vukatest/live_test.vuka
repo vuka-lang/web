@@ -1,0 +1,53 @@
+package vukatest
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/vuka-lang/vuka/live"
+	"github.com/vuka-lang/web"
+)
+
+func TestTemplViewLive(t *testing.T) {
+	srv := httptest.NewServer(web.New(web.Only(pkg)).Handler())
+	defer srv.Close()
+	res, err := http.Get(srv.URL + "/board")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	tok := regexp.MustCompile(`data-vk-token="([^"]+)"`).FindStringSubmatch(string(b))
+	if tok == nil || !strings.Contains(string(b), `<h1>scores</h1><b data-vk-on-click="c1:0" data-vk-id="c1">0</b>`) {
+		t.Fatalf("GET /board: %s", b)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/_vuka/live?t="+tok[1], &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {srv.URL}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.CloseNow()
+	var replies []live.ServerMessage
+	for _, m := range []string{`{"type":"join","ref":1}`, `{"type":"event","ref":2,"target":"c1:0","event":"click"}`} {
+		c.Write(ctx, websocket.MessageText, []byte(m))
+		_, data, err := c.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var r live.ServerMessage
+		json.Unmarshal(data, &r)
+		replies = append(replies, r)
+	}
+	if replies[0].Type != "render" || len(replies[1].Updates) != 1 || replies[1].Updates[0].HTML != `<b data-vk-on-click="c1:0" data-vk-id="c1">1</b>` {
+		t.Fatalf("replies: %+v", replies)
+	}
+}

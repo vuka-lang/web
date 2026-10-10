@@ -2,11 +2,10 @@ module github.com/vuka-lang/web
 
 go 1.25.0
 
-require github.com/vuka-lang/vuka v0.6.0
-
 require (
-	github.com/a-h/templ v0.3.1020 // indirect
-	github.com/coder/websocket v1.8.15 // indirect
+	github.com/a-h/templ v0.3.1020
+	github.com/coder/websocket v1.8.15
+	github.com/vuka-lang/vuka v0.6.0
 )
 
 replace github.com/vuka-lang/vuka => ../vuka
