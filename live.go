@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -416,6 +417,21 @@ func (a *App) verifyToken(tok string) (string, error) {
 		return "", errBadToken
 	}
 	return uri, nil
+}
+
+// devLiveKeyEnv names the key vuka run -watch draws for its session, so a
+// live page rendered by one build of a development app rejoins the next
+// instead of reloading. Only a development app (Dev, VUKA_ENV=development)
+// reads it.
+const devLiveKeyEnv = "VUKA_DEV_LIVE_KEY"
+
+// devLiveKey is the key of an app without LiveKey: the session's under vuka
+// run -watch in development, else a random one.
+func devLiveKey(dev bool) []byte {
+	if k := os.Getenv(devLiveKeyEnv); dev && len(k) >= 32 {
+		return []byte(k)
+	}
+	return randomKey()
 }
 
 func randomKey() []byte {

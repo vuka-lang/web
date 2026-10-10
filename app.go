@@ -73,7 +73,7 @@ func New(opts ...Option) *App {
 	}
 	a.dev = a.dev || os.Getenv("VUKA_ENV") == "development"
 	if a.liveKey == nil {
-		a.liveKey = randomKey()
+		a.liveKey = devLiveKey(a.dev)
 	}
 	if a.router == nil {
 		a.router = NewServeMux()

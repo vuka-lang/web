@@ -343,6 +343,13 @@ func TestLiveTokenAndOrigin(t *testing.T) {
 	if _, err := dial(t, srv2, tok2, http.Header{"Origin": {"http://evil.example"}}); err != nil {
 		t.Errorf("an allowed origin: %v", err)
 	}
+	t.Setenv(devLiveKeyEnv, strings.Repeat("k", 64))
+	if _, err := New(Only("none"), Dev()).verifyToken(New(Only("none"), Dev()).signToken("/x")); err != nil {
+		t.Errorf("development apps under one vuka run -watch key: %v", err)
+	}
+	if _, err := New(Only("none")).verifyToken(New(Only("none")).signToken("/x")); err == nil {
+		t.Error("an app not in development took the vuka run -watch key")
+	}
 	expired := New(Only("none"), LiveTokenTTL(-time.Second))
 	if _, err := expired.verifyToken(expired.signToken("/x")); !errors.Is(err, errExpiredToken) {
 		t.Errorf("expired token: %v", err)
