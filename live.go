@@ -136,29 +136,19 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	if ls.typ.Kind() != reflect.Struct || !reflect.PointerTo(ls.typ).Implements(statefulType) {
 		return nil, fail("%s is not a stateful component: a struct embedding vuka.Live with a Render() vuka.Node method", ls.name)
 	}
-	type prop struct {
-		index []int
-		name  string
-		typ   reflect.Type
-		dep   bool
-	}
-	var props []prop
 	pathNames := pathParams(s.path)
-	for _, f := range reflect.VisibleFields(ls.typ) {
-		switch {
-		case !f.IsExported() || f.Anonymous:
-		case a.c.has(f.Type):
-			if err := a.c.check(f.Type, s.where); err != nil {
-				return nil, err
-			}
-			a.needs = append(a.needs, f.Type)
-			props = append(props, prop{f.Index, f.Name, f.Type, true})
-		case scalar(f.Type):
-			name := f.Name
-			if n, _, _ := strings.Cut(f.Tag.Get("form"), ","); n != "" && n != "-" {
-				name = n
-			}
-			props = append(props, prop{f.Index, name, f.Type, false})
+	props, err := a.liveProps(ls.typ, s.where)
+	if err != nil {
+		return nil, err
+	}
+	params, err := patchParams(ls.typ)
+	if err != nil {
+		return nil, fail("%v", err)
+	}
+	var paramProps []prop
+	if params != nil {
+		if paramProps, err = a.liveProps(params.typ, s.where); err != nil {
+			return nil, err
 		}
 	}
 	layout := ls.layout
@@ -182,36 +172,142 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		if ls.template.IsValid() {
 			c.Elem().Set(ls.template)
 		}
-		for _, p := range props {
-			f := c.Elem().FieldByIndex(p.index)
-			if p.dep {
-				v, err := a.c.get(p.typ)
-				if err != nil {
-					a.writeError(w, r, err, true)
-					return
-				}
-				f.Set(v)
-				continue
+		if err := a.bindProps(c.Elem(), props, pathNames, r); err != nil {
+			a.writeError(w, r, err, true)
+			return
+		}
+		comp := c.Interface().(ui.Stateful)
+		if j, ok := r.Context().Value(joinKey{}).(*join); ok && params != nil {
+			pv := reflect.New(params.typ)
+			if err := a.bindProps(pv.Elem(), paramProps, pathNames, r); err != nil {
+				a.writeError(w, r, err, true)
+				return
 			}
-			var vals []string
-			if n := matchName(pathNames, p.name); n != "" {
-				vals = []string{a.router.Param(r, n)}
-			} else {
-				for k, vs := range r.URL.Query() {
-					if strings.EqualFold(k, p.name) {
-						vals = vs
-					}
-				}
+			if !params.ptr {
+				pv = pv.Elem()
 			}
-			if len(vals) > 0 {
-				if err := setText(f, vals); err != nil {
-					a.writeError(w, r, BadRequest(fmt.Sprintf("%s: %v", p.name, err)), true)
-					return
+			j.updates = map[ui.Stateful]any{comp: pv.Interface()}
+		}
+		a.page(rq, layout(ui.Component(site, nil, comp)))
+	}), nil
+}
+
+// prop is a field of a Live page's component, or of its patch params, that
+// binds per request: a dependency injected, or text from the path segment or
+// query parameter of its name.
+type prop struct {
+	index []int
+	name  string
+	typ   reflect.Type
+	dep   bool
+}
+
+func (a *App) liveProps(t reflect.Type, where string) ([]prop, error) {
+	var props []prop
+	for _, f := range reflect.VisibleFields(t) {
+		switch {
+		case !f.IsExported() || f.Anonymous:
+		case a.c.has(f.Type):
+			if err := a.c.check(f.Type, where); err != nil {
+				return nil, err
+			}
+			a.needs = append(a.needs, f.Type)
+			props = append(props, prop{f.Index, f.Name, f.Type, true})
+		case scalar(f.Type):
+			name := f.Name
+			if n, _, _ := strings.Cut(f.Tag.Get("form"), ","); n != "" && n != "-" {
+				name = n
+			}
+			props = append(props, prop{f.Index, name, f.Type, false})
+		}
+	}
+	return props, nil
+}
+
+// bindProps sets v's props for the request r.
+func (a *App) bindProps(v reflect.Value, props []prop, pathNames []string, r *http.Request) error {
+	for _, p := range props {
+		f := v.FieldByIndex(p.index)
+		if p.dep {
+			d, err := a.c.get(p.typ)
+			if err != nil {
+				return err
+			}
+			f.Set(d)
+			continue
+		}
+		var vals []string
+		if n := matchName(pathNames, p.name); n != "" {
+			vals = []string{a.router.Param(r, n)}
+		} else {
+			for k, vs := range r.URL.Query() {
+				if strings.EqualFold(k, p.name) {
+					vals = vs
 				}
 			}
 		}
-		a.page(rq, layout(ui.Component(site, nil, c.Interface().(ui.Stateful))))
-	}), nil
+		if len(vals) > 0 {
+			if err := setText(f, vals); err != nil {
+				return BadRequest(fmt.Sprintf("%s: %v", p.name, err))
+			}
+		}
+	}
+	return nil
+}
+
+// URLParams, embedded in a struct, makes it the parameters a Live page's
+// Update method takes when the page is patched — moved to another URL of
+// its route, the component staying mounted:
+//
+//	type ShelfParams struct {
+//		web.URLParams
+//		Page int // ?page=
+//	}
+//
+//	func (s *Shelf) Update(p ShelfParams) { s.load(p.Page) }
+//
+// Its fields bind from the new URL as the component's props do (path
+// segment, else query parameter, of their name); the component's props are
+// bound again too. Update runs before the patch renders, and an error it
+// returns is the patch's, shown as a handler's. Mount, not Update, sees the
+// first URL.
+type URLParams struct{}
+
+var urlParamsType = typeOf[URLParams]()
+
+// params is the type a Live page's Update takes on a patch, a struct
+// embedding URLParams (ptr: its pointer).
+type params struct {
+	typ reflect.Type
+	ptr bool
+}
+
+// patchParams finds the Update overload of t taking a URLParams struct.
+func patchParams(t reflect.Type) (*params, error) {
+	var found *params
+	pt := reflect.PointerTo(t)
+	for i := 0; i < pt.NumMethod(); i++ {
+		m := pt.Method(i)
+		if m.Name != "Update" && !strings.HasPrefix(m.Name, "Update__") {
+			continue
+		}
+		in := m.Type.In(m.Type.NumIn() - 1)
+		p := &params{typ: in}
+		if in.Kind() == reflect.Pointer {
+			p.typ, p.ptr = in.Elem(), true
+		}
+		if p.typ.Kind() != reflect.Struct {
+			continue
+		}
+		if f, ok := p.typ.FieldByName("URLParams"); !ok || !f.Anonymous || f.Type != urlParamsType {
+			continue
+		}
+		if found != nil {
+			return nil, fmt.Errorf("%s has two Update methods taking web.URLParams structs, %s and %s", t.Name(), found.typ, p.typ)
+		}
+		found = p
+	}
+	return found, nil
 }
 
 func matchName(names []string, name string) string {
@@ -227,7 +323,8 @@ func matchName(names []string, name string) string {
 // components (or event handlers) is live: the runtime script and a join token
 // go before </body>. A page with only JS commands (data-vk-js-*) that push
 // to no handler gets the script without a token: it runs them and never
-// connects. Under a join the page is the session's instead.
+// connects; links (data-vk-link) alone need no script. Under a join or a
+// navigation the page is the session's instead.
 func (a *App) page(rq *request, n ui.Node) {
 	w, r := rq.w, rq.r
 	if j, ok := r.Context().Value(joinKey{}).(*join); ok {
@@ -244,9 +341,9 @@ func (a *App) page(rq *request, n ui.Node) {
 			return
 		}
 		html = []byte(out)
-		if bytes.Contains(html, []byte(" data-vk-")) {
-			live := bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-")) ||
-				bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) // a JS command's push to a handler
+		live := bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-")) ||
+			bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) // a JS command's push to a handler
+		if live || bytes.Contains(html, []byte(" data-vk-js-")) {
 			html = injectScript(html, a.scriptTag(r, live))
 		}
 	} else {

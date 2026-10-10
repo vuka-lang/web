@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,8 +180,9 @@ func (c *conn) post(topic string, msg any) {
 type joinKey struct{}
 
 type join struct {
-	page ui.Node
-	ctx  context.Context
+	page    ui.Node
+	ctx     context.Context
+	updates map[ui.Stateful]any // a Live page's URLParams for its Update, on a patch
 }
 
 func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
@@ -284,6 +286,8 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		}
 	case c.s == nil:
 		c.write(ctx, live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: "live: join first"})
+	case m.Type == live.Navigate:
+		c.write(ctx, c.navigate(ctx, m.ClientMessage))
 	default:
 		c.write(ctx, c.s.Event(m.ClientMessage))
 	}
@@ -296,22 +300,12 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 // middleware; the page it renders becomes the session's, speaking protocol
 // version v when the app can (else v1).
 func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode) {
-	u, err := url.ParseRequestURI(c.uri)
+	j, rec, err := c.run(ctx, c.uri, "join")
 	if err != nil {
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: errBadToken.Error()}, closeReload
 	}
-	j := &join{}
-	req := c.r.Clone(context.WithValue(ctx, joinKey{}, j))
-	req.Method, req.URL, req.RequestURI = http.MethodGet, u, c.uri
-	req.Body, req.ContentLength = http.NoBody, 0
-	for _, h := range []string{"Upgrade", "Connection", "Sec-Websocket-Key", "Sec-Websocket-Version", "Sec-Websocket-Extensions", "Sec-Websocket-Protocol"} {
-		req.Header.Del(h)
-	}
-	req.Header.Set("X-Vuka-Live", "join")
-	rec := &recorder{h: http.Header{}}
-	c.app.handler.ServeHTTP(rec, req)
 	if j.page == nil {
-		if loc := rec.h.Get("Location"); rec.status >= 300 && rec.status < 400 && loc != "" {
+		if loc := rec.location(); loc != "" {
 			return live.ServerMessage{Type: live.Redirect, Ref: ref, URL: loc}, websocket.StatusNormalClosure
 		}
 		status := cmp.Or(rec.status, http.StatusOK)
@@ -323,6 +317,78 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 	}
 	c.s = liveproto.New(j.ctx, func(context.Context) ui.Node { return j.page }, min(v, c.app.liveMax))
 	return c.s.Join(ref), 0
+}
+
+// navigate moves the page to m.URL over the connection: the URL's route runs
+// as for a join (X-Vuka-Live: navigate), and the page it renders becomes the
+// session's — a patch keeps the components it renders where the page did,
+// and its Live page's Update takes the URL's params. The reply carries a
+// token for the new page, which a reconnect joins. A URL whose route answers
+// anything but a page (a redirect, an error, JSON) is the browser's to load:
+// the reply is a redirect.
+func (c *conn) navigate(ctx context.Context, m live.ClientMessage) any {
+	uri, _, _ := strings.Cut(m.URL, "#")
+	load := live.ServerMessage{Type: live.Redirect, Ref: m.Ref, URL: m.URL}
+	if !strings.HasPrefix(uri, "/") || strings.HasPrefix(uri, "//") || strings.HasPrefix(uri, "/\\") {
+		return load
+	}
+	j, rec, err := c.run(ctx, uri, "navigate")
+	if err != nil {
+		return load
+	}
+	if j.page == nil {
+		load.URL = cmp.Or(rec.location(), m.URL)
+		return load
+	}
+	reply, ok := c.s.Navigate(m.Ref, uri, live.Route{Ctx: j.ctx, Render: func(context.Context) ui.Node { return j.page }, Updates: j.updates}, m.Patch)
+	if !ok {
+		return reply
+	}
+	c.uri = uri
+	return withToken{reply, c.app.signToken(uri)}
+}
+
+// run runs the route of uri on behalf of the connection: a GET carrying the
+// upgrade request's headers, X-Vuka-Live set to why. j.page is the page it
+// rendered, nil when it answered something else (rec has its status and
+// headers).
+func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, error) {
+	u, err := url.ParseRequestURI(uri)
+	if err != nil {
+		return nil, nil, err
+	}
+	j := &join{}
+	req := c.r.Clone(context.WithValue(ctx, joinKey{}, j))
+	req.Method, req.URL, req.RequestURI = http.MethodGet, u, uri
+	req.Body, req.ContentLength = http.NoBody, 0
+	for _, h := range []string{"Upgrade", "Connection", "Sec-Websocket-Key", "Sec-Websocket-Version", "Sec-Websocket-Extensions", "Sec-Websocket-Protocol"} {
+		req.Header.Del(h)
+	}
+	req.Header.Set("X-Vuka-Live", why)
+	rec := &recorder{h: http.Header{}}
+	c.app.handler.ServeHTTP(rec, req)
+	return j, rec, nil
+}
+
+// withToken is a navigation's reply with the token of the page it moved to.
+type withToken struct {
+	msg   any
+	token string
+}
+
+func (w withToken) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e := json.NewEncoder(&buf)
+	e.SetEscapeHTML(false)
+	if err := e.Encode(w.msg); err != nil {
+		return nil, err
+	}
+	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+	if len(b) < 2 || b[len(b)-1] != '}' {
+		return b, nil
+	}
+	t, _ := json.Marshal(w.token)
+	return append(append(append(b[:len(b)-1:len(b)-1], `,"token":`...), t...), '}'), nil
 }
 
 // drain delivers the broadcasts waiting for the page; before a join there is
@@ -364,6 +430,14 @@ type recorder struct {
 }
 
 func (r *recorder) Header() http.Header { return r.h }
+
+// location is where a redirect answer sends the browser; "" for another answer.
+func (r *recorder) location() string {
+	if r.status >= 300 && r.status < 400 {
+		return r.h.Get("Location")
+	}
+	return ""
+}
 func (r *recorder) WriteHeader(code int) {
 	if r.status == 0 {
 		r.status = code

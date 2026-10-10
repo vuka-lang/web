@@ -10,5 +10,6 @@ require (
 
 require github.com/vuka-lang/ui v0.2.0
 
-// Until ui's optimistic pushes are released.
-replace github.com/vuka-lang/ui => ../vuka-ui
+// Until ui's optimistic pushes and navigation are released: ui's navigation
+// branch, in the worktree beside this one.
+replace github.com/vuka-lang/ui => ../vuka-ui-wt-nav

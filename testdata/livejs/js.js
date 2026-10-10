@@ -1,5 +1,5 @@
 // Tests of live.js's JS commands (data-vk-js-*, and commands a render or
-// patch carries) in node, over dom.js: node js.js live.js
+// patch carries) and navigation in node, over dom.js: node js.js live.js
 "use strict";
 const { page } = require("./dom.js");
 const file = process.argv[2];
@@ -551,6 +551,103 @@ test("call: a dotted path on window; an unknown function stops the chain", () =>
   p.fire("#b", "click");
   p.fire("#c", "click");
   eq([p.$("#b").className, p.$("#c").className, p.logs.filter((l) => l.startsWith("warn")).length, errors(p).length], ["", "", 2, 2], "unknown");
+});
+
+// Navigation: data-vk-link, the patch and navigate commands, popstate.
+const shelf = (n) => `<main><div data-vk-id="c1"><p id="at">page ${n}</p>
+  <a id="next" href="/shelf?page=${n + 1}" data-vk-link="patch">next</a>
+  <a id="book" href="/books/7#notes" data-vk-link><b>a book</b></a>
+  <a id="tab" href="/books/8" target="_blank" data-vk-link>tab</a>
+  <a id="away" href="https://elsewhere.test/x" data-vk-link>away</a>
+  <a id="jump" href="/shelf?page=${n}#at" data-vk-link>jump</a>
+  <button id="inc" data-vk-on-click="c1:0">+</button>
+  <button id="js" data-vk-js-click='${js([["navigate", { href: "/books/9" }]])}'>go</button></div></main>`;
+const book = (id) => `<main><div data-vk-id="c2"><h1 id="notes">book ${id}</h1><a id="shelf" href="/shelf?page=2" data-vk-link>shelf</a></div></main>`;
+const navs = (p) => p.ws().sent.filter((m) => m.type === "navigate").map(({ ref, ...m }) => m);
+const lastRef = (p) => p.ws().sent[p.ws().sent.length - 1].ref;
+
+test("navigation: a patch link sends navigate, then the address follows the reply", () => {
+  const p = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  const seen = [];
+  p.window.addEventListener("vk:navigate", (e) => seen.push(e.detail));
+  const e = p.fire("#next", "click", { button: 0 });
+  eq([e.defaultPrevented, navs(p)], [true, [{ type: "navigate", url: "/shelf?page=2", patch: true }]], "sent");
+  eq(p.doc.documentElement.hasAttribute("data-vk-navigating"), true, "in flight");
+  p.fire("#inc", "click");
+  eq(p.ws().sent.filter((m) => m.type === "event").length, 0, "no events while a navigation is in flight");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c1", html: shelf(2).slice(6, -7) }], url: "/shelf?page=2", token: "t2" });
+  eq([p.$("#at").textContent, p.location.href, p.entries, p.doc.documentElement.hasAttribute("data-vk-navigating")],
+    ["page 2", "http://test/shelf?page=2", ["http://test/shelf?page=2"], false], "applied");
+  eq([seen, p.scrolls, p.doc.activeElement === p.doc.body], [[{ url: "http://test/shelf?page=2", patch: true }], [], true], "a patch keeps scroll and focus");
+  p.ws().onclose({ code: 1006 });
+  p.tick(20000);
+  eq(p.ws().url.endsWith("?t=t2"), true, "a reconnect joins the page the navigation reached");
+});
+
+test("navigation: a navigate scrolls to its #hash or the top, focuses main, drops the old page's pushes", () => {
+  const p = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  p.$("[data-vk-id=c1]").setAttribute("data-vk-js-like", js([["add_class", { names: ["liked"] }], ["push", { h: "c1:5", on_error: [["add_class", { to: { sel: "main" }, names: ["failed"] }]] }]]));
+  p.fire("[data-vk-id=c1]", "like");
+  p.fire("#book b", "click");
+  eq(navs(p), [{ type: "navigate", url: "/books/7" }], "the hash stays in the browser");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c0", html: book(7) }], url: "/books/7", token: "t2" });
+  eq([p.location.href, p.$("h1").textContent, p.doc.scrolled.length && p.doc.scrolled[0][0].id, p.doc.activeElement.tagName, p.$("main").getAttribute("tabindex")],
+    ["http://test/books/7#notes", "book 7", "notes", "MAIN", "-1"], "arrived");
+  p.server({ type: "patch", ref: p.ws().sent[1].ref, error: "too late" });
+  eq(p.$("main").className, "", "the dropped push's hooks don't run");
+  p.fire("#shelf", "click");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c0", html: shelf(2) }], url: "/shelf?page=2" });
+  eq(p.scrolls, [[0, 0]], "the top");
+});
+
+test("navigation: what the runtime leaves to the browser", () => {
+  const p = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  for (const [sel, init] of [["#next", { ctrlKey: true }], ["#next", { metaKey: true }], ["#next", { shiftKey: true }], ["#next", { button: 1 }], ["#tab", {}], ["#away", {}], ["#jump", {}]]) {
+    eq(p.fire(sel, "click", init).defaultPrevented, false, sel + " " + JSON.stringify(init));
+  }
+  eq(navs(p), [], "nothing sent");
+  const off = open(shelf(1), { url: "http://test/shelf?page=1" });
+  eq(off.fire("#next", "click").defaultPrevented, false, "a page that isn't live");
+  off.fire("#js", "click");
+  eq(off.loads, [["assign", "http://test/books/9"]], "a command on a page that isn't live loads");
+});
+
+test("navigation: a failure, a redirect or a lost connection is a page load", () => {
+  const p = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  p.fire("#js", "click");
+  eq(navs(p), [{ type: "navigate", url: "/books/9" }], "the command");
+  p.server({ type: "redirect", ref: lastRef(p), url: "/report.pdf" });
+  p.fire("#next", "click");
+  p.server({ type: "error", ref: lastRef(p), error: "no" });
+  p.fire("#book", "click");
+  p.ws().onclose({ code: 1006 });
+  eq(p.loads, [["assign", "/report.pdf"], ["assign", "http://test/shelf?page=2"], ["assign", "http://test/books/7#notes"]], "loads");
+  const q = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  q.fire("#next", "click");
+  q.tick(10000);
+  eq(q.loads, [["assign", "http://test/shelf?page=2"]], "no reply in time");
+});
+
+test("navigation: back and forward patch within a page, navigate across pages, restore scroll", () => {
+  const p = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  const first = p.history.state;
+  p.fire("#next", "click");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c1", html: shelf(2).slice(6, -7) }], url: "/shelf?page=2" });
+  const second = p.history.state;
+  eq(second.vk, first.vk, "a patch's entry is the same page's");
+  p.fire("#book", "click");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c0", html: book(7) }], url: "/books/7" });
+  eq(p.history.state.vk !== first.vk, true, "a navigate's is another page's");
+  p.pop("/shelf?page=2", { ...second, x: 0, y: 120 });
+  eq(navs(p).pop(), { type: "navigate", url: "/shelf?page=2" }, "back to the other page: navigate");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c0", html: shelf(2) }], url: "/shelf?page=2" });
+  eq([p.scrolls.pop(), p.history.state.vk, p.entries.length], [[0, 120], first.vk, 2], "scroll back, the entry kept");
+  p.pop("/shelf?page=1", first);
+  eq(navs(p).pop(), { type: "navigate", url: "/shelf?page=1", patch: true }, "within the page: patch");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c1", html: shelf(1).slice(6, -7) }], url: "/shelf?page=1" });
+  eq([p.$("#at").textContent, p.entries.length], ["page 1", 2], "patched back");
+  p.pop("/shelf?page=1#at", null);
+  eq(navs(p).length, 4, "a #hash entry of the page shown: nothing");
 });
 
 function window_run(p, ops) { p.window.vuka.run(p.doc.body, ops); }
