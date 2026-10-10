@@ -35,6 +35,10 @@ type App struct {
 	statics []func()
 	needs   []reflect.Type
 
+	envFiles []string // nil: the defaults
+	env      *envLoad
+	required []string
+
 	liveLayout  func(vuka.Node) vuka.Node
 	liveKey     []byte
 	liveOrigins []string
@@ -48,13 +52,18 @@ type App struct {
 }
 
 // New makes an app of every route, service and controller declared so far
-// (each app takes its own snapshot, with its own singletons).
+// (each app takes its own snapshot, with its own singletons). It first reads
+// the env files into the process environment (see LoadEnv), so constructors
+// and Start methods see their values through os.Getenv.
 func New(opts ...Option) *App {
-	a := &App{c: newContainer(), dev: os.Getenv("VUKA_ENV") == "development", reg: snapshot(),
-		liveTTL: 12 * time.Hour, hub: newHub()}
+	a := &App{c: newContainer(), reg: snapshot(), liveTTL: 12 * time.Hour, hub: newHub()}
 	for _, o := range opts {
 		o.apply(a)
 	}
+	if a.env = loadEnv(a.envFiles); a.env.err != nil {
+		a.c.errs = append(a.c.errs, a.env.err)
+	}
+	a.dev = a.dev || os.Getenv("VUKA_ENV") == "development"
 	if a.liveKey == nil {
 		a.liveKey = randomKey()
 	}
@@ -229,6 +238,10 @@ func (a *App) build() (http.Handler, error) {
 		}
 		a.router.Handle(s.method, s.path, h)
 	}
+	errs = append(errs, takeEnvErrors()...) // the routes' middleware may read Env
+	if err := a.checkRequired(); err != nil {
+		errs = append(errs, err)
+	}
 	if len(errs) > 0 {
 		return nil, errors.Join(errs...)
 	}
@@ -280,7 +293,10 @@ func (a *App) Start(ctx context.Context) error {
 			return err
 		}
 	}
-	return a.c.start(ctx)
+	if err := errors.Join(takeEnvErrors()...); err != nil {
+		return err
+	}
+	return errors.Join(a.c.start(ctx), errors.Join(takeEnvErrors()...))
 }
 
 // Stop calls Stop on each built value implementing Stopper, in reverse

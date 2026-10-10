@@ -18,10 +18,13 @@ func APIPets(store *PetStore) Result[[]model.Pet] { return store.All() }
 @web.Post("/api/pets")
 func CreatePet(in model.NewPet, store *PetStore) Result[model.Pet] { return store.Add(in) }
 
-// requireToken is HTTP middleware for one route, through @web.Use.
+// requireToken is HTTP middleware for one route, through @web.Use. The app
+// wraps its routes after reading the env files, so ADMIN_TOKEN may come from
+// .env.
 func requireToken(next http.Handler) http.Handler {
+	want := "Bearer " + web.Env("ADMIN_TOKEN", "letmein")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer letmein" {
+		if r.Header.Get("Authorization") != want {
 			http.Error(w, `{"error":"unauthorized","status":401}`, http.StatusUnauthorized)
 			return
 		}
