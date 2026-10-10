@@ -9,3 +9,6 @@ require (
 )
 
 require github.com/vuka-lang/ui v0.1.0
+
+// The ui js branch (JS commands), until it is released: remove at release.
+replace github.com/vuka-lang/ui => ../vuka-ui

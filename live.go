@@ -225,9 +225,9 @@ func matchName(names []string, name string) string {
 
 // page answers with a rendered page. A GET page rendering stateful
 // components (or event handlers) is live: the runtime script and a join token
-// go before </body>. A page with only JS commands (data-vk-js-*) gets the
-// script without a token: it runs them and never connects. Under a join the
-// page is the session's instead.
+// go before </body>. A page with only JS commands (data-vk-js-*) that push
+// to no handler gets the script without a token: it runs them and never
+// connects. Under a join the page is the session's instead.
 func (a *App) page(rq *request, n ui.Node) {
 	w, r := rq.w, rq.r
 	if j, ok := r.Context().Value(joinKey{}).(*join); ok {
@@ -245,7 +245,8 @@ func (a *App) page(rq *request, n ui.Node) {
 		}
 		html = []byte(out)
 		if bytes.Contains(html, []byte(" data-vk-")) {
-			live := bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-"))
+			live := bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-")) ||
+				bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) // a JS command's push to a handler
 			html = injectScript(html, a.scriptTag(r, live))
 		}
 	} else {

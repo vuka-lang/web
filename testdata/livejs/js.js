@@ -72,7 +72,7 @@ test("show, hide, toggle", () => {
   p.fire("#s", "click");
   eq([m.hasAttribute("hidden"), m.getAttribute("style")], [false, "color: red; display: flex"], "shown");
   p.fire("#h", "click");
-  eq([m.hasAttribute("hidden"), m.getAttribute("style")], [true, "color: red; display: none"], "hidden");
+  eq([m.hasAttribute("hidden"), m.getAttribute("style")], [false, "color: red; display: none"], "hidden");
   p.fire("#t", "click");
   eq([m.hasAttribute("hidden"), m.getAttribute("style")], [false, "color: red"], "toggled on");
   p.fire("#t", "click");
@@ -96,7 +96,7 @@ test("transitions", () => {
   p.tick(40);
   eq([m.className, m.hasAttribute("hidden")], ["m ease o-0", false], "hiding");
   p.fire("#t", "click"); // finishes the hide first
-  eq([m.className, m.hasAttribute("hidden")], ["m shake", true], "finished, then the next");
+  eq([m.className, m.getAttribute("style")], ["m shake", "display: none"], "finished, then the next");
   p.tick(100);
   eq(m.className, "m", "all off");
 });
@@ -158,6 +158,15 @@ test("conditions and blocks", () => {
   p.$("#v").value = "a";
   p.$("#v").setAttribute("required", "");
   eq(click(), "checked a big req after", "checked and a");
+});
+
+test("conditions read the first element; refs on a static page are the document's", () => {
+  const p = open(`<input class="c" type="checkbox"><input class="c" type="checkbox" checked><p data-vk-ref="r"></p><div data-vk-id="c1"><p data-vk-ref="r"></p></div>
+    <button data-vk-js-click='${js([["if", { cond: { to: { sel: ".c" }, checked: true } }], ["add_class", { names: ["any"] }], ["end", {}],
+      ["if", { cond: { to: { sel: ".none" }, value: false } }], ["add_class", { names: ["missing"] }], ["end", {}],
+      ["set_value", { to: { sel: ".c" }, value: "true" }], ["add_class", { to: { ref: "r" }, names: ["r"] }]])}'></button>`);
+  p.fire("button", "click");
+  eq([p.$("button").className, p.doc.querySelectorAll(".c").map((c) => c.checked), p.doc.querySelectorAll(".r").length], ["", [true, true], 2]);
 });
 
 test("debounce: the steps after it run once things are quiet, per element and event", () => {
@@ -234,8 +243,8 @@ test("copy, copy_text, scroll_to, set_value", () => {
   eq([p.doc.scrolled.length, p.doc.scrolled[0][0].id, seen], [1, "code", ["input:new", "change:new"]]);
 });
 
-test("a page with only JS commands doesn't connect; push warns once", () => {
-  const p = open(`<button data-vk-js-click='${js([["push", { h: "c1:0" }], ["add_class", { names: ["on"] }]])}'></button>`);
+test("a page with only JS commands doesn't connect; push warns once, and without h does nothing", () => {
+  const p = open(`<button data-vk-js-click='${js([["push", {}], ["push", { h: "c1:0" }], ["add_class", { names: ["on"] }]])}'></button>`);
   p.fire("button", "click");
   p.fire("button", "click");
   eq([p.sockets.length, p.$("button").className, p.logs.filter((l) => l.startsWith("warn")).length], [0, "on", 1]);
@@ -259,6 +268,17 @@ test("push sends an event as data-vk-on does", () => {
   eq([sent()[2], s.defaultPrevented], [{ type: "event", target: "c1:2", event: "submit", form: { text: ["hi"] } }, true], "submit");
   p.fire("#k", "keydown", { key: "Enter" });
   eq(sent()[3], { type: "event", target: "c1:3", event: "keydown", key: "Enter", value: "v" }, "key");
+});
+
+test("the nearest element with either attribute takes the event", () => {
+  const p = joined(`<div data-vk-on-click="c0:0"><button data-vk-js-click='${js([["add_class", { names: ["on"] }]])}'><i>x</i></button></div>
+    <div data-vk-js-click='${js([["add_class", { names: ["outer"] }]])}'><button id="srv" data-vk-on-click="c0:1">y</button></div>
+    <form data-vk-js-submit='${js([["add_class", { names: ["sub"] }]])}'></form>`);
+  p.fire("i", "click");
+  eq([p.$("button").className, p.ws().sent.length], ["on", 1], "commands only");
+  p.fire("#srv", "click");
+  eq([p.doc.querySelectorAll("div")[1].className, p.ws().sent.length], ["", 2], "the handler only");
+  eq(p.fire("form", "submit").defaultPrevented, true, "a submit's commands prevent it");
 });
 
 test("the chain runs before data-vk-on; a declined confirm keeps the event from the server", () => {
@@ -290,22 +310,21 @@ test("commands pushed with a render or patch run after it, on the instance's roo
 });
 
 test("reconciliation: a command's change stays until the server changes the attribute", () => {
-  const html = (cls, style, extra = "") => `<div data-vk-id="c1"><ul id="menu" class="${cls}" style="${style}"${extra}></ul><b>x</b></div>`;
+  const html = (cls, style, extra = "") => `<div data-vk-id="c1"><ul id="menu" class="${cls}" style="${style}"${extra}></ul><p id="d" hidden></p><b>x</b></div>`;
   const p = open(html("menu", "color: red"), { live: true });
   p.ws().onopen();
   p.server({ type: "render", ref: 1, html: html("menu", "color: red") });
-  window_run(p, [["add_class", { to: { sel: "#menu" }, names: ["open"] }], ["hide", { to: { sel: "#menu" } }]]);
-  const m = p.$("#menu");
+  window_run(p, [["add_class", { to: { sel: "#menu" }, names: ["open"] }], ["hide", { to: { sel: "#menu" } }], ["show", { to: { sel: "#d" } }]]);
+  const m = p.$("#menu"), d = p.$("#d");
   const patch = (h) => p.server({ type: "patch", updates: [{ id: "c1", html: h }] });
   patch(html("menu", "color: red").replace("x", "y"));
-  eq([m.className, m.getAttribute("style"), m.hasAttribute("hidden"), p.$("b").textContent], ["menu open", "color: red; display: none", true, "y"], "kept");
+  eq([m.className, m.getAttribute("style"), d.hasAttribute("hidden"), p.$("b").textContent], ["menu open", "color: red; display: none", false, "y"], "kept");
   patch(html("menu wide", "color: red"));
-  eq([m.className, m.getAttribute("style"), m.hasAttribute("hidden")], ["menu wide", "color: red; display: none", true], "class: the server's");
+  eq([m.className, m.getAttribute("style")], ["menu wide", "color: red; display: none"], "class: the server's");
   patch(html("menu wide", "color: blue"));
-  eq([m.getAttribute("style"), m.hasAttribute("hidden")], ["color: blue", true], "style: the server's");
-  patch(html("menu wide", "color: blue", " hidden"));
-  patch(html("menu wide", "color: blue"));
-  eq(m.hasAttribute("hidden"), false, "hidden: the server's");
+  eq(m.getAttribute("style"), "color: blue", "style: the server's");
+  patch(html("menu wide", "color: blue").replace(' hidden>', ' hidden="until-found">'));
+  eq(d.getAttribute("hidden"), "until-found", "hidden: the server's");
 });
 
 test("reconciliation under protocol v2, and a transition across a morph", () => {

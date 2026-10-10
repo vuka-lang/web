@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/vuka-lang/ui"
@@ -32,12 +33,6 @@ func TestLiveJSCommands(t *testing.T) {
 
 type op = []any
 
-// cmds is a data-vk-js-* attribute's value.
-func cmds(ops ...op) string {
-	b, _ := json.Marshal(ops)
-	return string(b)
-}
-
 func attrs(kv ...any) []ui.Attr {
 	var as []ui.Attr
 	for i := 0; i+1 < len(kv); i += 2 {
@@ -49,36 +44,33 @@ func attrs(kv ...any) []ui.Attr {
 // A page with JS commands and no live parts: a dropdown, a modal and a copy
 // button.
 func jsStaticPage() ui.Node {
-	fade := []string{"fade", "o-0", "o-100"}
+	cancel, _ := ui.EncodeJS(context.Background(), ui.JS.Hide(ui.This).PopFocus())
 	return ui.El("main", nil,
-		ui.El("button", attrs("id", "menu-btn", "type", "button", "aria-expanded", "false", "data-vk-js-click", cmds(
-			op{"toggle_class", map[string]any{"to": map[string]any{"sel": "#menu"}, "names": []string{"open"}}},
-			op{"toggle_attr", map[string]any{"name": "aria-expanded", "values": []string{"true", "false"}}},
-		)), ui.Text("Menu")),
+		ui.El("button", attrs("id", "menu-btn", "type", "button", "aria-expanded", "false",
+			"onClick", ui.On(ui.JS.ToggleClass("#menu", "open").ToggleAttr(ui.This, "aria-expanded", "true", "false"))), ui.Text("Menu")),
 		ui.El("ul", attrs("id", "menu", "class", "menu"), ui.El("li", nil, ui.Text("One"))),
-		ui.El("button", attrs("id", "open", "type", "button", "data-vk-js-click", cmds(
-			op{"push_focus", map[string]any{}},
-			op{"show", map[string]any{"to": map[string]any{"sel": "#modal"}, "transition": fade, "time": 300}},
-			op{"focus_first", map[string]any{"to": map[string]any{"sel": "#modal"}}},
-		)), ui.Text("Open")),
-		ui.El("div", attrs("id", "modal", "hidden", true,
-			"data-cancel", cmds(op{"hide", map[string]any{}}, op{"pop_focus", map[string]any{}}),
-			"data-vk-js-keydown", cmds(op{"key", map[string]any{"keys": []string{"Escape"}}}, op{"exec", map[string]any{"attr": "data-cancel"}})),
+		ui.El("button", attrs("id", "open", "type", "button", "onClick", ui.On(ui.JS.PushFocus().
+			Show("#modal", ui.Transition("fade", "o-0", "o-100"), ui.Time(300*time.Millisecond)).
+			FocusFirst("#modal"))), ui.Text("Open")),
+		ui.El("div", attrs("id", "modal", "hidden", true, "data-cancel", string(cancel),
+			"onKeyDown", ui.On(ui.JS.Key("Escape").Exec(ui.This, "data-cancel"))),
 			ui.El("input", attrs("id", "name")),
-			ui.El("button", attrs("id", "close", "type", "button", "data-vk-js-click", cmds(
-				op{"exec", map[string]any{"to": map[string]any{"closest": "#modal"}, "attr": "data-cancel"}},
-			)), ui.Text("×"))),
+			ui.El("button", attrs("id", "close", "type", "button", "onClick", ui.On(ui.JS.Exec(ui.Closest("#modal"), "data-cancel"))), ui.Text("×"))),
 		ui.El("input", attrs("id", "code", "value", "go run .", "readonly", true)),
-		ui.El("button", attrs("id", "copy", "type", "button", "data-vk-js-click", cmds(op{"copy", map[string]any{"to": map[string]any{"sel": "#code"}}})), ui.Text("Copy")),
+		ui.El("button", attrs("id", "copy", "type", "button", "onClick", ui.On(ui.JS.Copy("#code"))), ui.Text("Copy")),
 	)
 }
 
+// A live component whose elements run commands: a dropdown whose items
+// push their value, deletes that ask first, and a handler that pushes
+// commands back.
 type jsDemo struct {
 	ui.Live
 	items  []string
 	picked string
 	tone   string
 	n      int
+	saved  int
 }
 
 func (d *jsDemo) Mount()          { d.items, d.tone = []string{"a", "b", "c"}, "calm" }
@@ -86,36 +78,31 @@ func (d *jsDemo) Pick(e ui.Event) { d.picked = e.Value }
 func (d *jsDemo) Delete(e ui.Event) {
 	d.items = slices.DeleteFunc(d.items, func(s string) bool { return s == e.Value })
 }
-func (d *jsDemo) Inc()             { d.n++ }
-func (d *jsDemo) Loud()            { d.tone = "loud" }
-func (d *jsDemo) h(i int) string   { return fmt.Sprintf("%s:%d", d.ID(), i) }
-func (d *jsDemo) ref(r string) any { return map[string]any{"ref": r} }
+func (d *jsDemo) Inc()  { d.n++ }
+func (d *jsDemo) Loud() { d.tone = "loud" }
+func (d *jsDemo) Save() {
+	d.saved++
+	d.PushJS(ui.JS.On(ui.Ref("note")).AddClass("flash").SetAttr("data-n", fmt.Sprint(d.saved)))
+}
+
 func (d *jsDemo) Render() ui.Node {
 	var menu, items []ui.Node
 	for _, it := range d.items {
-		menu = append(menu, ui.El("li", nil, ui.El("button", attrs("type", "button", "value", it, "data-vk-js-click", cmds(
-			op{"add_class", map[string]any{"to": d.ref("menu"), "names": []string{"hidden"}}},
-			op{"push", map[string]any{"h": d.h(0)}},
-		)), ui.Text(it))))
-		items = append(items, ui.El("li", attrs("id", "item-"+it), ui.Text(it), ui.El("button", attrs("class", "del", "type", "button", "value", it, "data-vk-js-click", cmds(
-			op{"confirm", map[string]any{"msg": "Delete " + it + "?"}},
-			op{"push", map[string]any{"h": d.h(1)}},
-		)), ui.Text("delete"))))
+		menu = append(menu, ui.El("li", nil, ui.El("button", attrs("type", "button", "value", it,
+			"onClick", ui.On(ui.JS.AddClass(ui.Ref("menu"), "hidden").Push(d.Pick))), ui.Text(it))))
+		items = append(items, ui.El("li", attrs("id", "item-"+it), ui.Text(it), ui.El("button", attrs("class", "del", "type", "button", "value", it,
+			"onClick", ui.On(ui.JS.Confirm("Delete "+it+"?").Push(d.Delete))), ui.Text("delete"))))
 	}
 	return ui.El("div", attrs("class", "demo"),
-		// Handlers 0 and 1, which the commands push to.
-		ui.El("template", nil, ui.El("button", attrs("onClick", ui.On(d.Pick))), ui.El("button", attrs("onClick", ui.On(d.Delete)))),
-		ui.El("button", attrs("id", "pick", "type", "button", "data-vk-js-click", cmds(
-			op{"remove_class", map[string]any{"to": d.ref("menu"), "names": []string{"hidden"}}},
-		)), ui.Text("Pick")),
-		ui.El("ul", attrs("data-vk-ref", "menu", "class", "menu hidden"), menu...),
+		ui.El("button", attrs("id", "pick", "type", "button", "onClick", ui.On(ui.JS.RemoveClass(ui.Ref("menu"), "hidden"))), ui.Text("Pick")),
+		ui.El("ul", attrs("ref", "menu", "class", "menu hidden"), menu...),
 		ui.El("output", attrs("id", "picked"), ui.Text(d.picked)),
 		ui.El("ul", attrs("id", "items"), items...),
 		ui.El("p", attrs("id", "tone", "class", "tone "+d.tone), ui.Text(d.n)),
-		ui.El("button", attrs("id", "inc", "type", "button", "onClick", ui.On(d.Inc), "data-vk-js-click", cmds(
-			op{"add_class", map[string]any{"to": map[string]any{"sel": "#tone"}, "names": []string{"marked"}}},
-		)), ui.Text("+")),
+		ui.El("button", attrs("id", "inc", "type", "button", "onClick", ui.On(ui.JS.AddClass("#tone", "marked").Push(d.Inc))), ui.Text("+")),
 		ui.El("button", attrs("id", "loud", "type", "button", "onClick", ui.On(d.Loud)), ui.Text("loud")),
+		ui.El("p", attrs("ref", "note", "class", "note"), ui.Text(fmt.Sprint("saved ", d.saved))),
+		ui.El("button", attrs("id", "save", "type", "button", "onClick", ui.On(d.Save)), ui.Text("save")),
 	)
 }
 
@@ -153,11 +140,11 @@ func TestBrowserJSStatic(t *testing.T) {
 	p.Wait(`(() => { const m = document.querySelector("#modal"); return !m.hidden && m.classList.contains("fade") && document.activeElement.id === "name"; })()`)
 	p.Wait(`document.querySelector("#modal").className === "" && getComputedStyle(document.querySelector("#modal")).display === "block"`)
 	p.Press("Escape")
-	p.Wait(`document.querySelector("#modal").hidden && getComputedStyle(document.querySelector("#modal")).display === "none" && document.activeElement.id === "open"`)
+	p.Wait(`getComputedStyle(document.querySelector("#modal")).display === "none" && document.activeElement.id === "open"`)
 	p.Click("#open")
 	p.Wait(`document.activeElement.id === "name"`)
 	p.Click("#close")
-	p.Wait(`document.querySelector("#modal").hidden && document.activeElement.id === "open"`)
+	p.Wait(`getComputedStyle(document.querySelector("#modal")).display === "none" && document.activeElement.id === "open"`)
 
 	p.Eval(`navigator.clipboard.writeText = (t) => { window.copied = t; return Promise.resolve(); }`, nil)
 	p.Click("#copy")
@@ -201,6 +188,14 @@ func TestBrowserJSLive(t *testing.T) {
 			p.Eval(`window.confirm = (m) => (window.asked = m, true)`, nil)
 			p.Click("#item-b .del")
 			p.Wait(`!document.querySelector("#item-b") && window.asked === "Delete b?"`)
+
+			// Commands a handler pushes run once its reply is applied, and
+			// what they change stays through later patches.
+			p.Click("#save")
+			p.Wait(`(() => { const n = document.querySelector("[data-vk-ref=note]"); return n.textContent === "saved 1" && n.className === "note flash" && n.dataset.n === "1"; })()`)
+			p.Click("#inc")
+			p.WaitText("#tone", "3")
+			p.Wait(`document.querySelector("[data-vk-ref=note]").className === "note flash"`)
 		})
 	}
 }

@@ -147,9 +147,10 @@
   }
 
   // Events: one capturing listener on the document per event type the pages
-  // name, finding the elements whose data-vk-js-<type> and data-vk-on-<type>
-  // handle it. The JS commands run first; a confirm the user declines also
-  // keeps the event from the server.
+  // name, finding the nearest element whose data-vk-js-<type> (JS commands)
+  // or data-vk-on-<type> (a handler on the server) handles it. An element
+  // with both runs its commands first; a confirm the user declines among
+  // them keeps the event from the server.
   function listenIn(html) {
     for (const m of html.matchAll(/ data-vk-(?:on|js)-([\w-]+)=/g)) {
       if (listening.has(m[1])) continue;
@@ -158,8 +159,12 @@
     }
   }
 
-  const owner = (el, attr, type) =>
-    !el ? null : nobubble.has(type) ? (el.hasAttribute(attr) ? el : null) : el.closest("[" + attr + "]");
+  function owner(el, type) {
+    const on = "data-vk-on-" + type, js = "data-vk-js-" + type;
+    if (!el) return null;
+    if (nobubble.has(type)) return el.hasAttribute(on) || el.hasAttribute(js) ? el : null;
+    return el.closest("[" + on + "],[" + js + "]");
+  }
 
   // prevent keeps an event the server answers from doing what the browser
   // would: a submit, a link followed, a form's button submitting it.
@@ -170,10 +175,9 @@
 
   function handle(e) {
     const t = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
-    const js = owner(t, "data-vk-js-" + e.type, e.type);
-    if (js && commands(js, e) === false) return;
-    const el = owner(t, "data-vk-on-" + e.type, e.type);
-    if (!el) return;
+    const el = owner(t, e.type);
+    if (!el || el.hasAttribute("data-vk-js-" + e.type) && commands(el, e) === false) return;
+    if (!el.hasAttribute("data-vk-on-" + e.type)) return;
     prevent(el, e);
     const keys = el.getAttribute("data-vk-key");
     if (keys && e.key !== undefined && !keys.split(/\s+/).includes(e.key)) return;
@@ -461,13 +465,14 @@
     let ops;
     try { ops = JSON.parse(el.getAttribute("data-vk-js-" + e.type)); } catch (_) {}
     if (!Array.isArray(ops)) return warn("bad JS commands in data-vk-js-" + e.type);
-    if (ops.some((o) => o[0] === "push")) prevent(el, e);
+    if (e.type === "submit" || ops.some((o) => o[0] === "push")) prevent(el, e);
     return run(el, ops, e);
   }
 
   function pushed(list) {
     for (const p of list || []) {
-      try { run(byID(p.id), p.ops || [], null); } catch (err) { fail("live: a pushed command failed: " + err.message); }
+      const root = byID(p.id);
+      if (root) try { run(root, p.ops || [], null); } catch (err) { fail("live: a pushed command failed: " + err.message); }
     }
   }
 
@@ -520,7 +525,7 @@
     try {
       if (to.ref !== undefined) {
         const scope = el && el.closest("[data-vk-id]");
-        const own = (x) => x === scope || (x.parentElement && x.parentElement.closest("[data-vk-id]")) === scope;
+        const own = (x) => !scope || x === scope || x.parentElement.closest("[data-vk-id]") === scope;
         const all = Array.from((scope || document).querySelectorAll("[data-vk-ref]"));
         if (scope && scope.hasAttribute("data-vk-ref")) all.unshift(scope);
         return all.filter((x) => x.getAttribute("data-vk-ref") === String(to.ref) && own(x));
@@ -532,16 +537,19 @@
     return [];
   }
 
-  const read = (t) => "value" in t ? t.value : t.getAttribute("value");
+  // holds tests a condition on the first element its target names; only
+  // exists holds without one.
+  const read = (t) => isField(t) ? t.value : t.getAttribute("value") || "";
   function holds(el, c) {
-    const found = targets(el, c.to), some = (f) => found.some(f);
-    if ("checked" in c) return some((t) => !!t.checked === !!c.checked);
-    if ("value_eq" in c) return some((t) => read(t) === String(c.value_eq));
-    if ("value" in c) return some((t) => !!read(t) === !!c.value);
-    if ("is" in c) return some((t) => t.matches(c.is));
-    if ("attr" in c) return some((t) => t.hasAttribute(c.attr));
-    if ("exists" in c) return (found.length > 0) === !!c.exists;
-    return found.length > 0;
+    const t = targets(el, c.to)[0];
+    if ("exists" in c) return !!t === !!c.exists;
+    if (!t) return false;
+    if ("checked" in c) return t.tagName === "INPUT" && !!t.checked === !!c.checked;
+    if ("value_eq" in c) return read(t) === String(c.value_eq);
+    if ("value" in c) return !!read(t) === !!c.value;
+    if ("is" in c) return t.matches(c.is);
+    if ("attr" in c) return t.hasAttribute(c.attr);
+    return true;
   }
 
   // Reconciliation: per element, each attribute a command changed, with the
@@ -574,7 +582,7 @@
   const classes = (op) => (el, a) => targets(el, a.to).forEach((t) => touch(t, "class", () => words(a.names).forEach((c) => t.classList[op](c))));
 
   // Display: show and hide edit the style attribute's display (what a
-  // morph re-renders and a command must keep) and the hidden attribute.
+  // morph re-renders and a command must keep); show also removes hidden.
   const displayRe = /(^|;)\s*display\s*:[^;]*;?/i;
   const display = (el) => (/(?:^|;)\s*display\s*:\s*([^;]*)/i.exec(el.getAttribute("style") || "") || [])[1] || "";
   function setDisplay(el, v) {
@@ -592,10 +600,7 @@
     setDisplay(el, a.display || "");
     if (!a.display && typeof getComputedStyle === "function" && getComputedStyle(el).display === "none") setDisplay(el, "block");
   }
-  function hide(el) {
-    setDisplay(el, "none");
-    if (!el.hasAttribute("hidden")) touch(el, "hidden", () => el.setAttribute("hidden", ""));
-  }
+  const hide = (el) => setDisplay(el, "none");
   const visibly = (el, a, on) => {
     if (!a.transition) return on ? show(el, a) : hide(el);
     animate(el, a.transition, a.time, on ? () => show(el, a) : null, on ? null : () => hide(el));
@@ -719,18 +724,20 @@
     }),
     copy: (el, a) => {
       const t = targets(el, a.to)[0];
-      if (t) copy("value" in t && t.tagName !== "BUTTON" ? t.value : t.textContent.trim(), el);
+      if (t) copy(isField(t) ? t.value : t.textContent.trim(), el);
     },
     copy_text: (el, a) => copy(String(a.text), el),
     scroll_to: (el, a) => { const t = targets(el, a.to)[0]; if (t) t.scrollIntoView({ block: "nearest", behavior: "smooth" }); },
     set_value: each((t, a) => {
-      if (!("value" in t)) return;
-      t.value = a.value;
+      if (!isField(t)) return;
+      if (t.type === "checkbox" || t.type === "radio") t.checked = a.value === "true";
+      else t.value = a.value;
       t.dispatchEvent(new Event("input", { bubbles: true }));
       t.dispatchEvent(new Event("change", { bubbles: true }));
     }),
     // push sends an event to a handler as data-vk-on-<event> would.
     push: (el, a, e) => {
+      if (!a.h) return; // rendered without a session
       if (!live) return warn("a push command needs a live page");
       if (!joined) return;
       const type = a.event || (e ? e.type : "push");

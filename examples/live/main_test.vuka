@@ -184,3 +184,45 @@ func TestBrowserChat(t *testing.T) {
 		}
 	})
 }
+
+func TestBrowserCommands(t *testing.T) {
+	srv := server(t)
+	p := chrome.Launch(t).Visit(srv.URL + "/commands")
+	p.Click("#menu-btn")
+	p.Wait(`document.querySelector("#menu").className === "menu open" && document.querySelector("#menu-btn").getAttribute("aria-expanded") === "true"`)
+	p.Click("#open")
+	p.Wait(`getComputedStyle(document.querySelector("#dialog")).display === "block" && document.activeElement.id === "name"`)
+	p.Wait(`document.querySelector("#dialog").className === "dialog"`) // the transition's classes are gone
+	p.Press("Escape")
+	p.Wait(`getComputedStyle(document.querySelector("#dialog")).display === "none" && document.activeElement.id === "open"`)
+	p.Eval(`navigator.clipboard.writeText = (t) => { window.copied = t; return Promise.resolve(); }`, nil)
+	p.Click("#copy")
+	p.Wait(`window.copied === "go run ." && document.querySelector("#copy").hasAttribute("data-copied")`)
+	p.Wait(`window.__wire.sockets.length === 0`) // no live parts: no connection
+}
+
+func TestBrowserChores(t *testing.T) {
+	protocols(t, func(t *testing.T, open func(string) *chrome.Page) {
+		p := open("/chores")
+		p.Click("button.pick")
+		p.Wait(`document.querySelector("[data-vk-ref=menu]").className === "menu"`)
+		p.Click(`[data-vk-ref=menu] button[value=cook]`)
+		p.WaitText("output", "cook")
+		p.Wait(`document.querySelector("[data-vk-ref=menu]").className === "menu hidden"`)
+
+		p.Eval(`window.confirm = () => false`, nil)
+		p.Click("#chore-read .del")
+		p.Click("button.pick")
+		p.Click(`[data-vk-ref=menu] button[value=wash]`)
+		p.WaitText("output", "wash")
+		p.Wait(`document.querySelector("#chore-read")`)
+
+		p.Eval(`window.confirm = (m) => (window.asked = m, true)`, nil)
+		p.Click("#chore-read .del")
+		p.Wait(`!document.querySelector("#chore-read") && window.asked === "Delete read?"`)
+		p.Wait(`(() => { const s = document.querySelector("[data-vk-ref=status]"); return s.textContent === "2 left" && s.className === "status flash" && s.dataset.done === "1"; })()`)
+		p.Click("button.pick")
+		p.Click(`[data-vk-ref=menu] button[value=cook]`)
+		p.Wait(`document.querySelector("[data-vk-ref=status]").className === "status flash"`) // the server renders it as before
+	})
+}

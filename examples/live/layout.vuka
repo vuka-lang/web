@@ -21,7 +21,7 @@ func Shell(title string, children ui.Node) ui.Node {
 		</head>
 		<body>
 			<nav>
-				<a href="/">Home</a> <a href="/counter">Counter</a> <a href="/todo">Todo</a> <a href="/chat/lobby">Chat</a>
+				<a href="/">Home</a> <a href="/counter">Counter</a> <a href="/todo">Todo</a> <a href="/chat/lobby">Chat</a> <a href="/commands">Commands</a> <a href="/chores">Chores</a>
 			</nav>
 			<main>{children}</main>
 		</body>
@@ -35,6 +35,7 @@ func livePage(page ui.Node) ui.Node {
 
 const css = `body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem }
 nav a { margin-right: 1rem } [aria-busy=true] { opacity: .6 } .done { text-decoration: line-through; color: #888 }
+.hidden, #menu:not(.open) { display: none } .dialog { border: 1px solid #ccc; padding: 1rem } .fade { transition: opacity .2s } .faded { opacity: 0 } .flash { background: #ffd }
 html[data-vk-state=disconnected] body::before { content: "reconnecting…"; position: fixed; top: 0; right: 0; background: #fd0; padding: .2rem .6rem }`
 
 // Home is an ordinary route: the counter in it makes the page live.

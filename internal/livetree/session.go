@@ -27,11 +27,12 @@ type session struct {
 
 // Message is a v2 server message.
 type Message struct {
-	Type  string  `json:"type"`
-	Ref   int     `json:"ref,omitempty"`
-	V     int     `json:"v,omitempty"`
-	Trees []Entry `json:"trees,omitempty"`
-	Error string  `json:"error,omitempty"`
+	Type  string        `json:"type"`
+	Ref   int           `json:"ref,omitempty"`
+	V     int           `json:"v,omitempty"`
+	Trees []Entry       `json:"trees,omitempty"`
+	JS    []live.JSPush `json:"js,omitempty"`
+	Error string        `json:"error,omitempty"`
 }
 
 func (x *session) Join(ref int) any {
@@ -39,7 +40,7 @@ func (x *session) Join(ref int) any {
 	if err != nil {
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: err.Error()}
 	}
-	return Message{Type: live.Render, Ref: ref, V: 2, Trees: x.enc.Render(html)}
+	return Message{Type: live.Render, Ref: ref, V: 2, Trees: x.enc.Render(html), JS: x.s.JS()}
 }
 
 func (x *session) Event(m live.ClientMessage) any {
@@ -58,7 +59,7 @@ func (x *session) Info(topic string, msg any) any {
 	switch {
 	case err != nil:
 		return live.ServerMessage{Type: live.Error, Error: err.Error()}
-	case len(p.Updates) > 0 || p.Error != "":
+	case len(p.Updates) > 0 || len(p.JS) > 0 || p.Error != "":
 		return x.patch(0, p)
 	}
 	return nil
@@ -69,7 +70,7 @@ func (x *session) patch(ref int, p live.Patch) Message {
 	for i, u := range p.Updates {
 		ups[i] = Update{u.ID, u.HTML}
 	}
-	return Message{Type: live.PatchMsg, Ref: ref, Trees: x.enc.Patch(ups), Error: p.Error}
+	return Message{Type: live.PatchMsg, Ref: ref, Trees: x.enc.Patch(ups), JS: p.JS, Error: p.Error}
 }
 
 func (x *session) Topics() []string { return x.s.Topics() }
