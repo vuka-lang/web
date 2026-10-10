@@ -465,6 +465,32 @@ test("optimistic: a push with no connection fails at once, one in flight when th
   eq(q.$("button").className, "err", "dropped");
 });
 
+test("optimistic: a later command's change stays; a skipped push ends a segment", () => {
+  const p = joined(`<button id="a" data-vk-js-click='${js([["set_attr", { to: { sel: "#t" }, name: "title", value: "b" }], ["push", { h: "c0:0" }]])}'>x</button>
+    <button id="b" data-vk-js-click='${js([["set_attr", { to: { sel: "#t" }, name: "title", value: "c" }]])}'>x</button>
+    <button id="c" data-vk-js-click='${js([["add_class", { names: ["x"] }], ["if", { cond: { exists: false } }], ["push", { h: "c0:1" }], ["end", {}],
+      ["add_class", { names: ["y"] }], ["push", { h: "c0:2" }]])}'>x</button><p id="t" title="a"></p>`);
+  p.fire("#a", "click");
+  p.fire("#b", "click");
+  p.server({ type: "patch", ref: sentRef(p, 1), error: "nope" });
+  eq(p.$("#t").getAttribute("title"), "c", "the later command's");
+  p.fire("#c", "click");
+  eq(p.ws().sent[2].target, "c0:2", "the skipped push not sent");
+  p.server({ type: "patch", ref: sentRef(p, 2), error: "nope" });
+  eq(p.$("#c").className, "x", "only y undone");
+});
+
+test("call: reads that test a condition or find nothing; vk:error on this", () => {
+  const p = open(`<input id="q" value="a"><button data-vk-js-click='${js([["call", { fn: "f", args: [{ $read: { to: { sel: "#q" }, value_eq: "a" } }, { $read: { to: { sel: "#none" }, value: true } },
+    { $read: { to: { sel: "#none" }, exists: true } }, { $read: 1, x: 2 }] }], ["call", { fn: "g" }]])}'>x</button>`);
+  let got, detail, at;
+  p.window.vuka.register("f", (ctx, ...a) => { got = a; });
+  p.window.vuka.register("g", () => { throw new Error("bang"); });
+  p.doc.addEventListener("vk:error", (e) => { detail = e.detail; at = e.target.tagName; });
+  p.fire("button", "click");
+  eq([got, detail, at], [[true, null, false, { $read: 1, x: 2 }], { error: "bang", fn: "g" }, "BUTTON"]);
+});
+
 // Calling JavaScript.
 const flush = () => new Promise((r) => setImmediate(r));
 

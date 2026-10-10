@@ -502,11 +502,14 @@
         if (out === stop) return refuse(el, rest, r), false;
         if (out && typeof out.then === "function") {
           out.then((v) => { if (v !== false) run(el, rest, e, r); },
-            (err) => { fail("live: " + a.fn + ": " + (err && err.message || err)); refuse(el, rest, r); });
+            (err) => { failed(el, a.fn, err); refuse(el, rest, r); });
           return;
         }
-      } else if (name === "if") i = branch(el, ops, i);
-      else if (name === "else_if" || name === "else") i = end(ops, i);
+      } else if (name === "if" || name === "else_if" || name === "else") {
+        const j = name === "if" ? branch(el, ops, i) : end(ops, i);
+        if (rec && ops.slice(i + 1, j).some((o) => o[0] === "push")) rec.length = 0; // a skipped push still ends a segment
+        i = j;
+      }
       else if (name === "debounce" || name === "throttle") {
         const rest = ops.slice(i + 1), r = rec;
         return pace(name, el, e, a.ms || 0, () => run(el, rest, e, r));
@@ -533,25 +536,30 @@
     }
     if (typeof fn !== "function") {
       warn("no JavaScript function " + path);
-      fail("live: no JavaScript function " + path);
-      return stop;
+      return failed(el, path, "no such function");
     }
-    const at = a.to ? targets(el, a.to)[0] || null : el;
-    const root = at && at.closest("[data-vk-id]") || document;
-    const ctx = { el: at, event: e, root, target: (to) => targets(at, to) };
+    const ctx = { el: a.to ? targets(el, a.to)[0] || null : el, event: e,
+      root: el && el.closest("[data-vk-id]") || document, target: (to) => targets(el, to) };
     try {
       return fn.apply(fns.has(path) ? undefined : self, [ctx, ...(a.args || []).map((v) => arg(el, v))]);
     } catch (err) {
-      fail("live: " + path + ": " + (err && err.message || err));
-      return stop;
+      return failed(el, path, err);
     }
   }
-  // arg resolves a read marker — {"$read": {to, value|checked|attr}} — to
-  // what the browser holds now.
+  function failed(el, fn, err) {
+    const error = String(err && err.message || err);
+    console.error("vuka:", fn + ": " + error);
+    (el && el.isConnected ? el : document).dispatchEvent(new CustomEvent("vk:error", { bubbles: true, detail: { error, fn } }));
+    return stop;
+  }
+  // arg resolves a read — {"$read": a condition} — to what the browser
+  // holds now: a value, checked state or attribute, else whether it holds.
   function arg(el, v) {
-    if (!v || typeof v !== "object" || !v.$read) return v;
+    if (!v || typeof v !== "object" || Object.keys(v).length !== 1 || !v.$read) return v;
     const c = v.$read, t = targets(el, c.to)[0];
+    if ("exists" in c) return !!t === !!c.exists;
     if (!t) return null;
+    if ("value_eq" in c || "is" in c) return holds(el, c);
     if ("checked" in c) return !!t.checked;
     if ("attr" in c) return t.getAttribute(c.attr);
     return read(t);
@@ -595,21 +603,21 @@
     const hooks = error ? p.a.on_error : p.a.on_ok;
     if (hooks) run(el && el.isConnected ? el : p.root && byID(p.root) || document.body, hooks, null, []);
   }
-  // undo puts back what a prediction changed, unless the server has changed
-  // it since (the reconciliation record is gone, or the field's server value
-  // moved).
+  // undo puts back what a prediction changed where the server's value is
+  // still the one recorded and the element still shows what it set.
+  const fieldValue = (el) => checkable(el) ? el.checked : el.value;
   function undo(r) {
     const el = r.el, t = running.get(el);
     if (t) t.finish();
     if (r.field) {
-      if (serverValue(el) !== r.server) return;
+      if (serverValue(el) !== r.server || fieldValue(el) !== r.after) return;
       if (checkable(el)) el.checked = r.before;
       else el.value = r.before;
       return;
     }
     const name = r.cls ? "class" : r.name, m = touched.get(el), k = m && m.get(name);
-    if (!k) return;
-    if (r.cls) el.classList[r.had ? "add" : "remove"](r.cls);
+    if (!k || k.server !== r.server || (r.cls ? el.classList.contains(r.cls) : val(el, name)) !== r.after) return;
+    if (r.cls) el.classList[r.before ? "add" : "remove"](r.cls);
     else if (name === TEXT) el.textContent = r.before;
     else if (r.before === null) el.removeAttribute(name);
     else el.setAttribute(name, r.before);
@@ -680,16 +688,18 @@
   // chain also notes the value before each change (rec), for a push to undo.
   const touched = new WeakMap(), TEXT = "#text";
   const val = (el, name) => name === TEXT ? el.textContent : el.getAttribute(name);
-  function note(el, name) {
-    if (rec && !rec.some((r) => r.el === el && r.name === name)) rec.push({ el, name, before: val(el, name) });
-  }
+  // A prediction's record: the value before, after, and the server's then.
   function touch(el, name, change, cls) {
-    if (cls) { if (rec) cls.forEach((c) => rec.push({ el, cls: c, had: el.classList.contains(c) })); } else note(el, name);
     let m = touched.get(el);
     if (!m) touched.set(el, (m = new Map()));
     if (!m.has(name)) m.set(name, { server: val(el, name) });
+    const server = m.get(name).server, has = (c) => el.classList.contains(c);
+    const recs = !rec ? [] : cls ? cls.map((c) => ({ el, cls: c, before: has(c), server }))
+      : [rec.find((r) => r.el === el && r.name === name) || { el, name, before: val(el, name), server }];
+    recs.forEach((r) => { if (!rec.includes(r)) rec.push(r); });
     change();
     m.get(name).value = val(el, name);
+    recs.forEach((r) => { r.after = r.cls ? has(r.cls) : val(el, name); });
   }
   function keptText(el, next) {
     const m = touched.get(el), r = m && m.get(TEXT);
@@ -742,8 +752,12 @@
   const hide = (el) => setDisplay(el, "none");
   const visibly = (el, a, on) => {
     if (!a.transition) return on ? show(el, a) : hide(el);
-    if (!on) note(el, "style"); // hidden at the transition's end
-    animate(el, a.transition, a.time, on ? () => show(el, a) : null, on ? null : () => hide(el));
+    const r = !on && rec && { el, name: "style", before: val(el, "style") }; // hidden at the end
+    if (r) rec.push(r);
+    animate(el, a.transition, a.time, on ? () => show(el, a) : null, on ? null : () => {
+      hide(el);
+      if (r) Object.assign(r, { after: val(el, "style"), server: touched.get(el).get("style").server });
+    });
   };
 
   // Transitions: during and from go on, a frame later from gives way to to,
@@ -871,18 +885,20 @@
     set_text: each((t, a) => touch(t, TEXT, () => { t.textContent = a.text == null ? "" : String(a.text); })),
     set_value: each((t, a) => {
       if (!isField(t)) return;
-      if (rec) rec.push({ el: t, field: true, before: checkable(t) ? t.checked : t.value, server: serverValue(t) });
+      const r = rec && { el: t, field: true, before: fieldValue(t), server: serverValue(t) };
+      if (r) rec.push(r);
       if (t.type === "checkbox" || t.type === "radio") t.checked = a.value === "true";
       else t.value = a.value;
+      if (r) r.after = fieldValue(t);
       t.dispatchEvent(new Event("input", { bubbles: true }));
       t.dispatchEvent(new Event("change", { bubbles: true }));
     }),
     // push sends an event to a handler as data-vk-on-<event> would.
     // Its predictions are what the chain changed since its last push.
     push: (el, a, e) => {
+      const recs = rec ? rec.splice(0) : [];
       if (!a.h) return; // rendered without a session
       if (!live) return warn("a push command needs a live page");
-      const recs = rec ? rec.splice(0) : [];
       if (!joined) return settle(track(el, a, recs), true); // not sent: it fails at once
       const type = a.event || (e ? e.type : "push");
       const msg = { type: "event", target: a.h, event: type };
