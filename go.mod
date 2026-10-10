@@ -9,3 +9,7 @@ require (
 )
 
 require github.com/vuka-lang/ui v0.5.0
+
+replace github.com/vuka-lang/vuka => ../vuka-wt-toolbar
+
+replace github.com/vuka-lang/ui => ../vuka-ui-wt-toolbar
