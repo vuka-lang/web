@@ -434,6 +434,65 @@ reloads the page (at most once in 10 seconds) for a fresh one. WebSocket
 upgrades only from the page's own origin, unless `web.LiveOrigins(patterns…)`
 allows more (`"*.example.com"`).
 
+### Navigation
+
+A paged list, tabs kept in the URL, a list and its detail pages: moving
+between them shouldn't reload the document, drop the connection or lose
+the scroll position of the page you come back to. `ui.Link` is a link a live
+page follows over its connection:
+
+```vuka
+<ui.Link href="/books/7">Dune</ui.Link>                 // navigate: another page
+<ui.Link href={shelfURL(s.page + 1)} patch>Next</ui.Link> // patch: this page, other parameters
+```
+
+It renders `<a href="…" data-vk-link>` (`="patch"`), so it stays a plain link
+without JavaScript, on a page that isn't live, in a new tab (`target`, a
+modifier key, the middle button) and to another origin — the runtime leaves
+those clicks to the browser.
+
+- **Patch** moves to another URL of the same page. The components stay
+  mounted with their state; the route runs again for the new URL (its
+  middleware too), so a Live page's props are bound from it again, and
+  its `Update` overload taking a `web.URLParams` struct gets the new
+  params first — bound the same way, from the path segment or query
+  parameter of each field's name. Then the usual patch is sent.
+- **Navigate** moves to another page: its route runs as a page load does
+  (middleware, gates, dependencies, layout), its components mount on the
+  same connection, and the old ones unmount. Under protocol v2 the page
+  arrives as a change to the trees the connection holds: a shared layout
+  isn't sent again.
+
+```vuka
+type ShelfParams struct {
+	web.URLParams
+	Page int // ?page=
+}
+
+func (s *Shelf) Mount()                { s.show(s.Page) }   // the first URL
+func (s *Shelf) Update(p ShelfParams)  { s.show(p.Page) }   // each patch
+```
+
+From a handler, `c.PushPatch(href)` and `c.PushNavigate(href)` move the page
+once the reply is applied; in a chain, `ui.JS.Patch(href)` and
+`ui.JS.Navigate(href)` do it from the browser. A URL whose route answers
+anything but a page — a redirect, an error, JSON, another origin — is
+loaded as usual, and so is any navigation while the page isn't connected,
+or one that fails.
+
+In the browser: the address changes with `pushState`, and back and forward
+patch or navigate to match (patch within one page's entries); a navigation
+scrolls to the top or to the URL's `#hash`, back restores where the page was,
+and focus moves to the new page's `[autofocus]` element, else its `<main>`,
+else its first component. The page's `<title>` follows, and its `<head>`
+elements the document lacks (stylesheets, scripts, meta tags) are added once;
+scripts in the new page's body don't run. `<html data-vk-navigating>` is
+set while a navigation is in flight, and `vk:navigate` fires on `window`
+when one completes (`detail`: `{url, patch}`). Events aren't sent while the
+page is on its way out, and a new page drops the optimistic pushes still
+waiting for the old one, without their hooks. A reconnect joins the page the
+connection moved to.
+
 ### JS commands
 
 Opening a menu, showing a dialog, moving focus or copying a snippet needs no
@@ -613,10 +672,11 @@ as is, plus:
 | `GET /_vuka/live.js?v=<hash>` | the runtime, immutable for its hash (ETag otherwise) |
 | `join` | runs the route; a second `join` on the same connection starts over; its `v` picks the protocol (above) |
 | `redirect` | sent for a join the route redirects; the connection then closes normally (1000) |
+| `navigate` | runs the URL's route (`X-Vuka-Live: navigate`) and makes its page the session's; the `patch` reply carries `url` and `token`, the new page's join token; a route that doesn't answer with a page gets `redirect` (its `Location`, else the URL) |
 | close 4001 | invalid or expired token: reload |
 | close 4004 | the route isn't a live page: the error message precedes it; no retry |
 | close 1001 | the server is stopping: reconnect |
-| request header `X-Vuka-Live: join` | on the route's run for a join |
+| request header `X-Vuka-Live: join` | on the route's run for a join (`navigate` for a navigation's) |
 
 A broadcast arriving before `join` is dropped (the join renders fresh).
 
@@ -703,8 +763,8 @@ vuka test ./...                   # also examples/ and internal/vukatest, writte
 The browser tests (`examples/live`, `TestBrowserReconnect`, `TestBrowserJS…`)
 drive a headless Chrome over the DevTools protocol (`internal/chrome`) and
 skip when none is found; `VUKA_CHROME` names the binary. The runtime's JS
-commands also run in node over a small DOM (`testdata/livejs/js.js`,
-`TestLiveJSCommands`), skipped without node.
+commands and navigation also run in node over a small DOM
+(`testdata/livejs/js.js`, `TestLiveJSCommands`), skipped without node.
 
 ## Limits
 
