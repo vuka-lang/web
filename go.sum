@@ -4,5 +4,7 @@ github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNU
 github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+github.com/vuka-lang/ui v0.3.0 h1:hXD9ZcPRa+zP74eQLhAnwFOW+IadFIoi6POyny6uUR8=
+github.com/vuka-lang/ui v0.3.0/go.mod h1:mSklUzwU2oZQK3r+JQtcK6JRqCRlc0T6znVHH8NKqn4=
 github.com/vuka-lang/vuka v0.10.0 h1:3RoWLylDjqQru4JTjYcZkAQNReUudd9JxT0kFfKanUU=
 github.com/vuka-lang/vuka v0.10.0/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=

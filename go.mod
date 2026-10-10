@@ -8,7 +8,4 @@ require (
 	github.com/vuka-lang/vuka v0.10.0
 )
 
-require github.com/vuka-lang/ui v0.2.0
-
-// Until ui's optimistic pushes are released.
-replace github.com/vuka-lang/ui => ../vuka-ui
+require github.com/vuka-lang/ui v0.3.0
