@@ -13,6 +13,7 @@
   const src = new URL(script.src, location.href);
   const url = (src.protocol === "https:" ? "wss://" : "ws://") + src.host + src.pathname.replace(/\.js$/, "") + "?t=";
   let token = script.dataset.vkToken || ""; // the page's: a navigation brings the next one
+  const toolbar = script.dataset.vkToolbar; // development: the page's toolbar record, which the socket's messages join
   const nobubble = new Set(["focus", "blur", "mouseenter", "mouseleave", "load", "error", "scroll"]);
   const listening = new Set();
   const busy = new Map(); // ref → {el, form}: elements waiting for their reply
@@ -27,7 +28,7 @@
   function connect() {
     clearTimeout(timer);
     state("connecting");
-    ws = new WebSocket(url + encodeURIComponent(token));
+    ws = new WebSocket(url + encodeURIComponent(token) + (toolbar ? "&tb=" + toolbar : ""));
     ws.onopen = join;
     ws.onmessage = (e) => receive(JSON.parse(e.data));
     ws.onclose = (e) => {

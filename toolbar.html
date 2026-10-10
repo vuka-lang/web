@@ -1,0 +1,65 @@
+{{define "panels"}}<nav class="tabs" role="tablist">
+{{- range .Panels}}<button type="button" role="tab" class="tab {{.Tone}}" data-tab="{{.Name}}">{{.Name}}{{if .Count}} <span class="count">{{.Count}}</span>{{end}}</button>{{end -}}
+</nav>
+{{- range .Panels}}<section class="panel" role="tabpanel" data-panel="{{.Name}}" hidden>{{.Body}}</section>{{end}}
+{{- if .Dropped}}<p class="foot">{{.Dropped}} more rows weren't kept.</p>{{end}}{{end}}
+
+{{define "request"}}<div class="line">
+	<span class="status s{{.Status}} {{if ge .Status 500}}err{{else if ge .Status 400}}warn{{end}}">{{if .Status}}{{.Status}}{{else}}…{{end}}</span>
+	<b>{{.Method}}</b> <code class="uri">{{.URI}}</code> <span class="dim">{{.Ms}}</span>
+</div>
+{{- if .Earlier}}<p class="note">An earlier build of the app rendered this page; its live connection's messages are recorded here.</p>{{end}}
+<table class="kv">
+	<tr><th>Route</th><td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="dim">no route</span>{{end}}</td></tr>
+	<tr><th>Handler</th><td>{{if .Func}}<code>{{.Func}}</code> <span class="dim">{{.Pos}}</span>{{else}}<span class="dim">—</span>{{end}}</td></tr>
+	<tr><th>Started</th><td>{{.Start.Format "15:04:05.000"}}</td></tr>
+</table>
+{{- if .Params}}<h4>Parameters</h4><table class="grid">
+	<tr><th>Name</th><th>From</th><th>Value</th></tr>
+	{{- range .Params}}<tr><td><code>{{.Name}}</code></td><td class="dim">{{.From}}</td><td><code class="wrap">{{.Value}}</code></td></tr>{{end}}
+</table>{{end}}
+{{- if .Header}}<h4>Request headers</h4><table class="kv headers">{{range .Header}}<tr><th>{{index . 0}}</th><td>{{index . 1}}</td></tr>{{end}}</table>{{end}}
+{{- if .Sent}}<h4>Response headers</h4><table class="kv headers">{{range .Sent}}<tr><th>{{index . 0}}</th><td>{{index . 1}}</td></tr>{{end}}</table>{{end}}
+{{end}}
+
+{{define "sql"}}{{if not .Rows}}<p class="empty">No statements.</p>{{else}}<div class="stats">
+	<span><b>{{.Count}}</b> statement{{if ne .Count 1}}s{{end}}</span><span><b>{{.Total}}</b></span>
+	{{- if .Repeated}}<span class="warn"><b>{{.Repeated}}</b> repeated</span>{{end}}
+	{{- if .Failed}}<span class="err"><b>{{.Failed}}</b> failed</span>{{end}}
+</div>
+{{- range .NPlusOne}}<div class="alert err"><b>N+1</b> — this statement ran {{.Times}} times with different arguments, once per row of an earlier result: <code class="sqltext">{{sql .SQL}}</code> Read those rows in one statement (a join, or an <code>IN</code> list).</div>{{end}}
+<table class="grid sql">
+	<tr><th class="n">#</th><th>Statement</th><th class="num">Rows</th><th class="time">Time</th></tr>
+	{{- range .Rows}}<tr class="{{.Tone}}">
+		<td class="n dim">{{.N}}</td>
+		<td><code class="sqltext">{{sql .SQL}}</code>{{if gt .Times 1}} <span class="times">×{{.Times}}</span>{{end}}
+			{{- if .Args}}<div class="args">{{.Args}}</div>{{end}}
+			{{- if .DB}}<div class="args">on {{.DB}}</div>{{end}}
+			{{- if .Err}}<div class="errtext">{{.Err}}</div>{{end}}</td>
+		<td class="num">{{.Rows}}</td>
+		<td class="time"><span class="track"><i style="{{.Bar}}"></i></span><span class="num">{{.Ms}}</span></td>
+	</tr>{{end}}
+</table>{{end}}{{end}}
+
+{{define "timeline"}}{{if not .}}<p class="empty">No spans.</p>{{else}}<div class="timeline">
+	{{- range .}}<div class="span {{.Kind}}"><span class="name" style="{{.Indent}}" title="{{.Name}}"><span class="kind">{{.Kind}}</span> {{.Name}}</span><span class="track"><i style="{{.Bar}}"></i></span><span class="num">{{.Ms}}</span></div>{{end}}
+</div>{{end}}{{end}}
+
+{{define "logs"}}{{if not .}}<p class="empty">Nothing logged.</p>{{else}}<table class="grid logs">
+	{{- range .}}<tr class="{{.Tone}}"><td class="num dim">{{.At}}</td><td><span class="level {{.Tone}}">{{.Level}}</span></td><td>{{.Msg}}{{if .Attrs}} <code class="attrs">{{.Attrs}}</code>{{end}}</td></tr>{{end}}
+</table>{{end}}{{end}}
+
+{{define "live"}}<div class="live">
+	{{- range .}}<details class="msg {{.Tone}}" data-ref="{{.Ref}}"{{if .Err}} data-err{{end}}>
+		<summary><span class="type t-{{.Type}}">{{.Type}}</span> <code>{{.Subject}}</code>
+			<span class="meta">{{.Ms}} · {{.Q}} q · {{.Bytes}} <span class="dim">{{.Clock}}</span></span>
+			{{- if .Err}}<div class="errtext">{{.Err}}</div>{{end}}</summary>
+		<div class="msgbody">
+			{{- if .SQL.Rows}}<h4>SQL</h4>{{template "sql" .SQL}}{{end}}
+			<h4>Timeline</h4>{{template "timeline" .Timeline}}
+			{{- if .Logs}}<h4>Logs</h4>{{template "logs" .Logs}}{{end}}
+		</div>
+	</details>{{end}}
+</div>{{end}}
+
+{{define "notes"}}{{if not .}}<p class="empty">Nothing noted.</p>{{else}}<ol class="notes">{{range .}}<li><pre>{{.}}</pre></li>{{end}}</ol>{{end}}{{end}}

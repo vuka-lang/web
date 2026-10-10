@@ -50,6 +50,9 @@ type App struct {
 	relay       Relay
 	hub         *hub
 
+	tb        *toolbar // nil: no development toolbar
+	noToolbar bool
+
 	noCSS     bool
 	cssSource string      // web.Tailwind's path, for the vuka command
 	css       *stylesheet // nil: pages link no stylesheet
@@ -79,6 +82,7 @@ func New(opts ...Option) *App {
 		a.router = NewServeMux()
 	}
 	a.css = a.appCSS()
+	a.tb = a.newToolbar()
 	return a
 }
 
@@ -281,7 +285,7 @@ func (a *App) build() (http.Handler, error) {
 			continue
 		}
 		for i := len(s.mw) - 1; i >= 0; i-- {
-			h = s.mw[i](h)
+			h = a.layer(s.mw[i], h)
 		}
 		a.router.Handle(s.method, s.path, h)
 	}
@@ -308,14 +312,30 @@ func (a *App) build() (http.Handler, error) {
 	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(serveLiveJS))
 	a.router.Handle(http.MethodGet, liveSocket, http.HandlerFunc(a.serveLive))
 	a.routeCSS()
+	if a.tb != nil {
+		a.routeToolbar()
+		a.tb.install()
+	}
 	if a.relay != nil {
 		a.relay.Subscribe(a.hub.deliver)
 	}
 	var h http.Handler = a.router
 	for i := len(a.mw) - 1; i >= 0; i-- {
-		h = a.mw[i](h)
+		h = a.layer(a.mw[i], h)
+	}
+	if a.tb != nil {
+		h = a.tb.wrap(h)
 	}
 	return h, nil
+}
+
+// layer wraps h in middleware; in development, in a span of the toolbar's
+// timeline too.
+func (a *App) layer(mw Middleware, h http.Handler) http.Handler {
+	if a.tb != nil {
+		return a.tb.timed(mw, h)
+	}
+	return mw(h)
 }
 
 // Handler is the app as an http.Handler, to serve or mount anywhere. It

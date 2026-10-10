@@ -67,8 +67,17 @@ func Native() bool {
 }
 
 func (x native) Event(m live.ClientMessage) any { return x.s.Handle(m) }
-func (x native) Topics() []string               { return x.s.Topics() }
-func (x native) Close()                         { x.s.Close() }
+
+// Handler is the function an event's target names, when this Vuka's
+// session says (live.Session.Handler); nil otherwise.
+func (x native) Handler(target string) any {
+	if h, ok := any(x.s).(interface{ Handler(string) any }); ok {
+		return h.Handler(target)
+	}
+	return nil
+}
+func (x native) Topics() []string { return x.s.Topics() }
+func (x native) Close()           { x.s.Close() }
 
 func (x native) Navigate(ref int, url string, rt live.Route, patch bool) (any, bool) {
 	p, err := x.s.Navigate(rt, patch)

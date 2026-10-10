@@ -201,9 +201,17 @@ func (s *stylesheet) headTags() string {
 }
 
 // linkCSS adds the stylesheet to a full page (one with </head> or </body>)
-// that doesn't link it already.
-func (a *App) linkCSS(html []byte) []byte {
-	if a.css == nil || bytes.Contains(html, []byte(cssPath)) {
+// that doesn't link it already, and in development the toolbar's script
+// for the request r.
+func (a *App) linkCSS(r *http.Request, html []byte) []byte {
+	var tags string
+	if a.css != nil && !bytes.Contains(html, []byte(cssPath)) {
+		tags = a.css.headTags()
+	}
+	if a.tb != nil {
+		tags += a.tb.tag(r)
+	}
+	if tags == "" {
 		return html
 	}
 	lower := bytes.ToLower(html)
@@ -213,7 +221,7 @@ func (a *App) linkCSS(html []byte) []byte {
 			return html
 		}
 	}
-	return append(html[:i:i], append([]byte(a.css.headTags()), html[i:]...)...)
+	return append(html[:i:i], append([]byte(tags), html[i:]...)...)
 }
 
 // cssWatchJS swaps the stylesheet's link when the server says it changed,

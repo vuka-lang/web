@@ -90,6 +90,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.OnError(f)` | replace the error page / JSON error body |
 | `web.LiveLayout(f)`, `LiveKey(k)`, `LiveOrigins(p…)`, `LiveTokenTTL(d)`, `WithRelay(r)` | live pages (below) |
 | `web.NoTailwind()`, `web.Tailwind(path)` | no stylesheet; or the project's Tailwind stylesheet at another path (below) |
+| `web.NoToolbar()` | no development toolbar (below) |
 
 `app.Build()` resolves everything — every parameter of every route, every
 result and view, the whole dependency graph — and returns all problems at
@@ -779,6 +780,71 @@ and serves pages unstyled; `vuka build` fails.
 
 `web.RegisterCSS(name, css)` serves another stylesheet at `/_vuka/<name>`;
 the file `vuka build` generates registers `app.css` with it.
+
+## Development toolbar
+
+Why is this page slow, which statements did it run, what did that click
+do? In development every full page answers on the spot: a handle on its
+right edge shows the request's time and statement count, and opens a
+drawer of panels for that request.
+
+- **Request**: method, path, the route's pattern, the handler (its name,
+  file and line), the status, the arguments the handler was called with
+  and where each came from (path, query, body, dependency), and the
+  request's and response's headers (cookies and credentials hidden).
+- **SQL**: each statement in order, with its arguments, rows and time as
+  a bar. A statement run more than once is amber; run three times or more
+  with different arguments it is named as an N+1, one statement per row
+  of an earlier result. A failed or refused statement is red.
+- **Timeline**: the app's and the route's middleware, each call decorator
+  (`@timed`), the handler, the render and the statements, as bars against
+  the request's time.
+- **Logs**: what `slog`'s default logger wrote for the request — with its
+  context (`slog.InfoContext(ctx, …)`) or from the request's goroutine.
+  The console gets it as before.
+- **Live**: on a live page, each message its connection carried — the
+  join, each event (`Counter.Inc (click)`), navigation and broadcast —
+  with its time, statements, reply size and what it ran. A message that
+  failed is red, and so are failures only the browser saw (a push timing
+  out, a dropped connection).
+
+The list at the top holds the page and each `fetch` and XHR call it made
+since it loaded: every response of a development app carries its record's
+id in `X-Vuka-Toolbar`. Under `vuka run -watch` the handle follows the
+next build: `building… 1.2s` while it compiles (the last good build still
+answering), `build failed` with the compiler's output in the drawer.
+
+It is on under `vuka run`, `web.Dev()` or `VUKA_ENV=development`, and off
+in a test binary (so tests see the pages the app serves), with
+`web.NoToolbar()`, and in any other app: no recording, no routes, no
+header, no hooks. The toolbar draws itself in a shadow DOM, so the page's
+styles and its own don't meet, light or dark as the system prefers. The
+page's HTML is the same but for its script tag (in `<head>`, beside the
+stylesheet's link); live updates never carry it. The app keeps its latest
+100 requests in memory and serves them under `/_vuka/toolbar/`.
+
+**Statements.** [orm](https://github.com/vuka-lang/orm)'s `ormweb` feeds
+the SQL panel by itself. Another database layer reports its statements
+with `web.NoteStatement(ctx, web.Statement{SQL, Args, DB, Start,
+Duration, Rows, Err})`; `app.Toolbar()` says whether to bother.
+
+**Panels of your own.** `web.Note(ctx, panel, v)` records a value for a
+panel from request code — a no-op outside development, so it can stay —
+and `web.AddPanel(name, render)` draws it:
+
+```vuka
+func (c *Cache) Get(ctx context.Context, key string) ([]byte, bool) {
+	v, ok := c.m[key]
+	web.Note(ctx, "Cache", Lookup{key, ok})
+	return v, ok
+}
+
+web.AddPanel("Cache", func(notes []any) ui.Node {
+	return <ul>{for _, n := range notes { <li>{n.(Lookup).Key}: {n.(Lookup).Hit}</li> }}</ul>
+})
+```
+
+A panel noted without `AddPanel` lists its values.
 
 ## Static files
 

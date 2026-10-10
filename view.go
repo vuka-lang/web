@@ -17,6 +17,7 @@ import (
 )
 
 type view struct {
+	name   string                                 // its file
 	render func(v reflect.Value) ([]byte, error)  // an html/template view's page
 	node   func(v reflect.Value) (ui.Node, error) // a templ view's page
 }
@@ -25,10 +26,17 @@ func compileView(dv declView, data reflect.Type) (*view, error) {
 	if data == nil {
 		return nil, fmt.Errorf("the view %s needs a result to render", dv.file.Path())
 	}
+	var v *view
+	var err error
 	if strings.HasSuffix(dv.file.Path(), ".templ") {
-		return templView(dv, data)
+		v, err = templView(dv, data)
+	} else {
+		v, err = htmlView(dv)
 	}
-	return htmlView(dv)
+	if v != nil {
+		v.name = dv.file.Path()
+	}
+	return v, err
 }
 
 func htmlView(dv declView) (*view, error) {

@@ -106,6 +106,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		})
 	}
 	pathNames, body := pathParams(s.path), false
+	shown := make([]tbParam, len(binders), len(binders)+len(s.params)) // what the toolbar shows of each argument
 	for i, p := range s.params {
 		b, err := a.param(s, p, pathNames, &body)
 		if err != nil {
@@ -116,6 +117,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 			return nil, fail("parameter %s %s: %v", label, p.Type, err)
 		}
 		binders = append(binders, b)
+		shown = append(shown, a.paramSource(p, pathNames))
 	}
 	out, err := results(s.fn.Type())
 	if err != nil {
@@ -131,6 +133,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 			return nil, fail("%v", err)
 		}
 	}
+	route, handler := s.method+" "+s.path, shortName(s.where)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tw := &trackingWriter{ResponseWriter: w}
 		defer func() {
@@ -142,6 +145,9 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 			}
 		}()
 		rq := a.newRequest(tw, r)
+		if a.tb != nil {
+			noteRoute(rq.ctx, route, s.where)
+		}
 		args := make([]reflect.Value, len(binders))
 		for i, b := range binders {
 			v, err := b(rq)
@@ -151,7 +157,12 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 			}
 			args[i] = v
 		}
+		if a.tb != nil {
+			noteParams(rq.ctx, showParams(shown, args))
+		}
+		end := a.span(rq.ctx, "handler", handler)
 		val, err := out.split(s.fn.Call(args))
+		end()
 		if tw.wrote && !val.IsValid() {
 			if err != nil {
 				log.Printf("web: %s %s: %v (after the handler wrote the response)", r.Method, r.URL.Path, err)
@@ -196,13 +207,15 @@ func (a *App) respond(rq *request, val reflect.Value, err error, v *view, htmlPa
 		return
 	}
 	if v != nil {
+		end := a.span(rq.ctx, "render", v.name)
 		html, err := v.render(val)
+		end()
 		if err != nil {
 			a.writeError(w, r, err, true)
 			return
 		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
-			html = a.linkCSS(html)
+			html = a.linkCSS(r, html)
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(html)
