@@ -27,7 +27,7 @@ func (m *ServeMux) Handle(method, pattern string, h http.Handler) {
 	m.mux.Handle(method+" "+pattern, h)
 }
 
-func (m *ServeMux) Param(r *http.Request, name string) string   { return r.PathValue(name) }
+func (m *ServeMux) Param(r *http.Request, name string) string        { return r.PathValue(name) }
 func (m *ServeMux) ServeHTTP(w http.ResponseWriter, r *http.Request) { m.mux.ServeHTTP(w, r) }
 
 // pathParams lists the names bound by a pattern's {name} and {name...} segments.

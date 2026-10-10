@@ -54,7 +54,7 @@ func BadRequest(msg string) *Error { return &Error{Status: http.StatusBadRequest
 // vuka.Node, so a handler returning a page can redirect instead.
 type Redirect string
 
-func (r Redirect) Error() string                         { return "redirect to " + string(r) }
+func (r Redirect) Error() string                           { return "redirect to " + string(r) }
 func (r Redirect) Render(context.Context, io.Writer) error { return nil }
 
 func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, htmlPage bool) {

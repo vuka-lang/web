@@ -51,7 +51,9 @@ var (
 	reg   = registry{views: map[string]declView{}, uses: map[string][]Middleware{}}
 )
 
-func declKey(d *vuka.Decl) string { return fmt.Sprintf("%s\x00%s\x00%s:%d", d.Pkg, d.Name, d.File, d.Line) }
+func declKey(d *vuka.Decl) string {
+	return fmt.Sprintf("%s\x00%s\x00%s:%d", d.Pkg, d.Name, d.File, d.Line)
+}
 
 func record(f func(*registry)) {
 	regMu.Lock()
@@ -82,7 +84,9 @@ func snapshot() registry {
 // Path segments in braces bind parameters of the same name: "/pets/{id}";
 // "{rest...}" matches the rest of the path.
 func Handle(method, path string) func(*vuka.Decl) {
-	return func(d *vuka.Decl) { record(func(r *registry) { r.routes = append(r.routes, declRoute{method, path, d}) }) }
+	return func(d *vuka.Decl) {
+		record(func(r *registry) { r.routes = append(r.routes, declRoute{method, path, d}) })
+	}
 }
 
 func Get(path string) func(*vuka.Decl)    { return Handle(http.MethodGet, path) }

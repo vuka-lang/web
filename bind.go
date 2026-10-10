@@ -267,7 +267,7 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 			}
 			return v, nil
 		}, nil
-	case t.Kind() == reflect.Struct || (t.Kind() == reflect.Pointer && t.Elem().Kind() == reflect.Struct):
+	case bindable(t):
 		if *body {
 			return nil, errors.New("a handler binds one struct from the request, and this is the second")
 		}
@@ -277,6 +277,15 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 		return nil, fmt.Errorf("no provider for %s, needed by %s", t, s.where)
 	}
 	return nil, errors.New("can't be bound from a request")
+}
+
+// bindable reports whether t is a struct, or pointer to one, with exported
+// fields to fill from a request: a *sql.DB is a missing dependency instead.
+func bindable(t reflect.Type) bool {
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t.Kind() == reflect.Struct && len(fieldsOf(t)) > 0
 }
 
 // scalar reports whether t is set from text: strings, numbers, bools, a

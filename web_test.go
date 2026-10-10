@@ -279,6 +279,7 @@ templ footer() {}
 }
 
 type DB struct{ name string }
+type Opaque struct{ conn int }
 type Repo struct{ db *DB }
 type Cache interface{ Get(string) string }
 type A struct{ b *B }
@@ -355,13 +356,12 @@ func TestLifecycle(t *testing.T) {
 	}
 }
 
-
 type PetService struct{ db *DB }
 type Admin struct{ svc *PetService }
 
-func (a *Admin) Index() string              { return "admin " + a.svc.db.name }
+func (a *Admin) Index() string               { return "admin " + a.svc.db.name }
 func (a *Admin) Show(id int) (string, error) { return fmt.Sprint("pet ", id), nil }
-func (a Admin) Value() string               { return "value " + a.svc.db.name }
+func (a Admin) Value() string                { return "value " + a.svc.db.name }
 
 func TestServicesAndControllers(t *testing.T) {
 	const p = "github.com/vuka-lang/web" // the types' package
@@ -524,6 +524,7 @@ func TestStartupErrors(t *testing.T) {
 	Get("/d")(decl(p, "d", func() (int, int) { return 0, 0 }))
 	Get("/e")(decl(p, "e", func(c Cache) int { return 0 }, "c"))
 	Get("/a")(decl(p, "a2", func() int { return 0 }))
+	Get("/g")(decl(p, "g", func(m *Opaque) int { return 0 }, "m"))
 	Get("/f")(vuka.MethodDecl(vuka.Decl{Name: "Repo.F", Pkg: p, File: "t.vuka", Line: 99, Func: func(*Repo) int { return 0 }}))
 	err := New(Only(p)).Build()
 	if err == nil {
@@ -537,6 +538,7 @@ func TestStartupErrors(t *testing.T) {
 		"results func() (int, int): a handler returns nothing, error, T, (T, error) or Result[T]",
 		"parameter c web.Cache: no provider for web.Cache",
 		"GET /a is declared twice: by main.a at t.vuka:",
+		"parameter m *web.Opaque: no provider for *web.Opaque",
 		"the receiver *web.Repo is not a @web.Controller or a provided type",
 	} {
 		if !strings.Contains(err.Error(), want) {
@@ -570,7 +572,9 @@ func TestDecoratorSeesRequest(t *testing.T) {
 		c.Next()
 	}
 	info := &vuka.Func{Name: "main.secret", ErrIndex: 1, CtxIndex: 0, Zero: func() []any { return []any{"", error(nil)} }}
-	inner := func(ctx context.Context) (string, error) { return "secret for " + Request(ctx).Header.Get("X-User"), nil }
+	inner := func(ctx context.Context) (string, error) {
+		return "secret for " + Request(ctx).Header.Get("X-User"), nil
+	}
 	decorated := func(ctx context.Context) (string, error) {
 		c := vuka.NewCall(info, []vuka.Decorator{guard}, nil, []any{ctx}, func(c *vuka.Call) []any {
 			s, err := inner(vuka.As[context.Context](c.Args[0]))
