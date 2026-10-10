@@ -505,12 +505,14 @@ test("call: a registered function with the element, the root and read args", () 
   eq(p.$("button").className, "after");
 });
 
-test("call: the chain waits for a promise; false stops it", async () => {
+test("call: the chain waits for a promise; false stops it; registered before the runtime loaded", async () => {
   let done;
+  const stub = { q: [], register(n, f) { this.q.push([n, f]); } };
+  stub.register("wait", () => new Promise((r) => { done = r; }));
   const p = open(`<button id="a" data-vk-js-click='${js([["call", { fn: "wait" }], ["add_class", { names: ["after"] }]])}'>x</button>
     <button id="b" data-vk-js-click='${js([["call", { fn: "no" }], ["add_class", { names: ["after"] }]])}'>x</button>
     <button id="c" data-vk-js-click='${js([["call", { fn: "later" }], ["add_class", { names: ["after"] }]])}'>x</button>`,
-    { vuka: { q: [["wait", () => new Promise((r) => { done = r; })]] } });
+    { vuka: stub });
   p.window.vuka.register("no", () => false);
   p.window.vuka.register("later", () => Promise.resolve(false));
   p.fire("#a", "click");

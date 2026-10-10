@@ -293,3 +293,121 @@ func pushingServer(t *testing.T, v int) http.Handler {
 	})
 	return mux
 }
+
+// Optimistic pushes and calls in a browser, against a stand-in server whose
+// replies wait a little: a like shows the predicted count, then the
+// server's; a failing like and a refused delete are undone; a registered
+// function runs from a click and an async one holds back the step after it.
+func TestBrowserOptimistic(t *testing.T) {
+	b := chrome.Launch(t)
+	for _, v := range []int{1, 2} {
+		t.Run(fmt.Sprint("v", v), func(t *testing.T) {
+			srv := httptest.NewServer(optimisticServer(v))
+			defer srv.Close()
+			p := b.Open(srv.URL + "/")
+			p.Wait(fmt.Sprintf(`document.documentElement.dataset.vkProtocol === "%d"`, v))
+
+			p.Click("#like")
+			p.Wait(`(() => { const b = document.querySelector("#like"); return document.querySelector("#n").textContent === "6" && b.className === "like liked" && b.hasAttribute("data-vk-pending"); })()`)
+			p.Wait(`document.querySelector("#n").textContent === "7" && !document.querySelector("#like").hasAttribute("data-vk-pending")`)
+			p.Wait(`document.querySelector("#like").className === "like liked"`)
+
+			p.Click("#bad")
+			p.Wait(`document.querySelector("#n").textContent === "8" && document.querySelector("#bad").className === "like liked"`)
+			p.Wait(`(() => { const b = document.querySelector("#bad"); return document.querySelector("#n").textContent === "7" && b.className === "like" && b.hasAttribute("data-vk-failed") && !document.querySelector("#err").hidden; })()`)
+
+			p.Click("#row-a button")
+			p.Wait(`getComputedStyle(document.querySelector("#row-a")).display === "none"`)
+			p.Wait(`!document.querySelector("#row-a")`)
+			p.Click("#row-b button")
+			p.Wait(`getComputedStyle(document.querySelector("#row-b")).display === "none"`)
+			p.Wait(`document.querySelector("#row-b") && getComputedStyle(document.querySelector("#row-b")).display !== "none"`)
+
+			p.Eval(`vuka.register("stamp", (ctx, n) => { ctx.el.dataset.stamped = n; }); vuka.register("slow", () => new Promise((r) => setTimeout(r, 300)))`, nil)
+			p.Click("#call")
+			p.Wait(`document.querySelector("#call").dataset.stamped === "7" && document.querySelector("#call").className === ""`)
+			p.Wait(`document.querySelector("#call").className === "after"`)
+		})
+	}
+}
+
+func optimisticServer(v int) http.Handler {
+	js := func(ops ...op) string {
+		b, _ := json.Marshal(ops)
+		return strings.ReplaceAll(string(b), "'", "&#39;")
+	}
+	to := func(sel string) map[string]any { return map[string]any{"sel": sel} }
+	page := func(n int, rows []string) string {
+		var lis string
+		for _, r := range rows {
+			lis += `<li id="row-` + r + `">` + r + `<button type="button" data-vk-js-click='` + js(op{"hide", map[string]any{"to": map[string]any{"closest": "li"}}},
+				op{"push", map[string]any{"h": "c1:2", "value": r, "on_error": []op{{"show", map[string]any{"to": to("#err")}}}}}) + `'>delete</button></li>`
+		}
+		return `<div data-vk-id="c1"><b id="n">` + fmt.Sprint(n) + `</b>` +
+			`<button id="like" class="like" type="button" data-vk-js-click='` + js(op{"add_class", map[string]any{"names": []string{"liked"}}},
+			op{"set_text", map[string]any{"to": to("#n"), "text": fmt.Sprint(n + 1)}}, op{"push", map[string]any{"h": "c1:0"}}) + `'>like</button>` +
+			`<button id="bad" class="like" type="button" data-vk-js-click='` + js(op{"add_class", map[string]any{"names": []string{"liked"}}},
+			op{"set_text", map[string]any{"to": to("#n"), "text": fmt.Sprint(n + 1)}}, op{"push", map[string]any{"h": "c1:1", "on_error": []op{{"show", map[string]any{"to": to("#err")}}}}}) + `'>like</button>` +
+			`<p id="err" hidden>That didn't work.</p><ul>` + lis + `</ul>` +
+			`<button id="call" type="button" value="7" data-vk-js-click='` + js(op{"call", map[string]any{"fn": "stamp", "args": []any{map[string]any{"$read": map[string]any{"value": true}}}}},
+			op{"call", map[string]any{"fn": "slow"}}, op{"add_class", map[string]any{"names": []string{"after"}}}) + `'>call</button></div>`
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/_vuka/live.js", serveLiveJS)
+	mux.HandleFunc("/_vuka/live", func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.CloseNow()
+		ctx := context.Background()
+		n, rows := 5, []string{"a", "b"}
+		for {
+			_, data, err := ws.Read(ctx)
+			if err != nil {
+				return
+			}
+			var m struct {
+				Type, Target, Value string
+				Ref                 int
+			}
+			json.Unmarshal(data, &m)
+			reply := map[string]any{"type": "patch", "ref": m.Ref}
+			switch {
+			case m.Type == "join":
+				reply["type"] = "render"
+			case m.Target == "c1:0":
+				n += 2 // someone else liked it too
+			case m.Target == "c1:1":
+				reply["error"] = "likes are closed"
+			case m.Target == "c1:2" && m.Value == "a":
+				rows = rows[1:]
+			default:
+				reply["error"] = "can't delete " + m.Value
+			}
+			if m.Type != "join" {
+				time.Sleep(300 * time.Millisecond)
+			}
+			if v == 2 {
+				reply["v"], reply["trees"] = 2, []any{map[string]any{"id": "c1", "full": true, "tree": map[string]any{"t": 0, "s": []string{page(n, rows)}, "d": []any{}}}}
+				if m.Type == "join" {
+					reply["trees"] = []any{map[string]any{"id": "c0", "full": true, "tree": map[string]any{"t": 1, "s": []string{"", ""}, "d": []any{map[string]any{"id": "c1"}}}},
+						reply["trees"].([]any)[0]}
+				}
+			} else if m.Type == "join" {
+				reply["html"] = page(n, rows)
+			} else {
+				reply["updates"] = []any{map[string]any{"id": "c1", "html": page(n, rows)}}
+			}
+			b, _ := json.Marshal(reply)
+			if ws.Write(ctx, websocket.MessageText, b) != nil {
+				return
+			}
+		}
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.WriteString(w, `<!doctype html><html><head><title>optimistic</title></head><body>`+page(5, []string{"a", "b"})+`<script src="/_vuka/live.js" data-vk-token="x" defer></script></body></html>`)
+	})
+	return mux
+}

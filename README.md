@@ -494,6 +494,76 @@ open while the list in it updates. When the server renders a different value,
 the server wins and the browser's change is dropped. A running transition's
 classes survive a patch until it ends.
 
+**Optimistic updates.** A like should count at once and a deleted row
+should go at once, without waiting for the server — and come back if the
+server refuses. The steps before a `Push` in a chain are its predictions:
+they show immediately, and the push's reply settles them.
+
+```vuka
+<button
+	class={likedClass(p.liked)}
+	onClick={ui.JS.AddClass(ui.This, "liked").SetText(ui.Ref("likes"), fmt.Sprint(p.likes+1)).
+		Push(p.Like, ui.OnError(ui.JS.Show(ui.Ref("like-error"))))}
+>
+	Like
+</button>
+<b ref="likes">{p.likes}</b>
+<p ref="like-error" hidden>Couldn't save your like.</p>
+```
+
+- **Success** (a reply without an error): the predictions stay, and
+  reconciliation goes on as for any command — wherever the server renders
+  something else (the count with everyone else's likes), the server wins.
+  `on_ok` steps run.
+- **Failure** (the handler returned an error, an `error` message, no reply
+  within the push's timeout — 10s by default — or the connection dropping
+  before the reply): each prediction is undone, latest first, except where
+  the server has rendered a different value since or a later command
+  changed it. `on_error` steps run, and `vk:error` fires as for any error.
+  A push made while the page isn't connected isn't sent (the runtime
+  doesn't queue events) and fails at once.
+- `keep` never undoes (the hooks still run). A reply that comes after its
+  push timed out is applied as usual, without running hooks again.
+
+What counts: classes, attributes, the `style` display (`Show`/`Hide`, a
+`hidden` attribute), the text `SetText` sets — reconciled like an attribute:
+it stays while the server renders the same text — and a field's value or
+checked state from `SetValue`. Each push in a chain settles only the steps
+since the previous push; a push a branch skips ends its segment too. Hooks
+run on the element the chain ran for, or the component's root once that
+element is gone; a server-pushed chain's pushes work the same way. While
+a push waits, its element has `data-vk-pending`; after a failure it has
+`data-vk-failed` until its next push — hooks for CSS:
+
+```css
+[data-vk-pending] { opacity: .6; }
+[data-vk-failed] { outline: 1px solid crimson; }
+```
+
+**Calling JavaScript.** A chart to redraw, confetti on a save, a date
+picker to open: `Call("name", args…)` calls a page function with
+`ctx` — `{el, event, root, target(spec)}` — and the arguments, which may be
+reads of the page at that moment (a field's value, a checkbox, an
+attribute). Register functions with `vuka.register`; the first line lets a
+script run before the runtime (its registrations wait in `vuka.q`):
+
+```html
+<script>
+  window.vuka ||= { q: [], register(name, fn) { this.q.push([name, fn]); } };
+  vuka.register("confetti", (ctx, n) => fire(ctx.el, n));
+</script>
+```
+
+Otherwise the name is a dotted path on `window` (`"Picker.refresh"`, called
+with `Picker` as `this`), never evaluated as code. A returned promise holds
+the rest of the chain until it settles; `false` stops the chain as a
+declined `Confirm` does. An unknown function, a throw or a rejection stops
+the chain and fires `vk:error` on the element (`detail`: `{error, fn}`);
+when it happens among a push's predictions, that push fails without being
+sent — its predictions are undone and its `on_error` runs. (A chain that
+waits on a promise doesn't hold back a `data-vk-on-…` handler on the same
+element; put the `Push` in the chain.)
+
 **Without a connection.** Commands need no session: a page whose only
 `data-vk-` attributes are commands gets the runtime script without a token,
 runs its commands, and never opens a WebSocket — a static page can have menus
