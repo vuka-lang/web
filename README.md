@@ -431,6 +431,35 @@ reloads the page (at most once in 10 seconds) for a fresh one. WebSocket
 upgrades only from the page's own origin, unless `web.LiveOrigins(patterns…)`
 allows more (`"*.example.com"`).
 
+### Protocol versions
+
+The runtime joins asking for **protocol v2** (`{"type":"join","v":2}`) and
+follows whatever the server answers:
+
+- **v2, render trees.** Each component instance arrives as a tree: its
+  *statics* (the markup the JSX fixes) around its *dynamics* (what Go
+  expressions render), loops as item frames keyed by `key`, nested instances
+  as references. Statics travel once per connection and are referred to by
+  id; long strings are kept by the connection too. After an event or a
+  broadcast the server sends, for each instance whose output changed, only
+  the dynamics that changed: a new text or attribute, loop steps (keep,
+  skip, insert, move a keyed item, change one in place), a token patch of a
+  long string — or the instance's plain HTML when that is smaller. The
+  runtime applies the changes to the trees it holds, renders the changed
+  instances' HTML from them and morphs the page with it exactly as in v1,
+  so focus, caret, typed values, busy states and `data-vk-ignore` behave the
+  same. A counter's click is ~70 bytes instead of ~250; a todo list's
+  events ~3–4× less than v1 (the examples' browser tests log both). A reply
+  the runtime can't apply to its trees makes it join again.
+- **v1, HTML.** Each changed instance's whole HTML (`updates`), morphed in.
+  A Vuka session that doesn't speak v2 answers a v2 join in v1, and the page
+  works as before.
+
+`web.LiveProtocol(1)` makes the app answer in v1 whatever the page asks
+(`LiveProtocol(2)`, the default, uses v2 when the Vuka session speaks it).
+The format is Vuka's [protocol v2](https://github.com/vuka-lang/vuka/blob/main/docs/features/components.md#protocol-v2-render-trees);
+`<html data-vk-protocol="2">` says which one a page got.
+
 ### The wire, beyond Vuka's protocol
 
 Vuka's [wire protocol](https://github.com/vuka-lang/vuka/blob/main/docs/features/components.md#the-wire-protocol)
@@ -440,7 +469,7 @@ as is, plus:
 |---|---|
 | `GET /_vuka/live?t=<token>` | the WebSocket; the token in the URL, so a bad one is refused before any message |
 | `GET /_vuka/live.js?v=<hash>` | the runtime, immutable for its hash (ETag otherwise) |
-| `join` | runs the route; a second `join` on the same connection starts over |
+| `join` | runs the route; a second `join` on the same connection starts over; its `v` picks the protocol (above) |
 | `redirect` | sent for a join the route redirects; the connection then closes normally (1000) |
 | close 4001 | invalid or expired token: reload |
 | close 4004 | the route isn't a live page: the error message precedes it; no retry |

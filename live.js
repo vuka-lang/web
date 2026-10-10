@@ -84,7 +84,7 @@
           }
         }
         const done = [];
-        for (const u of ups) if (!done.some((el) => el.isConnected && el.contains(byID(u.id)))) done.push(apply(u));
+        for (const u of ups) if (!done.some((el) => el && el.isConnected && el.contains(byID(u.id)))) done.push(apply(u));
         if (b && b.form && !m.error && b.form.isConnected) b.form.reset();
         if (m.error) fail(m.error, m.ref);
         emit("vk:patched", { ids: ups.map((u) => u.id) });
