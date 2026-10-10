@@ -196,9 +196,16 @@ func (a *App) respond(rq *request, val reflect.Value, err error, v *view, htmlPa
 		return
 	}
 	if v != nil {
-		if err := v.render(w, r, val); err != nil {
+		html, err := v.render(val)
+		if err != nil {
 			a.writeError(w, r, err, true)
+			return
 		}
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			html = a.linkCSS(html)
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(html)
 		return
 	}
 	writeJSON(w, http.StatusOK, x)
