@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -16,6 +17,24 @@ type Starter interface{ Start(context.Context) error }
 // Stopper is a provided value with work to do when the app stops: Stop is
 // called in the reverse order of construction.
 type Stopper interface{ Stop(context.Context) error }
+
+// hook is one step of the app's lifecycle: a value's Start/Stop or a hook
+// added with OnStart/OnStop.
+type hook struct {
+	name        string
+	start, stop func(context.Context) error
+}
+
+func valueHook(name string, v reflect.Value) hook {
+	h := hook{name: name}
+	if s, ok := v.Interface().(Starter); ok {
+		h.start = s.Start
+	}
+	if s, ok := v.Interface().(Stopper); ok {
+		h.stop = s.Stop
+	}
+	return h
+}
 
 type provider struct {
 	fn     reflect.Value // nil for a supplied value
@@ -30,7 +49,7 @@ type provider struct {
 type container struct {
 	mu        sync.Mutex
 	providers map[reflect.Type]*provider
-	order     []*provider // in construction order
+	hooks     []hook // supplied values and hooks as added, built values as built
 	errs      []error
 }
 
@@ -38,17 +57,17 @@ var errType = typeOf[error]()
 
 func newContainer() *container { return &container{providers: map[reflect.Type]*provider{}} }
 
-func (c *container) provide(ctor any, source string) {
+func (c *container) provide(ctor any, source string) *provider {
 	v := reflect.ValueOf(ctor)
 	if !v.IsValid() {
 		c.errs = append(c.errs, fmt.Errorf("web: Provide(nil)"))
-		return
+		return nil
 	}
 	p := &provider{source: source}
 	if t := v.Type(); t.Kind() == reflect.Func {
 		if t.NumOut() == 0 || t.NumOut() > 2 || (t.NumOut() == 2 && t.Out(1) != errType) || t.IsVariadic() {
 			c.errs = append(c.errs, fmt.Errorf("web: constructor %s must be func(deps…) T or func(deps…) (T, error)", t))
-			return
+			return nil
 		}
 		p.fn, p.out, p.hasErr = v, t.Out(0), t.NumOut() == 2
 		for i := 0; i < t.NumIn(); i++ {
@@ -65,9 +84,13 @@ func (c *container) provide(ctor any, source string) {
 	}
 	if old, dup := c.providers[p.out]; dup {
 		c.errs = append(c.errs, fmt.Errorf("web: %s is provided twice: by %s and by %s", p.out, old.source, p.source))
-		return
+		return nil
 	}
 	c.providers[p.out] = p
+	if p.built {
+		c.hooks = append(c.hooks, valueHook(p.out.String(), p.value))
+	}
+	return p
 }
 
 func (c *container) has(t reflect.Type) bool { _, ok := c.providers[t]; return ok }
@@ -140,18 +163,24 @@ func (c *container) build(t reflect.Type, path []reflect.Type) (reflect.Value, e
 		return reflect.Value{}, fmt.Errorf("web: %s: %w", p.source, out[1].Interface().(error))
 	}
 	p.value, p.built = out[0], true
-	c.order = append(c.order, p)
+	c.hooks = append(c.hooks, valueHook(p.out.String(), p.value))
 	return p.value, nil
+}
+
+func (c *container) hook(h hook) {
+	c.mu.Lock()
+	c.hooks = append(c.hooks, h)
+	c.mu.Unlock()
 }
 
 func (c *container) start(ctx context.Context) error {
 	c.mu.Lock()
-	order := append([]*provider(nil), c.order...)
+	hooks := slices.Clone(c.hooks)
 	c.mu.Unlock()
-	for _, p := range order {
-		if s, ok := p.value.Interface().(Starter); ok {
-			if err := s.Start(ctx); err != nil {
-				return fmt.Errorf("web: starting %s: %w", p.out, err)
+	for _, h := range hooks {
+		if h.start != nil {
+			if err := h.start(ctx); err != nil {
+				return fmt.Errorf("web: starting %s: %w", h.name, err)
 			}
 		}
 	}
@@ -160,13 +189,13 @@ func (c *container) start(ctx context.Context) error {
 
 func (c *container) stop(ctx context.Context) error {
 	c.mu.Lock()
-	order := append([]*provider(nil), c.order...)
+	hooks := slices.Clone(c.hooks)
 	c.mu.Unlock()
 	var errs []error
-	for i := len(order) - 1; i >= 0; i-- {
-		if s, ok := order[i].value.Interface().(Stopper); ok {
-			if err := s.Stop(ctx); err != nil {
-				errs = append(errs, fmt.Errorf("web: stopping %s: %w", order[i].out, err))
+	for _, h := range slices.Backward(hooks) {
+		if h.stop != nil {
+			if err := h.stop(ctx); err != nil {
+				errs = append(errs, fmt.Errorf("web: stopping %s: %w", h.name, err))
 			}
 		}
 	}

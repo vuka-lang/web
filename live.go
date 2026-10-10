@@ -85,24 +85,24 @@ func (a *App) Live(path string, component vuka.Stateful, opts ...LiveOption) *Ap
 
 // LiveLayout is the layout of every Live page without its own.
 func LiveLayout(layout func(page vuka.Node) vuka.Node) Option {
-	return optionFunc(func(a *App) { a.liveLayout = layout })
+	return OptionFunc(func(a *App) { a.liveLayout = layout })
 }
 
 // LiveKey is the key signing live pages' join tokens. Without it each app
 // draws a random one, so a page rendered by one process can't join another:
 // set it when several replicas serve the app.
-func LiveKey(key []byte) Option { return optionFunc(func(a *App) { a.liveKey = key }) }
+func LiveKey(key []byte) Option { return OptionFunc(func(a *App) { a.liveKey = key }) }
 
 // LiveOrigins lets pages of other origins open live connections: host
 // patterns as path.Match takes them ("app.example.com", "*.example.com").
 // By default only the app's own origin may.
 func LiveOrigins(patterns ...string) Option {
-	return optionFunc(func(a *App) { a.liveOrigins = append(a.liveOrigins, patterns...) })
+	return OptionFunc(func(a *App) { a.liveOrigins = append(a.liveOrigins, patterns...) })
 }
 
 // LiveTokenTTL is how long a rendered live page may (re)join; 12 hours by
 // default. A page older than that reloads when it reconnects.
-func LiveTokenTTL(d time.Duration) Option { return optionFunc(func(a *App) { a.liveTTL = d }) }
+func LiveTokenTTL(d time.Duration) Option { return OptionFunc(func(a *App) { a.liveTTL = d }) }
 
 const (
 	livePrefix = "/_vuka/"

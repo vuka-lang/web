@@ -75,6 +75,10 @@ the same function still wrap it — `@audited` below runs on every call.
 | Option | |
 |---|---|
 | `web.Provide(ctors…)` | constructors for the container (also `app.Provide`) |
+| `web.Eager(ctors…)` | constructors built and started even when nothing needs them (also `app.Eager`) |
+| `web.OnStart(fn)`, `web.OnStop(fn)` | lifecycle hooks (also `app.OnStart`/`app.OnStop`; below) |
+| `web.Check(fn)` | a check `Build` runs with its own (also `app.Check`) |
+| `web.Options(opts…)`, `web.OptionFunc(f)` | several options as one; an option written as code (below) |
 | `web.Use(mw…)` | app-wide middleware (also `app.Use`); runs for every request, 404s included |
 | `web.WithRouter(r)` | another router (below) |
 | `web.Only(pkgs…)` | take only the declarations of these packages (import paths; `"main"`) |
@@ -92,6 +96,31 @@ web: GET /pets (main.ListPets at pages.vuka:24): component PetsPage: main.PetLis
 web: GET /admin (main.Admin at admin.vuka:9): parameter db *sql.DB: no provider for *sql.DB, needed by main.Admin at admin.vuka:9
 web: dependency cycle: *main.A -> *main.B -> *main.A
 ```
+
+### Options from libraries
+
+A library hands the app one option that does all it needs: `web.Options`
+groups options, and `web.OptionFunc` runs code against the app inside `New`,
+before `Build`, where every `App` method is open to it.
+
+```go
+func Cache(cfg Config) web.Option {
+	return web.Options(
+		web.Provide(cfg, NewCache),
+		web.OptionFunc(func(a *web.App) {
+			a.Use(cacheHeaders)
+			a.Get("/cache/stats", (*Cache).Stats)
+			a.OnStop(func(ctx context.Context) error { return flush(ctx) })
+		}),
+		web.Check(func(*web.App) error { return cfg.Validate() }),
+	)
+}
+
+app := web.New(Cache(cfg), web.Dev())
+```
+
+A check's error is one of `Build`'s, reported with the routes' and the
+container's.
 
 `app.Handler()` (an `http.Handler` to mount anywhere; it panics when Build
 fails), `app.Start(ctx)` and `app.Run(addr)` call Build first, so nothing is
@@ -209,7 +238,7 @@ A handler returns nothing, `error`, `T`, `(T, error)` or `Result[T]`.
 
 | result | response |
 |---|---|
-| nothing, a nil error | 204 |
+| nothing, a nil error | 204 — unless the handler wrote the response itself through its `http.ResponseWriter` |
 | `vuka.Node` (JSX, templ) | HTML |
 | `T` with `@web.Template` | the view, HTML |
 | `T` without | JSON, 200 |
@@ -222,7 +251,8 @@ result) and `{"error": …, "status": …}` elsewhere. `web.NotFound`,
 `Unauthorized`, `Forbidden`, `Conflict`, `web.BadRequest(msg)`,
 `web.Status(code, format, args…)`; `errors.Is(err, web.NotFound)` matches by
 status. `web.Redirect` is also a `vuka.Node`, so a page handler can return it.
-Panics answer 500.
+Panics answer 500. A handler that wrote the response and then returns an
+error can't change it any more: the error is logged.
 
 ## Views
 
@@ -429,9 +459,31 @@ lazy singleton per app; dependencies match by exact type (provide a
 constructor returning the interface to inject an interface). Missing
 providers, cycles and duplicates are Build errors.
 
-A provided value implementing `Start(context.Context) error` is started by
-`app.Start`/`Run` in dependency order; `Stop(context.Context) error` runs on
-shutdown in reverse order.
+### Lifecycle
+
+`app.Start` (and `Run`) builds what the routes need, then runs the start
+sequence; `app.Stop` runs the stop sequence, its reverse. The sequence holds,
+in order:
+
+- ready values given to `Provide`, and hooks added with `OnStart`/`OnStop`,
+  in the order they were added — a ready value was given explicitly, so it
+  starts even when nothing needs it;
+- values built from constructors, in dependency order — only those something
+  needs (a route, a live page, another value), and those provided with
+  `web.Eager`.
+
+A value implementing `Start(context.Context) error` is started and one
+implementing `Stop(context.Context) error` is stopped. The first failing
+start ends `Start` with its error; every stop runs, and their errors are
+joined.
+
+```go
+app := web.New(
+	web.Provide(cfg),                 // cfg.Start, if any, runs first
+	web.OnStart(migrate),
+	web.Eager(NewMailer),             // started though no route takes it
+)
+```
 
 ## Router
 

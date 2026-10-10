@@ -34,6 +34,8 @@ type App struct {
 	specs   []*routeSpec
 	statics []func()
 	needs   []reflect.Type
+	eager   []*provider
+	checks  []func(*App) error
 
 	envFiles []string // nil: the defaults
 	env      *envLoad
@@ -85,6 +87,44 @@ func (a *App) Provide(ctors ...any) *App {
 	for _, c := range ctors {
 		a.c.provide(c, "")
 	}
+	return a
+}
+
+// Eager adds constructors whose values Start builds (and starts, when they
+// implement Starter) even when nothing needs them. Provided values that
+// aren't functions always start; constructors otherwise only when needed.
+func (a *App) Eager(ctors ...any) *App {
+	a.mutable("Eager")
+	for _, c := range ctors {
+		if p := a.c.provide(c, ""); p != nil {
+			a.eager = append(a.eager, p)
+		}
+	}
+	return a
+}
+
+// OnStart adds fn to the app's start sequence, after the values supplied
+// and the hooks added before it and before the values Start constructs.
+func (a *App) OnStart(fn func(context.Context) error) *App {
+	a.mutable("OnStart")
+	a.c.hook(hook{name: funcName(reflect.ValueOf(fn)), start: fn})
+	return a
+}
+
+// OnStop adds fn to the app's stop sequence, which runs in the reverse order
+// of the start sequence: fn runs after everything started after it was added
+// has stopped.
+func (a *App) OnStop(fn func(context.Context) error) *App {
+	a.mutable("OnStop")
+	a.c.hook(hook{name: funcName(reflect.ValueOf(fn)), stop: fn})
+	return a
+}
+
+// Check adds fn to the checks Build runs once the routes are compiled; its
+// error is reported with Build's own.
+func (a *App) Check(fn func(*App) error) *App {
+	a.mutable("Check")
+	a.checks = append(a.checks, fn)
 	return a
 }
 
@@ -238,6 +278,16 @@ func (a *App) build() (http.Handler, error) {
 		}
 		a.router.Handle(s.method, s.path, h)
 	}
+	for _, p := range a.eager {
+		if err := a.c.check(p.out, p.source); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, f := range a.checks {
+		if err := f(a); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	errs = append(errs, takeEnvErrors()...) // the routes' middleware may read Env
 	if err := a.checkRequired(); err != nil {
 		errs = append(errs, err)
@@ -282,8 +332,10 @@ func Resolve[T any](a *App) (T, error) {
 	return v.Interface().(T), nil
 }
 
-// Start builds every dependency the routes need, then calls Start on each
-// provided value implementing Starter, in dependency order.
+// Start builds every dependency the routes need and every Eager one, then
+// runs the start sequence: each supplied or built value implementing Starter
+// and each OnStart hook, in dependency order (supplied values and hooks as
+// added, before the values built from constructors).
 func (a *App) Start(ctx context.Context) error {
 	if err := a.Build(); err != nil {
 		return err
@@ -293,14 +345,19 @@ func (a *App) Start(ctx context.Context) error {
 			return err
 		}
 	}
+	for _, p := range a.eager {
+		if _, err := a.c.get(p.out); err != nil {
+			return err
+		}
+	}
 	if err := errors.Join(takeEnvErrors()...); err != nil {
 		return err
 	}
 	return errors.Join(a.c.start(ctx), errors.Join(takeEnvErrors()...))
 }
 
-// Stop calls Stop on each built value implementing Stopper, in reverse
-// order of construction.
+// Stop runs the stop sequence: each value implementing Stopper and each
+// OnStop hook, in the reverse order of the start sequence.
 func (a *App) Stop(ctx context.Context) error {
 	a.hub.closeAll()
 	return a.c.stop(ctx)

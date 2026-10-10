@@ -145,7 +145,7 @@ func loadEnv(files []string) *envLoad {
 // wins. Relative paths are read from the working directory, or the nearest
 // parent up to the module root holding one of them.
 func DotEnv(files ...string) Option {
-	return optionFunc(func(a *App) { a.envFiles = append([]string{}, files...) })
+	return OptionFunc(func(a *App) { a.envFiles = append([]string{}, files...) })
 }
 
 // NoDotEnv keeps New from reading env files.
@@ -154,7 +154,7 @@ func NoDotEnv() Option { return DotEnv() }
 // Require fails Build when one of the environment variables is unset or
 // empty, naming each missing one and the env files looked for.
 func Require(keys ...string) Option {
-	return optionFunc(func(a *App) { a.required = append(a.required, keys...) })
+	return OptionFunc(func(a *App) { a.required = append(a.required, keys...) })
 }
 
 func (a *App) checkRequired() error {

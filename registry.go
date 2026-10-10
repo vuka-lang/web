@@ -12,6 +12,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -154,18 +155,45 @@ func Controller(prefix string) func(*vuka.Type) {
 // Option configures an App.
 type Option interface{ apply(*App) }
 
-type optionFunc func(*App)
+// OptionFunc is an Option written as a function of the App, for libraries
+// defining their own options: it runs inside New, before Build, and may call
+// any of the App's methods (Provide, Use, Handle, OnStart, Check, …).
+type OptionFunc func(*App)
 
-func (f optionFunc) apply(a *App) { f(a) }
+func (f OptionFunc) apply(a *App) { f(a) }
+
+// Options is one Option applying opts in order; nil options are skipped.
+func Options(opts ...Option) Option {
+	return OptionFunc(func(a *App) {
+		for _, o := range opts {
+			if o != nil {
+				o.apply(a)
+			}
+		}
+	})
+}
 
 // Provide adds constructors to the app's container: func(deps…) T or
 // func(deps…) (T, error). A value that isn't a function is provided as is.
-func Provide(ctors ...any) Option { return optionFunc(func(a *App) { a.Provide(ctors...) }) }
+func Provide(ctors ...any) Option { return OptionFunc(func(a *App) { a.Provide(ctors...) }) }
+
+// Eager provides constructors whose values are built and started by Start
+// even when no route needs them (workers, schedulers).
+func Eager(ctors ...any) Option { return OptionFunc(func(a *App) { a.Eager(ctors...) }) }
+
+// OnStart adds a hook Start runs; see App.OnStart.
+func OnStart(fn func(context.Context) error) Option { return OptionFunc(func(a *App) { a.OnStart(fn) }) }
+
+// OnStop adds a hook Stop runs; see App.OnStop.
+func OnStop(fn func(context.Context) error) Option { return OptionFunc(func(a *App) { a.OnStop(fn) }) }
+
+// Check adds a check Build runs; see App.Check.
+func Check(fn func(*App) error) Option { return OptionFunc(func(a *App) { a.Check(fn) }) }
 
 // Only limits the declared routes, services and controllers an app takes to
 // those of the given packages (import paths; "main" for the main package).
 func Only(pkgs ...string) Option {
-	return optionFunc(func(a *App) {
+	return OptionFunc(func(a *App) {
 		a.only = map[string]bool{}
 		for _, p := range pkgs {
 			a.only[p] = true
@@ -175,14 +203,14 @@ func Only(pkgs ...string) Option {
 
 // Dev shows the messages of internal errors in responses; so does the
 // environment variable VUKA_ENV=development.
-func Dev() Option { return optionFunc(func(a *App) { a.dev = true }) }
+func Dev() Option { return OptionFunc(func(a *App) { a.dev = true }) }
 
 // WithRouter serves the app's routes with r instead of net/http's ServeMux.
-func WithRouter(r Router) Option { return optionFunc(func(a *App) { a.router = r }) }
+func WithRouter(r Router) Option { return OptionFunc(func(a *App) { a.router = r }) }
 
 // OnError replaces the error page and JSON error body.
 func OnError(f func(w http.ResponseWriter, r *http.Request, e *Error, html bool)) Option {
-	return optionFunc(func(a *App) { a.onError = f })
+	return OptionFunc(func(a *App) { a.onError = f })
 }
 
 func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }

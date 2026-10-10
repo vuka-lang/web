@@ -42,7 +42,7 @@ type Relay interface {
 
 // WithRelay sends the app's broadcasts through r instead of delivering them
 // in-process only.
-func WithRelay(r Relay) Option { return optionFunc(func(a *App) { a.relay = r }) }
+func WithRelay(r Relay) Option { return OptionFunc(func(a *App) { a.relay = r }) }
 
 // Broadcast delivers msg to the Update methods of every live component
 // subscribed to topic, in every connected page of the app serving ctx (a

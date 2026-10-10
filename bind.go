@@ -1,12 +1,16 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"encoding"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"mime"
+	"net"
 	"net/http"
 	"reflect"
 	"slices"
@@ -127,15 +131,16 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tw := &trackingWriter{ResponseWriter: w}
 		defer func() {
 			if p := recover(); p != nil {
-				if p == http.ErrAbortHandler {
+				if p == http.ErrAbortHandler || tw.wrote {
 					panic(p)
 				}
 				a.writeError(w, r, fmt.Errorf("panic: %v", p), htmlPage)
 			}
 		}()
-		rq := a.newRequest(w, r)
+		rq := a.newRequest(tw, r)
 		args := make([]reflect.Value, len(binders))
 		for i, b := range binders {
 			v, err := b(rq)
@@ -146,6 +151,12 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 			args[i] = v
 		}
 		val, err := out.split(s.fn.Call(args))
+		if tw.wrote && !val.IsValid() {
+			if err != nil {
+				log.Printf("web: %s %s: %v (after the handler wrote the response)", r.Method, r.URL.Path, err)
+			}
+			return
+		}
 		a.respond(rq, val, err, v, htmlPage)
 	}), nil
 }
@@ -470,3 +481,40 @@ func structBinder(t reflect.Type, pathNames []string, router Router) binder {
 		return v, nil
 	}
 }
+
+// trackingWriter notes whether the handler wrote the response itself, so
+// that a handler returning nothing after writing gets no default status.
+type trackingWriter struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *trackingWriter) WriteHeader(code int) {
+	if code >= 200 || code == http.StatusSwitchingProtocols {
+		w.wrote = true
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *trackingWriter) Write(b []byte) (int, error) {
+	w.wrote = true
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *trackingWriter) ReadFrom(r io.Reader) (int64, error) {
+	w.wrote = true
+	return io.Copy(w.ResponseWriter, r)
+}
+
+func (w *trackingWriter) Flush() {
+	w.wrote = true
+	http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+func (w *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	w.wrote = true
+	return http.NewResponseController(w.ResponseWriter).Hijack()
+}
+
+// Unwrap gives http.ResponseController the underlying writer.
+func (w *trackingWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
