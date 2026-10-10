@@ -7,8 +7,13 @@ import (
 	"github.com/vuka-lang/web/internal/liveproto"
 )
 
-// Install makes the web framework answer v2 joins with this stand-in.
-func Install() { liveproto.V2 = New }
+// Install makes the web framework answer v2 joins with this stand-in, unless
+// the Vuka live session speaks v2 itself.
+func Install() {
+	if !liveproto.Native() {
+		liveproto.V2 = New
+	}
+}
 
 // New is a v2 session rendering what render returns.
 func New(ctx context.Context, render liveproto.Render) liveproto.Session {

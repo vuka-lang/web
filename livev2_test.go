@@ -99,7 +99,7 @@ func TestLiveV2Broadcast(t *testing.T) {
 	if m, raw := recv2(t, conns[0]); m.Type != "patch" || m.Ref != 0 || len(m.Trees) != 1 || !strings.Contains(raw, `"hi"`) {
 		t.Fatalf("v2 broadcast: %s", raw)
 	}
-	if m, raw := recv2(t, conns[1]); m.Type != "patch" || m.Trees != nil || !strings.Contains(raw, `\u003ehi\u003c/form`) {
+	if m, raw := recv2(t, conns[1]); m.Type != "patch" || m.Trees != nil || !strings.Contains(raw, `>hi</form>`) {
 		t.Fatalf("v1 broadcast beside v2: %s", raw)
 	}
 }

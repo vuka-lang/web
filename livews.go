@@ -248,7 +248,11 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 }
 
 func (c *conn) write(ctx context.Context, m any) {
-	b, _ := json.Marshal(m)
+	var buf bytes.Buffer
+	e := json.NewEncoder(&buf)
+	e.SetEscapeHTML(false) // markup as markup, not \u003c…
+	e.Encode(m)
+	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 	wctx, done := context.WithTimeout(ctx, writeTimeout)
 	defer done()
 	if c.ws.Write(wctx, websocket.MessageText, b) != nil {
@@ -317,12 +321,7 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
-	render := func(context.Context) vuka.Node { return j.page }
-	if min(v, c.app.liveMax) >= 2 && liveproto.V2 != nil {
-		c.s = liveproto.V2(j.ctx, render)
-	} else {
-		c.s = liveproto.V1(live.NewSession(j.ctx, render))
-	}
+	c.s = liveproto.New(j.ctx, func(context.Context) vuka.Node { return j.page }, min(v, c.app.liveMax))
 	return c.s.Join(ref), 0
 }
 
