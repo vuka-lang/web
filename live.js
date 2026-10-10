@@ -60,6 +60,7 @@
         joined = true;
         attempt = 0;
         state("connected");
+        document.documentElement.setAttribute("data-vk-protocol", m.trees ? "2" : "1");
         if (m.trees) {
           trees = tree();
           try { page(trees.apply(m.trees, true).c0); } catch (err) { fail("live: " + err.message); }

@@ -25,6 +25,7 @@ type Todo struct {
 	items  []Item
 	next   int
 	filter string
+	sorted bool
 }
 
 func (t *Todo) Add(f NewItem) error {
@@ -51,9 +52,15 @@ func (t *Todo) Toggle(id int, done bool) {
 
 func (t *Todo) Filter(q string) { t.filter = q }
 
+func (t *Todo) Sort() { t.sorted = !t.sorted }
+
 func (t *Todo) shown() []Item {
 	q := strings.ToLower(t.filter)
-	return slices.DeleteFunc(slices.Clone(t.items), func(it Item) bool { return !strings.Contains(strings.ToLower(it.Text), q) })
+	out := slices.DeleteFunc(slices.Clone(t.items), func(it Item) bool { return !strings.Contains(strings.ToLower(it.Text), q) })
+	if t.sorted {
+		slices.SortStableFunc(out, func(a, b Item) int { return strings.Compare(strings.ToLower(a.Text), strings.ToLower(b.Text)) })
+	}
+	return out
 }
 
 func (t *Todo) left() int {
@@ -83,6 +90,9 @@ func (t *Todo) Render() vuka.Node {
 			onInput={t.Filter}
 			data-vk-debounce="150"
 		/>
+		<button type="button" class="sort" onClick={t.Sort}>
+			{sortLabel(t.sorted)}
+		</button>
 		<ul>
 			{for _, it := range t.shown() {
 				<li
@@ -104,6 +114,13 @@ func (t *Todo) Render() vuka.Node {
 		</ul>
 		<p class="left">{t.left()} left</p>
 	</section>
+}
+
+func sortLabel(sorted bool) string {
+	if sorted {
+		return "Unsort"
+	}
+	return "Sort A–Z"
 }
 
 func doneClass(done bool) string {

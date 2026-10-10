@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,12 +10,41 @@ import (
 
 	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/web/internal/livetree"
 )
 
-func server(t *testing.T) *httptest.Server {
-	srv := httptest.NewServer(web.New(web.LiveLayout(livePage)).Handler())
+// Until the Vuka live session speaks protocol v2, the tests answer v2 joins
+// with livetree's stand-in.
+func init() { livetree.Install() }
+
+func server(t *testing.T, opts ...web.Option) *httptest.Server {
+	srv := httptest.NewServer(web.New(append([]web.Option{web.LiveLayout(livePage)}, opts...)...).Handler())
 	t.Cleanup(srv.Close)
 	return srv
+}
+
+// protocols runs a browser test once per live protocol version, the server
+// capped to it; each page checks it speaks it.
+func protocols(t *testing.T, test func(t *testing.T, open func(path string) *chrome.Page)) {
+	b := chrome.Launch(t)
+	for _, v := range []int{1, 2} {
+		t.Run(fmt.Sprint("v", v), func(t *testing.T) {
+			srv := server(t, web.LiveProtocol(v))
+			test(t, func(path string) *chrome.Page {
+				p := b.Open(srv.URL + path)
+				p.Wait(fmt.Sprintf(`document.documentElement.dataset.vkProtocol === "%d"`, v))
+				return p
+			})
+		})
+	}
+}
+
+// perEvent logs the payload bytes the page received per reply since w.
+func perEvent(t *testing.T, p *chrome.Page, w chrome.Wire, what string) {
+	now := p.Wire()
+	if n := now.Msgs - w.Msgs; n > 0 {
+		t.Logf("%s: %d replies, %d bytes, %d bytes per reply (render: %d bytes)", what, n, now.In-w.In, (now.In-w.In)/n, w.In)
+	}
 }
 
 func TestPages(t *testing.T) {
@@ -38,70 +68,100 @@ func TestPages(t *testing.T) {
 }
 
 func TestBrowserCounter(t *testing.T) {
-	srv := server(t)
-	b := chrome.Launch(t)
-	p := b.Open(srv.URL + "/counter?start=3")
-	p.Click(".counter button:last-of-type")
-	p.WaitText("output", "4")
-	p.Click(".counter button:first-of-type")
-	p.Click(".counter button:first-of-type")
-	p.WaitText("output", "2")
+	protocols(t, func(t *testing.T, open func(string) *chrome.Page) {
+		p := open("/counter?start=3")
+		p.Click(".counter button:last-of-type")
+		p.WaitText("output", "4")
+		p.Click(".counter button:first-of-type")
+		p.Click(".counter button:first-of-type")
+		p.WaitText("output", "2")
+		w := p.Wire()
+		for i := 3; i <= 22; i++ {
+			p.Click(".counter button:last-of-type")
+			p.WaitText("output", fmt.Sprint(i))
+		}
+		perEvent(t, p, w, "counter")
 
-	home := b.Open(srv.URL + "/")
-	home.Click(".counter button:last-of-type")
-	home.WaitText("output", "11")
+		home := open("/")
+		home.Click(".counter button:last-of-type")
+		home.WaitText("output", "11")
+	})
 }
 
 func TestBrowserTodo(t *testing.T) {
-	srv := server(t)
-	p := chrome.Launch(t).Open(srv.URL + "/todo")
-	p.Eval(`window.errs = []; document.addEventListener("vk:error", (e) => errs.push(e.detail.message))`, nil)
-	p.Type("input[name=text]", "milk")
-	p.Press("Enter")
-	p.WaitText("#todo-1 span", "milk")
-	p.Wait(`document.querySelector("input[name=text]").value === ""`)
-	p.Type("input[name=text]", "eggs")
-	p.Click("form button")
-	p.WaitText("#todo-2 span", "eggs")
-	p.WaitText(".left", "2 left")
+	protocols(t, func(t *testing.T, open func(string) *chrome.Page) {
+		p := open("/todo")
+		w := p.Wire()
+		p.Eval(`window.errs = []; document.addEventListener("vk:error", (e) => errs.push(e.detail.message))`, nil)
+		p.Type("input[name=text]", "milk")
+		p.Press("Enter")
+		p.WaitText("#todo-1 span", "milk")
+		p.Wait(`document.querySelector("input[name=text]").value === ""`)
+		p.Type("input[name=text]", "eggs")
+		p.Click("form button")
+		p.WaitText("#todo-2 span", "eggs")
+		p.WaitText(".left", "2 left")
+		for i, it := range []string{"bread", "apples", "cheese"} {
+			p.Type("input[name=text]", it)
+			p.Press("Enter")
+			p.WaitText(fmt.Sprintf("#todo-%d span", i+3), it)
+		}
 
-	p.Click("#todo-1 input[type=checkbox]")
-	p.WaitText(".left", "1 left")
-	p.Wait(`document.querySelector("#todo-1").className === "done" && document.querySelector("#todo-1 input").checked`)
+		p.Click("#todo-1 input[type=checkbox]")
+		p.WaitText(".left", "4 left")
+		p.Wait(`document.querySelector("#todo-1").className === "done" && document.querySelector("#todo-1 input").checked`)
 
-	p.Type("input[type=search]", "eg")
-	p.Wait(`document.querySelectorAll("li").length === 1`)
-	p.Wait(`document.activeElement.type === "search" && document.activeElement.value === "eg"`)
-	p.Click("#todo-2 button")
-	p.Wait(`document.querySelectorAll("li").length === 0`)
-	p.WaitText(".left", "0 left")
+		// Reorder: the keyed items move, the same elements.
+		p.Eval(`document.querySelector("#todo-2").marked = true`, nil)
+		p.Click("button.sort")
+		p.Wait(`[...document.querySelectorAll("li span")].map((s) => s.textContent).join() === "apples,bread,cheese,eggs,milk"`)
+		p.Wait(`document.querySelector("#todo-2").marked && document.querySelector("#todo-1 input").checked`)
+		p.Click("button.sort")
+		p.Wait(`[...document.querySelectorAll("li span")].map((s) => s.textContent).join() === "milk,eggs,bread,apples,cheese"`)
+		p.Click("button.sort")
+		p.Wait(`document.querySelector("li span").textContent === "apples"`)
+		p.Click("#todo-3 button")
+		p.Wait(`[...document.querySelectorAll("li span")].map((s) => s.textContent).join() === "apples,cheese,eggs,milk"`)
 
-	p.Click("input[name=text]")
-	p.Press("Enter")
-	p.Wait(`errs[0] === "write something first"`)
+		// A field with focus keeps its value and caret while the list under
+		// it changes.
+		p.Type("input[type=search]", "e")
+		p.Wait(`document.querySelectorAll("li").length === 3`)
+		p.Type("input[type=search]", "g")
+		p.Wait(`document.querySelectorAll("li").length === 1`)
+		p.Wait(`document.activeElement.type === "search" && document.activeElement.value === "eg" && document.activeElement.selectionStart === 2`)
+		p.Click("#todo-2 button")
+		p.Wait(`document.querySelectorAll("li").length === 0`)
+		p.WaitText(".left", "2 left")
+
+		p.Click("input[name=text]")
+		p.Press("Enter")
+		p.Wait(`errs[0] === "write something first"`)
+		perEvent(t, p, w, "todo")
+	})
 }
 
 func TestBrowserChat(t *testing.T) {
-	srv := server(t)
-	b := chrome.Launch(t)
-	ann, bob := b.Open(srv.URL+"/chat/go"), b.Open(srv.URL+"/chat/go")
-	ann.Type("form.name input", "ann")
-	ann.Press("Enter")
-	ann.Wait(`document.querySelector("form.say")`)
-	bob.WaitText(".lines li:last-child", "ann joined")
-	bob.Type("form.name input", "bob")
-	bob.Press("Enter")
-	ann.WaitText(".lines li:last-child", "bob joined")
+	protocols(t, func(t *testing.T, open func(string) *chrome.Page) {
+		ann, bob := open("/chat/go"), open("/chat/go")
+		ann.Type("form.name input", "ann")
+		ann.Press("Enter")
+		ann.Wait(`document.querySelector("form.say")`)
+		bob.WaitText(".lines li:last-child", "ann joined")
+		bob.Type("form.name input", "bob")
+		bob.Press("Enter")
+		ann.WaitText(".lines li:last-child", "bob joined")
 
-	ann.Type("form.say input", "hello bob")
-	ann.Press("Enter")
-	bob.WaitText(".lines li:last-child", "ann: hello bob")
-	ann.WaitText(".lines li:last-child", "ann: hello bob")
+		ann.Type("form.say input", "hello bob")
+		ann.Press("Enter")
+		bob.WaitText(".lines li:last-child", "ann: hello bob")
+		ann.WaitText(".lines li:last-child", "ann: hello bob")
 
-	late := b.Open(srv.URL + "/chat/go")
-	late.WaitText(".lines li:last-child", "ann: hello bob")
-	other := b.Open(srv.URL + "/chat/rust")
-	if n := other.Text(".lines"); n != "" {
-		t.Errorf("another room shows %q", n)
-	}
+		late := open("/chat/go")
+		late.WaitText(".lines li:last-child", "ann: hello bob")
+		other := open("/chat/rust")
+		if n := other.Text(".lines"); n != "" {
+			t.Errorf("another room shows %q", n)
+		}
+	})
 }

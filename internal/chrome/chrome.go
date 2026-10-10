@@ -58,6 +58,7 @@ type Browser struct {
 	mu      sync.Mutex
 	next    int
 	pending map[int]chan message
+	front   *Page // the tab in front
 }
 
 type message struct {
@@ -208,6 +209,7 @@ func (b *Browser) close() {
 type Page struct {
 	b       *Browser
 	session string
+	target  string
 }
 
 // Open opens url in a new tab and waits for the page to be live.
@@ -225,11 +227,36 @@ func (b *Browser) Open(url string) *Page {
 	if err := b.call("", "Target.attachToTarget", map[string]any{"targetId": target.TargetID, "flatten": true}, &attached); err != nil {
 		b.t.Fatal(err)
 	}
-	p := &Page{b, attached.SessionID}
+	p := &Page{b, attached.SessionID, target.TargetID}
 	p.must("Page.enable", nil, nil)
+	p.must("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": wireCounter}, nil)
 	p.must("Page.navigate", map[string]any{"url": url}, nil)
 	p.Wait(`document.documentElement.dataset.vkState === "connected"`)
 	return p
+}
+
+// wireCounter counts the payload bytes of the page's WebSocket messages.
+const wireCounter = `(() => {
+	const W = window.WebSocket, n = window.__wire = { in: 0, out: 0, msgs: 0 };
+	const size = (d) => typeof d === "string" ? new TextEncoder().encode(d).length : d.byteLength || d.size || 0;
+	window.WebSocket = class extends W {
+		constructor(...a) { super(...a); this.addEventListener("message", (e) => { n.in += size(e.data); n.msgs++; }); }
+		send(d) { n.out += size(d); super.send(d); }
+	};
+})()`
+
+// Wire is what the page's WebSockets carried so far: payload bytes received
+// and sent (before any compression), and messages received.
+type Wire struct{ In, Out, Msgs int }
+
+// Wire reads the page's WebSocket counters.
+func (p *Page) Wire() Wire {
+	p.b.t.Helper()
+	var w Wire
+	if err := p.Eval(`window.__wire`, &w); err != nil {
+		p.b.t.Fatal(err)
+	}
+	return w
 }
 
 func (p *Page) must(method string, params, out any) {
@@ -303,6 +330,7 @@ func (p *Page) Click(sel string) {
 	p.b.t.Helper()
 	var at struct{ X, Y float64 }
 	p.Wait(fmt.Sprintf(`document.querySelector(%q)`, sel))
+	p.front()
 	js := fmt.Sprintf(`(() => { const el = document.querySelector(%q); el.scrollIntoView({block: "center"});
 		const r = el.getBoundingClientRect(); return {X: r.x + r.width / 2, Y: r.y + r.height / 2}; })()`, sel)
 	if err := p.Eval(js, &at); err != nil {
@@ -323,9 +351,21 @@ func (p *Page) Type(sel, text string) {
 	}
 }
 
+// front brings the page's tab to the front: input to a background tab waits
+// for a frame it doesn't get.
+func (p *Page) front() {
+	if p.b.front != p {
+		p.b.front = p
+		if err := p.b.call("", "Target.activateTarget", map[string]any{"targetId": p.target}, nil); err != nil {
+			p.b.t.Fatal(err)
+		}
+	}
+}
+
 // Press presses a key: "Enter", "Escape", …
 func (p *Page) Press(key string) {
 	p.b.t.Helper()
+	p.front()
 	down := map[string]any{"type": "keyDown", "key": key, "code": key}
 	if key == "Enter" {
 		down["text"], down["windowsVirtualKeyCode"] = "\r", 13
