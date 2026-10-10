@@ -612,7 +612,8 @@ names a JS command adds — and they are styled, with no setup:
 func Home() ui.Node {
 	return <Layout title="Home">
 		<button class="rounded bg-emerald-500 px-4 py-2 text-white"
-			onClick={ui.JS.AddClass(ui.Ref("saved"), "opacity-50")}>Save</button>
+			onClick={ui.JS.AddClass(ui.Ref("note"), "opacity-50")}>Save</button>
+		<p ref="note" class="mt-2 text-sm text-gray-500">Unsaved changes</p>
 	</Layout>
 }
 ```
