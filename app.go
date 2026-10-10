@@ -1,0 +1,319 @@
+package web
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"reflect"
+	"runtime"
+	"slices"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/vuka-lang/vuka"
+)
+
+// App is a web application: the routes, services and controllers declared
+// with decorators, and whatever was added in code.
+type App struct {
+	router  Router
+	c       *container
+	mw      []Middleware
+	only    map[string]bool
+	dev     bool
+	onError func(http.ResponseWriter, *http.Request, *Error, bool)
+	reg     registry
+	specs   []*routeSpec
+	statics []func()
+	needs   []reflect.Type
+
+	once    sync.Once
+	handler http.Handler
+	err     error
+}
+
+// New makes an app of every route, service and controller declared so far
+// (each app takes its own snapshot, with its own singletons).
+func New(opts ...Option) *App {
+	a := &App{c: newContainer(), dev: os.Getenv("VUKA_ENV") == "development", reg: snapshot()}
+	for _, o := range opts {
+		o.apply(a)
+	}
+	if a.router == nil {
+		a.router = NewServeMux()
+	}
+	return a
+}
+
+func (a *App) mutable(what string) {
+	if a.handler != nil || a.err != nil {
+		panic("web: " + what + " after the app was built")
+	}
+}
+
+// Provide adds constructors (or ready values) to the app's container.
+func (a *App) Provide(ctors ...any) *App {
+	a.mutable("Provide")
+	for _, c := range ctors {
+		a.c.provide(c, "")
+	}
+	return a
+}
+
+// Use adds app-wide middleware; the first added runs first.
+func (a *App) Use(mw ...Middleware) *App {
+	a.mutable("Use")
+	a.mw = append(a.mw, mw...)
+	return a
+}
+
+// RouteOption configures a route registered in code.
+type RouteOption func(*routeSpec)
+
+// Params names a handler's parameters in order, which reflection can't see:
+// scalar parameters bind by name.
+func Params(names ...string) RouteOption {
+	return func(s *routeSpec) {
+		for i := range s.params {
+			if i < len(names) {
+				s.params[i].Name = names[i]
+			}
+		}
+	}
+}
+
+// View renders the route's result with a view, as @web.Template does.
+func View(f vuka.File, name ...string) RouteOption {
+	return func(s *routeSpec) {
+		s.view = &declView{file: f}
+		if len(name) > 0 {
+			s.view.name = name[0]
+		}
+	}
+}
+
+// Wrap adds middleware to the route, as @web.Use does.
+func Wrap(mw ...Middleware) RouteOption { return func(s *routeSpec) { s.mw = append(s.mw, mw...) } }
+
+// Handle registers fn for method and path, bound as a decorated handler is.
+func (a *App) Handle(method, path string, fn any, opts ...RouteOption) *App {
+	a.mutable("Handle")
+	v := reflect.ValueOf(fn)
+	s := &routeSpec{method: method, path: path, fn: v}
+	if v.Kind() != reflect.Func {
+		a.c.errs = append(a.c.errs, fmt.Errorf("web: %s %s: the handler is %T, not a function", method, path, fn))
+		return a
+	}
+	s.where = funcName(v)
+	for i := 0; i < v.Type().NumIn(); i++ {
+		s.params = append(s.params, vuka.Param{Type: v.Type().In(i)})
+	}
+	for _, o := range opts {
+		o(s)
+	}
+	a.specs = append(a.specs, s)
+	return a
+}
+
+func (a *App) Get(path string, fn any, opts ...RouteOption) *App {
+	return a.Handle(http.MethodGet, path, fn, opts...)
+}
+func (a *App) Post(path string, fn any, opts ...RouteOption) *App {
+	return a.Handle(http.MethodPost, path, fn, opts...)
+}
+func (a *App) Put(path string, fn any, opts ...RouteOption) *App {
+	return a.Handle(http.MethodPut, path, fn, opts...)
+}
+func (a *App) Patch(path string, fn any, opts ...RouteOption) *App {
+	return a.Handle(http.MethodPatch, path, fn, opts...)
+}
+func (a *App) Delete(path string, fn any, opts ...RouteOption) *App {
+	return a.Handle(http.MethodDelete, path, fn, opts...)
+}
+
+// Static serves the files of fsys under prefix.
+func (a *App) Static(prefix string, fsys fs.FS) *App {
+	a.mutable("Static")
+	prefix = "/" + strings.Trim(prefix, "/")
+	a.statics = append(a.statics, func() {
+		a.router.Handle(http.MethodGet, joinPath(prefix, "/{path...}"),
+			http.StripPrefix(strings.TrimSuffix(prefix, "/"), http.FileServerFS(fsys)))
+	})
+	return a
+}
+
+// Build resolves the app: every route's parameters, results and view, and the
+// dependency graph. It reports every problem at once, before anything is
+// served; Handler, Start and Run call it.
+func (a *App) Build() error {
+	a.once.Do(func() { a.handler, a.err = a.build() })
+	return a.err
+}
+
+func (a *App) take(pkg string) bool { return a.only == nil || a.only[pkg] }
+
+func (a *App) build() (http.Handler, error) {
+	prefixes := map[reflect.Type]string{}
+	for _, t := range a.reg.services {
+		if a.take(t.Reflect.PkgPath()) {
+			a.c.provide(t.New, "service "+t.Name)
+		}
+	}
+	for _, c := range a.reg.controllers {
+		if a.take(c.typ.Reflect.PkgPath()) {
+			a.c.provide(c.typ.New, "controller "+c.typ.Name)
+			prefixes[reflect.PointerTo(c.typ.Reflect)] = c.prefix
+		}
+	}
+	var specs []*routeSpec
+	for _, r := range a.reg.routes {
+		d := r.decl
+		if !a.take(d.Pkg) {
+			continue
+		}
+		s := &routeSpec{method: r.method, path: r.path, where: fmt.Sprintf("%s at %s:%d", d.Name, d.File, d.Line),
+			fn: reflect.ValueOf(d.Func), recv: d.Recv, params: d.Params, mw: a.reg.uses[declKey(d)]}
+		if d.Recv != nil {
+			t := d.Recv
+			if t.Kind() != reflect.Pointer {
+				t = reflect.PointerTo(t)
+			}
+			s.path = joinPath(prefixes[t], r.path)
+		}
+		if v, ok := a.reg.views[declKey(d)]; ok {
+			s.view = &v
+		}
+		specs = append(specs, s)
+	}
+	specs = append(specs, a.specs...)
+	errs := slices.Clone(a.c.errs)
+	seen := map[string]string{}
+	for _, s := range specs {
+		key := s.method + " " + s.path
+		if prev, dup := seen[key]; dup {
+			errs = append(errs, fmt.Errorf("web: %s is declared twice: by %s and by %s", key, prev, s.where))
+			continue
+		}
+		seen[key] = s.where
+		h, err := a.compile(s)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		for i := len(s.mw) - 1; i >= 0; i-- {
+			h = s.mw[i](h)
+		}
+		a.router.Handle(s.method, s.path, h)
+	}
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	for _, f := range a.statics {
+		f()
+	}
+	var h http.Handler = a.router
+	for i := len(a.mw) - 1; i >= 0; i-- {
+		h = a.mw[i](h)
+	}
+	return h, nil
+}
+
+// Handler is the app as an http.Handler, to serve or mount anywhere. It
+// panics when Build fails.
+func (a *App) Handler() http.Handler {
+	if err := a.Build(); err != nil {
+		panic(err)
+	}
+	return a.handler
+}
+
+// Resolve returns the app's T, building it and its dependencies.
+func Resolve[T any](a *App) (T, error) {
+	var zero T
+	if err := a.Build(); err != nil {
+		return zero, err
+	}
+	v, err := a.c.get(typeOf[T]())
+	if err != nil {
+		return zero, err
+	}
+	return v.Interface().(T), nil
+}
+
+// Start builds every dependency the routes need, then calls Start on each
+// provided value implementing Starter, in dependency order.
+func (a *App) Start(ctx context.Context) error {
+	if err := a.Build(); err != nil {
+		return err
+	}
+	for _, t := range a.needs {
+		if _, err := a.c.get(t); err != nil {
+			return err
+		}
+	}
+	return a.c.start(ctx)
+}
+
+// Stop calls Stop on each built value implementing Stopper, in reverse
+// order of construction.
+func (a *App) Stop(ctx context.Context) error { return a.c.stop(ctx) }
+
+// Run serves the app on addr (":" + $PORT, else ":8080", when empty) until
+// SIGINT or SIGTERM, then shuts down gracefully and stops the services.
+func (a *App) Run(addr string) error {
+	if addr == "" {
+		addr = ":8080"
+		if p := os.Getenv("PORT"); p != "" {
+			addr = ":" + p
+		}
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	if err := a.Start(ctx); err != nil {
+		return err
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	srv := &http.Server{Handler: a.handler, ReadHeaderTimeout: 10 * time.Second}
+	log.Printf("web: listening on http://%s", ln.Addr())
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(ln) }()
+	select {
+	case err = <-served:
+	case <-ctx.Done():
+		sctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+		defer done()
+		err = srv.Shutdown(sctx)
+	}
+	if errors.Is(err, http.ErrServerClosed) {
+		err = nil
+	}
+	sctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+	defer done()
+	return errors.Join(err, a.Stop(sctx))
+}
+
+func funcName(v reflect.Value) string {
+	if f := runtime.FuncForPC(v.Pointer()); f != nil {
+		file, line := f.FileLine(f.Entry())
+		return fmt.Sprintf("%s at %s:%d", f.Name(), shortFile(file), line)
+	}
+	return v.Type().String()
+}
+
+func shortFile(p string) string {
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
