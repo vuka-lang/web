@@ -14,6 +14,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/web/auth"
 	"github.com/vuka-lang/web/auth/authtest"
@@ -336,5 +337,28 @@ func TestGatedCallsInLiveRenders(t *testing.T) {
 		if r := click(t, ws, handler(t, m.HTML, 0), 2); !strings.Contains(patched(r), "n=1 "+who.want) {
 			t.Errorf("%s, rendered after an event: %+v", who.login, r)
 		}
+	}
+}
+
+// A navigation over a live connection runs the new URL's route, gates and
+// all: a page the visitor may not see is never mounted, patch flag or not,
+// and a refused event's error is the gate's public text.
+func TestLiveNavigationChecksGates(t *testing.T) {
+	c := serve(t, newApp(t, users(), nil))
+	c.login("bob@example.com", "hunter22", "")
+	ws, m := c.socket("/who", c.srv.URL)
+	if !strings.Contains(m.HTML, "who=2") {
+		t.Fatalf("join: %+v", m)
+	}
+	for i, patch := range []bool{true, false} {
+		send(t, ws, map[string]any{"type": "navigate", "ref": 2 + i, "url": "/staff", "patch": patch})
+		r := must(t, ws)
+		if r.Type == live.Render || r.Type == live.PatchMsg || strings.Contains(r.HTML+patched(r), "who=") {
+			t.Errorf("navigating to a page bob may not see (patch %v): %+v", patch, r)
+		}
+	}
+	send(t, ws, map[string]any{"type": "navigate", "ref": 4, "url": "/board", "patch": true})
+	if r := must(t, ws); r.Error != "" || !strings.Contains(r.HTML+patched(r), "n=0") {
+		t.Errorf("navigating to a page bob may see: %+v", r)
 	}
 }
