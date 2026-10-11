@@ -269,6 +269,26 @@ status. `web.Redirect` is also a `ui.Node`, so a page handler can return it.
 Panics answer 500. A handler that wrote the response and then returns an
 error can't change it any more: the error is logged.
 
+**Forms that fail.** A page answering a POST (or PUT, PATCH, DELETE) is the
+fragment the handler rendered — for htmx, `fetch` and the like — unless the
+browser shows it as its document: a form posted without script
+(`Sec-Fetch-Dest: document`, or, from a browser that doesn't send it, an
+`Accept: text/html` request without `HX-Request`). That one is a whole page,
+as GET would serve it — stylesheet, scripts, toolbar — so a handler can
+re-render the form with its errors and what was typed instead of
+redirecting. Such a page isn't live (a reconnect would rebuild it with GET):
+its JS commands run, its stateful components render but don't connect.
+
+```vuka
+@web.Post("/signup")
+func SignUp(ctx context.Context, in Signup, users *Users) ui.Node {
+	if err := users.Create(ctx, in); err != nil {
+		return <SignupPage form={in} problem={err.Error()} />
+	}
+	return web.Redirect("/welcome")
+}
+```
+
 ## Views
 
 **templ.** `@web.Template("views/pets.templ")` uses the file's one exported
@@ -1094,7 +1114,9 @@ throttled failures, "remember me" (`RememberMe`), `auth.RevokeUser` closing the 
 runs, and again by each gated method it reaches — given the page's context,
 on any goroutine; `StrictGates` refuses a gated call no identity accounts for
 (crons mark themselves with `auth.System(ctx)`). Its sessions and tokens are kept in memory unless the
-app gives it stores. See the [auth guide](https://vuka-lang.github.io/vuka/web/auth)
+app gives it stores. An app's own login handler re-renders its page on a
+failure (see Forms that fail) with `auth.LoginMessage(err)`;
+`auth.LoginPage` keeps the posted login and `next`. See the [auth guide](https://vuka-lang.github.io/vuka/web/auth)
 and [`examples/auth`](examples/auth).
 
 **CSRF.** `web.CSRF()` (which `auth.Module` turns on) answers 403 to a POST,

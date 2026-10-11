@@ -1169,3 +1169,47 @@ func TestIdentityString(t *testing.T) {
 		t.Error("ErrInvalidLogin is a 401")
 	}
 }
+
+// An app's own login handler re-renders the page on a failure: the whole
+// page, with the message and what was typed.
+func TestLoginPageRerendered(t *testing.T) {
+	app := newApp(t, users(), func(c *auth.Config) { c.LoginPath = "/signin" })
+	open := web.Attrs(auth.Public())
+	app.Get("/signin", func(r *http.Request) ui.Node { return auth.LoginPage(auth.LoginPageProps{Request: r}) }, open, web.Params("r"))
+	app.Post("/signin", func(ctx context.Context, r *http.Request) ui.Node {
+		if _, err := auth.Login(ctx, r.PostFormValue("login"), r.PostFormValue("password")); err != nil {
+			return auth.LoginPage(auth.LoginPageProps{Request: r, Error: auth.LoginMessage(err)})
+		}
+		return web.Redirect(r.PostFormValue("next"))
+	}, open, web.Params("ctx", "r"))
+	c := serve(t, app)
+	post := func(login, password string) answer {
+		f := url.Values{"login": {login}, "password": {password}, "next": {"/orders"}}
+		return c.do("POST", "/signin", f.Encode(), "Content-Type", "application/x-www-form-urlencoded", "Accept", html,
+			"Sec-Fetch-Dest", "document", "Origin", c.srv.URL)
+	}
+	r := post("ada@example.com", "wrong")
+	for _, want := range []string{"<title>Sign in</title>", `<p role="alert" class="vk-login-error">Invalid login or password.</p>`,
+		`name="login" value="ada@example.com"`, `name="next" value="/orders"`} {
+		if r.status != 200 || !strings.Contains(r.body, want) {
+			t.Errorf("a failed login: %d, no %q in %s", r.status, want, r.body)
+		}
+	}
+	if r := post("ada@example.com", "correct horse"); r.status != 303 || r.header.Get("Location") != "/orders" {
+		t.Errorf("a good login: %d %s", r.status, r.header.Get("Location"))
+	}
+	if g := c.page("/signin?error=invalid&next=%2Fx"); !strings.Contains(g.body, "Invalid login or password.") || !strings.Contains(g.body, `value="/x"`) {
+		t.Errorf("the GET page from ?error=: %s", g.body)
+	}
+	for err, want := range map[error]string{
+		nil:                    "",
+		auth.ErrInvalidLogin:   "Invalid login or password.",
+		&auth.ThrottledError{}: "Too many failed logins. Try again in a few minutes.",
+		&web.Error{Status: 403, Message: "Your access ended on 1 May."}: "Your access ended on 1 May.",
+		errors.New("db down"): "Signing in failed. Try again.",
+	} {
+		if got := auth.LoginMessage(err); got != want {
+			t.Errorf("LoginMessage(%v) = %q, want %q", err, got, want)
+		}
+	}
+}

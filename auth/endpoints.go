@@ -191,13 +191,39 @@ func (a *Auth) handleToken(w http.ResponseWriter, r *http.Request) {
 func LoginError(r *http.Request) string {
 	switch r.URL.Query().Get("error") {
 	case "invalid":
-		return "Invalid login or password."
+		return msgInvalid
 	case "throttled":
-		return "Too many failed logins. Try again in a few minutes."
+		return msgThrottled
 	case "refused":
 		return "This account can't sign in."
 	}
 	return ""
+}
+
+const (
+	msgInvalid   = "Invalid login or password."
+	msgThrottled = "Too many failed logins. Try again in a few minutes."
+)
+
+// LoginMessage is the message a login page shows for Login's error, for an
+// app's own login handler re-rendering its form: the same for an unknown
+// login and a wrong password, the throttle's, a refusal's own message (a
+// *web.Error CheckLogin returned), and a general one for anything else
+// (the error itself is the app's to log). "" for nil.
+func LoginMessage(err error) string {
+	var te *ThrottledError
+	var we *web.Error
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrInvalidLogin):
+		return msgInvalid
+	case errors.As(err, &te):
+		return msgThrottled
+	case errors.As(err, &we) && we.Status < 500 && we.Message != "":
+		return we.Message
+	}
+	return "Signing in failed. Try again."
 }
 
 // LoginFormProps are a LoginForm's attributes.
@@ -205,6 +231,7 @@ type LoginFormProps struct {
 	Action string // where it posts; "/auth/login" by default
 	Next   string // where to go once signed in (SafeNext), else Config.Home
 	Error  string // a message to show above the fields
+	Login  string // the login field's value: what was typed, on a re-render
 	// Remember adds a "Remember me" checkbox, the remember field
 	// Config.RememberMe reads.
 	Remember bool
@@ -240,9 +267,9 @@ func LoginForm(p LoginFormProps) ui.Node {
 	return ui.El("form", []ui.Attr{{Name: "method", Value: "post"}, {Name: "action", Value: action}, {Name: "class", Value: "vk-login " + p.Class}},
 		msg,
 		ui.El("label", nil, ui.Text("Login"),
-			ui.El("input", []ui.Attr{{Name: "name", Value: "login"}, {Name: "autocomplete", Value: "username"}, {Name: "required", Value: true}, {Name: "autofocus", Value: true}})),
+			ui.El("input", []ui.Attr{{Name: "name", Value: "login"}, {Name: "value", Value: p.Login}, {Name: "autocomplete", Value: "username"}, {Name: "required", Value: true}, {Name: "autofocus", Value: p.Login == ""}})),
 		ui.El("label", nil, ui.Text("Password"),
-			ui.El("input", []ui.Attr{{Name: "name", Value: "password"}, {Name: "type", Value: "password"}, {Name: "autocomplete", Value: "current-password"}, {Name: "required", Value: true}})),
+			ui.El("input", []ui.Attr{{Name: "name", Value: "password"}, {Name: "type", Value: "password"}, {Name: "autocomplete", Value: "current-password"}, {Name: "required", Value: true}, {Name: "autofocus", Value: p.Login != ""}})),
 		remember,
 		next,
 		ui.El("button", []ui.Attr{{Name: "type", Value: "submit"}}, ui.Text("Sign in")),
@@ -251,9 +278,13 @@ func LoginForm(p LoginFormProps) ui.Node {
 
 // LoginPageProps are a LoginPage's attributes.
 type LoginPageProps struct {
-	Request *http.Request // its ?next= and ?error= fill the form
-	Title   string        // "Sign in" by default
-	Action  string        // LoginForm's
+	// Request fills the form: on a GET its ?next= and ?error=; on a form
+	// post (an app's own login handler re-rendering the page) the posted
+	// login and next, so what was typed stays.
+	Request *http.Request
+	Title   string // "Sign in" by default
+	Action  string // LoginForm's
+	Error   string // the message to show, over Request's ?error= (LoginMessage)
 	// Remember is LoginForm's: a "Remember me" checkbox.
 	Remember bool
 }
@@ -269,9 +300,15 @@ func LoginPage(p LoginPageProps) ui.Node {
 	if title == "" {
 		title = "Sign in"
 	}
-	var next, msg string
-	if p.Request != nil {
-		next, msg = p.Request.URL.Query().Get("next"), LoginError(p.Request)
+	var next, msg, login string
+	if r := p.Request; r != nil {
+		next, msg = r.URL.Query().Get("next"), LoginError(r)
+		if r.Method == http.MethodPost {
+			next, login = r.PostFormValue("next"), r.PostFormValue("login")
+		}
+	}
+	if p.Error != "" {
+		msg = p.Error
 	}
 	return ui.El("html", []ui.Attr{{Name: "lang", Value: "en"}},
 		ui.El("head", nil,
@@ -281,7 +318,7 @@ func LoginPage(p LoginPageProps) ui.Node {
 			ui.El("style", nil, ui.Text(loginCSS))),
 		ui.El("body", nil, ui.El("main", nil,
 			ui.El("h1", nil, ui.Text(title)),
-			LoginForm(LoginFormProps{Action: p.Action, Next: next, Error: msg, Remember: p.Remember}))))
+			LoginForm(LoginFormProps{Action: p.Action, Next: next, Error: msg, Login: login, Remember: p.Remember}))))
 }
 
 const loginCSS = `body{font:16px/1.5 system-ui,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#111}

@@ -217,7 +217,7 @@ func (a *App) respond(rq *request, val reflect.Value, err error, v *view, htmlPa
 			a.writeError(w, r, err, true)
 			return
 		}
-		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		if wholePage(r) {
 			html = a.linkCSS(r, html)
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

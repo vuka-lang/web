@@ -350,6 +350,11 @@ func matchName(names []string, name string) string {
 // to no handler gets the script without a token: it runs them and never
 // connects; links (data-vk-link) alone need no script. Under a join or a
 // navigation the page is the session's instead.
+//
+// Another method's page is a fragment, as rendered, unless the browser
+// shows it as the document (wholePage: a form posted without script, which
+// re-renders the page with its errors): then it is a GET page that isn't
+// live — a join would rebuild it with GET — so its script has no token.
 func (a *App) page(rq *request, n ui.Node) {
 	w, r := rq.w, rq.r
 	if j, ok := r.Context().Value(joinKey{}).(*join); ok {
@@ -357,7 +362,7 @@ func (a *App) page(rq *request, n ui.Node) {
 		return
 	}
 	var html []byte
-	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+	if wholePage(r) {
 		s := live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
 		end := a.span(rq.ctx, "render", "page")
 		out, err := s.Render()
@@ -371,7 +376,7 @@ func (a *App) page(rq *request, n ui.Node) {
 		live := bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-")) ||
 			bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) // a JS command's push to a handler
 		if live || bytes.Contains(html, []byte(" data-vk-js-")) {
-			html = injectScript(html, a.scriptTag(r, live))
+			html = injectScript(html, a.scriptTag(r, live && (r.Method == http.MethodGet || r.Method == http.MethodHead)))
 		}
 		html = a.linkCSS(r, html)
 		if a.tb != nil && a.assets != nil {
@@ -396,6 +401,22 @@ func (a *App) page(rq *request, n ui.Node) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	}
 	w.Write(html)
+}
+
+// wholePage reports whether r's page is a whole document, with the app's
+// stylesheet, scripts and toolbar: a GET or HEAD, or a browser loading the
+// response as its document — a form posted without script, which
+// Sec-Fetch-Dest says ("document", or "iframe" for a form in a frame); from
+// a browser that doesn't send it, a request asking for HTML that isn't
+// htmx's. A fetch, htmx or the like gets the fragment the handler rendered.
+func wholePage(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		return true
+	}
+	if d := r.Header.Get("Sec-Fetch-Dest"); d != "" {
+		return d == "document" || d == "iframe"
+	}
+	return r.Header.Get("HX-Request") == "" && acceptsHTML(r)
 }
 
 func (a *App) scriptTag(r *http.Request, live bool) string {
