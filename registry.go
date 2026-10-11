@@ -46,6 +46,7 @@ type registry struct {
 	services    []*vuka.Type
 	controllers []declController
 	lives       []*liveSpec
+	crons       []declCron
 }
 
 var (
@@ -71,6 +72,7 @@ func snapshot() registry {
 		services:    append([]*vuka.Type(nil), reg.services...),
 		controllers: append([]declController(nil), reg.controllers...),
 		lives:       append([]*liveSpec(nil), reg.lives...),
+		crons:       append([]declCron(nil), reg.crons...),
 		views:       make(map[string]declView, len(reg.views)),
 		uses:        make(map[string][]Middleware, len(reg.uses)),
 	}

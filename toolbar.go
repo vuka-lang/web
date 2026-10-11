@@ -104,6 +104,8 @@ type toolbar struct {
 	byID map[string]*tbEntry
 	dir  string
 
+	crons []*tbEntry // the latest cron runs (toolbar_crons.go)
+
 	streams *streams // pages hearing of vuka run -watch's build state
 }
 
@@ -318,9 +320,16 @@ var (
 
 func bindGoroutine(s *tbSink) (unbind func()) {
 	id := goid()
-	tbGoroutines.Store(id, s)
+	prev, had := tbGoroutines.Swap(id, s)
 	tbBound.Add(1)
-	return func() { tbGoroutines.Delete(id); tbBound.Add(-1) }
+	return func() {
+		if had { // a cron run by hand while serving a request
+			tbGoroutines.Store(id, prev)
+		} else {
+			tbGoroutines.Delete(id)
+		}
+		tbBound.Add(-1)
+	}
 }
 
 // goid is the goroutine's id, from the first line of its stack: development
@@ -714,7 +723,7 @@ func (a *App) routeToolbar() {
 		out := summary(rec)
 		if r.URL.Query().Has("panels") {
 			var b bytes.Buffer
-			if err := renderPanels(&b, rec); err != nil {
+			if err := renderPanels(&b, rec, a.cronPanel()...); err != nil {
 				fmt.Fprintf(&b, "<p class=err>%s</p>", err)
 			}
 			out["html"] = b.String()
@@ -735,6 +744,7 @@ func (a *App) routeToolbar() {
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, readBuildState(tb.dir))
 	}))
+	a.routeCrons()
 }
 
 // buildState is how vuka run -watch's next build is going, from its
