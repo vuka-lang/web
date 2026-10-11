@@ -8,6 +8,7 @@
 	<span class="status s{{.Status}} {{if ge .Status 500}}err{{else if ge .Status 400}}warn{{end}}">{{if .Status}}{{.Status}}{{else}}…{{end}}</span>
 	<b>{{.Method}}</b> <code class="uri">{{.URI}}</code> <span class="dim">{{.Ms}}</span>
 </div>
+{{- if .Err}}<p class="errtext">{{.Err}}</p>{{end}}
 {{- if .Earlier}}<p class="note">An earlier build of the app rendered this page; its live connection's messages are recorded here.</p>{{end}}
 <table class="kv">
 	<tr><th>Route</th><td>{{if .Route}}<code>{{.Route}}</code>{{else}}<span class="dim">no route</span>{{end}}</td></tr>
@@ -104,3 +105,16 @@
 </div>{{end}}
 
 {{define "notes"}}{{if not .}}<p class="empty">Nothing noted.</p>{{else}}<ol class="notes">{{range .}}<li><pre>{{.}}</pre></li>{{end}}</ol>{{end}}{{end}}
+
+{{define "crons"}}<table class="grid crons">
+	<tr><th>Cron</th><th>Schedule</th><th>Next run</th><th>Last run</th><th></th></tr>
+	{{- range .}}<tr class="{{.Tone}}">
+		<td><code>{{.Name}}</code><div class="args">{{.Func}} <span class="dim">{{.Pos}}</span></div></td>
+		<td><code>{{.Spec}}</code></td>
+		<td class="dim">{{.Next}}</td>
+		<td>{{if .Running}}<span class="dim">running…</span>{{else if .Last}}{{if .LastID}}<button type="button" class="linkish cron-open" data-id="{{.LastID}}">{{.Last}}</button>{{else}}{{.Last}}{{end}}
+			{{- if .Err}}<div class="errtext">{{.Err}}</div>{{end}}{{else}}<span class="dim">—</span>{{end}}</td>
+		<td><button type="button" class="btn cron-run" data-cron="{{.Name}}">Run now</button></td>
+	</tr>{{end}}
+</table>
+<p class="foot">Each run is a record of its own, under Cron runs in the list above.</p>{{end}}

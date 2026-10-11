@@ -69,7 +69,7 @@
     }
     if (!page) { stateEl.textContent = "…"; return; }
     if (page.tone) handle.classList.add(page.tone);
-    const n = calls.filter((c) => !c.page).length;
+    const n = calls.filter((c) => !c.page && !c.cron).length;
     stateEl.innerHTML = `<span class="num">${esc(page.ms)}</span><span class="sep">·</span><span class="num">${page.queries} q</span>` +
       (n ? `<span class="calls" title="fetch and XHR calls">+${n}</span>` : "");
   }
@@ -83,9 +83,23 @@
   }
 
   function drawSelect() {
-    const html = calls.map((c) => `<option value="${esc(c.id)}"${c.id === selected ? " selected" : ""}>${esc(c.label)}</option>`).join("");
+    const option = (c) => `<option value="${esc(c.id)}"${c.id === selected ? " selected" : ""}>${esc(c.label)}</option>`;
+    const crons = calls.filter((c) => c.cron);
+    const html = calls.filter((c) => !c.cron).map(option).join("") +
+      (crons.length ? `<optgroup label="Cron runs">${crons.map(option).join("")}</optgroup>` : "");
     if (select.innerHTML !== html) select.innerHTML = html;
   }
+
+  // refreshCrons lists the app's latest cron runs, each a record of its own.
+  async function refreshCrons() {
+    const r = await get("crons").catch(() => null);
+    if (!r || !r.runs) return;
+    const runs = r.runs.map((x) => ({ id: x.id, label: x.label, cron: true }));
+    const kept = runs.some((x) => x.id === selected) || !calls.some((c) => c.cron && c.id === selected);
+    calls.splice(0, calls.length, ...calls.filter((c) => !c.cron), ...(kept ? runs : runs.concat(calls.filter((c) => c.id === selected))));
+    drawSelect();
+  }
+  const pick = (id) => { selected = id; drawSelect(); body.innerHTML = `<p class="loading">Loading…</p>`; load(); };
 
   // open fetches the panels of the selected record into the drawer.
   let loading = null;
@@ -98,6 +112,9 @@
       return;
     }
     if (id === current) { page = r; drawHandle(); }
+    const cron = calls.find((c) => c.id === id && c.cron);
+    if (cron && !r.done) { clearTimeout(loading); loading = setTimeout(() => { refreshCrons(); load(); }, 400); } // a run in progress
+    else if (cron) refreshCrons();
     const scroll = (body.querySelector(".panel:not([hidden])") || {}).scrollTop || 0;
     const open = [...body.querySelectorAll("details[open]")].map((d) => d.dataset.seq || d.dataset.ref);
     body.innerHTML = r.html;
@@ -160,17 +177,32 @@
     drawer.hidden = !open;
     handle.setAttribute("aria-expanded", String(open));
     remember("open", open ? "1" : "");
-    if (open) load();
+    if (open) { load(); refreshCrons(); }
   }
 
   handle.addEventListener("click", () => toggle(drawer.hidden));
   $(".close").addEventListener("click", () => toggle(false));
-  select.addEventListener("change", () => { selected = select.value; body.innerHTML = `<p class="loading">Loading…</p>`; load(); });
+  select.addEventListener("change", () => pick(select.value));
+  select.addEventListener("focus", refreshCrons);
   body.addEventListener("click", (e) => {
     const t = e.target.closest(".tab");
     if (t) { show(t.dataset.tab); remember("tab", tab); }
     const w = e.target.closest(".wtab");
     if (w) { wtab = w.dataset.wtab; remember("wtab", wtab); showWire(w.closest(".wire"), wtab); }
+    const run = e.target.closest(".cron-run");
+    if (run) {
+      run.disabled = true;
+      fetch(base + "crons/run?name=" + encodeURIComponent(run.dataset.cron), { method: "POST", headers: { [header]: "1" } })
+        .then((r) => r.json()).catch(() => ({ error: "The app isn't answering." }))
+        .then(async (r) => {
+          run.disabled = false;
+          if (r.error) { run.title = r.error; run.textContent = "Busy"; setTimeout(() => { run.textContent = "Run now"; }, 1500); return; }
+          await refreshCrons();
+          pick(r.id);
+        });
+    }
+    const open = e.target.closest(".cron-open");
+    if (open) refreshCrons().then(() => pick(open.dataset.id));
     const c = e.target.closest(".copy");
     if (c) {
       const text = c.closest(".raw").querySelector("pre").textContent;

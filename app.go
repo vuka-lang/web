@@ -20,6 +20,7 @@ import (
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/web/cron"
 )
 
 // App is a web application: the routes, services and controllers declared
@@ -49,6 +50,12 @@ type App struct {
 	liveMax     int // the newest live protocol version spoken
 	relay       Relay
 	hub         *hub
+
+	cronSpecs []*cronSpec
+	cronClock cron.Clock
+	noCrons   bool
+	sched     *scheduler // nil: no crons
+	scheduled bool       // Start added the scheduler to the lifecycle
 
 	tb        *toolbar // nil: no development toolbar
 	noToolbar bool
@@ -294,6 +301,7 @@ func (a *App) build() (http.Handler, error) {
 			errs = append(errs, err)
 		}
 	}
+	errs = append(errs, a.compileCrons()...)
 	for _, f := range a.checks {
 		if err := f(a); err != nil {
 			errs = append(errs, err)
@@ -360,10 +368,11 @@ func Resolve[T any](a *App) (T, error) {
 	return v.Interface().(T), nil
 }
 
-// Start builds every dependency the routes need and every Eager one, then
-// runs the start sequence: each supplied or built value implementing Starter
-// and each OnStart hook, in dependency order (supplied values and hooks as
-// added, before the values built from constructors).
+// Start builds every dependency the routes and crons need and every Eager
+// one, then runs the start sequence: each supplied or built value
+// implementing Starter and each OnStart hook, in dependency order (supplied
+// values and hooks as added, before the values built from constructors),
+// and last the crons' scheduler, which Stop stops first.
 func (a *App) Start(ctx context.Context) error {
 	if err := a.Build(); err != nil {
 		return err
@@ -380,6 +389,12 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	if err := errors.Join(takeEnvErrors()...); err != nil {
 		return err
+	}
+	if a.sched != nil && !a.noCrons && !a.scheduled {
+		// After every value the crons need was built: started last, the
+		// scheduler stops first.
+		a.scheduled = true
+		a.c.hook(hook{name: "crons", start: a.sched.start, stop: a.sched.stop})
 	}
 	return errors.Join(a.c.start(ctx), errors.Join(takeEnvErrors()...))
 }

@@ -246,3 +246,10 @@ pre.json { margin: 0; max-height: 50vh; overflow: auto; padding: 8px 10px; borde
 	td.time { width: 96px; }
 	.track { width: 30px; }
 }
+
+.btn { padding: 2px 9px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); font-size: 11px; white-space: nowrap; }
+.btn:hover { background: var(--bg2); }
+.btn:disabled { color: var(--dim); cursor: default; }
+.linkish { padding: 0; border: 0; background: none; color: var(--bar); text-align: left; }
+.linkish:hover { text-decoration: underline; }
+.crons td { vertical-align: middle; }

@@ -67,7 +67,9 @@ func statusTone(s int) string {
 	return ""
 }
 
-func renderPanels(w io.Writer, r tbRecord) error {
+// renderPanels draws a record's panels; extra (the app's Crons) go before
+// the panels of notes.
+func renderPanels(w io.Writer, r tbRecord, extra ...panelView) error {
 	var ps []panelView
 	add := func(name, count, tone, tmpl string, data any) {
 		var b bytes.Buffer
@@ -90,6 +92,7 @@ func renderPanels(w io.Writer, r tbRecord) error {
 		}
 		add("Live", count(len(r.Live)), tone, "live", lv)
 	}
+	ps = append(ps, extra...)
 	ps = append(ps, notePanels(r.Notes)...)
 	return panelTemplates.ExecuteTemplate(w, "panels", map[string]any{"Panels": ps, "Dropped": r.Dropped})
 }
