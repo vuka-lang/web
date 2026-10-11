@@ -63,9 +63,14 @@ var toolbarScript []byte
 //go:embed toolbar.css
 var toolbarCSS string
 
-// toolbarSource is the script served, the stylesheet of its shadow DOM in it.
+//go:embed toolbar-logo.svg
+var toolbarLogo []byte
+
+// toolbarSource is the script served, the stylesheet of its shadow DOM in it
+// (the Vuka logo in that as a data URL).
 var toolbarSource, toolbarTag = func() ([]byte, string) {
-	css, _ := json.Marshal(toolbarCSS)
+	logo := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(toolbarLogo)
+	css, _ := json.Marshal(strings.Replace(toolbarCSS, "__LOGO__", logo, 1))
 	src := bytes.Replace(toolbarScript, []byte(`"__CSS__"`), css, 1)
 	return src, cssTag(src)
 }()

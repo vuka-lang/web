@@ -20,11 +20,11 @@
   const root = host.attachShadow({ mode: "open" });
   root.innerHTML = `<style>${"__CSS__"}</style><div class="vk">
     <button type="button" class="handle" title="Vuka development toolbar" aria-expanded="false">
-      <span class="mark">V</span><span class="state"></span>
+      <span class="mark" aria-hidden="true"></span><span class="state"></span>
     </button>
     <aside class="drawer" hidden aria-label="Development toolbar">
       <div class="bar">
-        <span class="mark">V</span>
+        <span class="mark" aria-hidden="true"></span>
         <select aria-label="Request"></select>
         <span class="chip" hidden></span>
         <button type="button" class="close" aria-label="Close">×</button>
