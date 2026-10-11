@@ -398,6 +398,10 @@ function page(file, body, options = {}) {
   ctx.dispatchEvent = (e) => { (ctx.listeners[e.type] || []).forEach((fn) => fn(e)); return !e.defaultPrevented; };
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(file, "utf8"), ctx, { filename: file });
+  // Scripts the page loads after the runtime (the component loader), each
+  // dynamic import resolved from options.modules.
+  ctx.__import = (url) => url in (options.modules || {}) ? Promise.resolve(options.modules[url]) : Promise.reject(new Error("no module " + url));
+  for (const s of options.scripts || []) vm.runInContext(s.replace(/\bimport\(/g, "__import("), ctx);
   const $ = (sel) => doc.querySelector(sel);
   // fire dispatches an event at the element sel names, as a browser would.
   const fire = (sel, type, init = {}) => {

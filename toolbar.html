@@ -103,4 +103,12 @@
 	<pre class="json">{{.JSON}}</pre>
 </div>{{end}}
 
+{{define "assets"}}<table class="grid">
+	<tr><th>Component</th><th>Scope</th><th>Styles</th><th>Scripts</th><th class="num">CSS</th></tr>
+	{{- range .}}<tr><td>{{.Name}}</td><td><code>{{if .Scope}}data-vk-s="{{.Scope}}"{{else}}global{{end}}</code></td>
+		<td>{{range $i, $f := .Styles}}{{if $i}}, {{end}}<code>{{$f}}</code>{{end}}</td>
+		<td>{{range $i, $f := .Scripts}}{{if $i}}, {{end}}<code>{{$f}}</code>{{end}}{{if .Module}} <span class="dim">→ /_vuka/c/{{.Module}}</span>{{end}}</td>
+		<td class="num">{{.Size}}</td></tr>{{end}}
+</table>{{end}}
+
 {{define "notes"}}{{if not .}}<p class="empty">Nothing noted.</p>{{else}}<ol class="notes">{{range .}}<li><pre>{{.}}</pre></li>{{end}}</ol>{{end}}{{end}}

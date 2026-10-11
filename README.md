@@ -60,7 +60,7 @@ go get github.com/vuka-lang/web
 | `@web.Use(mw…)` | HTTP middleware for this route, `func(http.Handler) http.Handler` |
 | `@web.Service` | a struct becomes a dependency |
 | `@web.Controller(prefix)` | a struct becomes a dependency whose route methods are served under `prefix` |
-| `@web.Live(path, opts…)` | a stateful component becomes a live page (below) |
+| `@web.Live(path, opts…)` | a stateful component becomes a live page (below); `web.Style`, `web.Script`, `web.CSS`, `web.JS` give it styles and scripts (below) |
 
 Paths use `{name}` for a segment and `{name...}` for the rest of the path, and
 match exactly (`/pets` doesn't match `/pets/`). Under a controller, `"/"` is
@@ -90,6 +90,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.OnError(f)` | replace the error page / JSON error body |
 | `web.LiveLayout(f)`, `LiveKey(k)`, `LiveOrigins(p…)`, `LiveTokenTTL(d)`, `WithRelay(r)` | live pages (below) |
 | `web.NoTailwind()`, `web.Tailwind(path)` | no stylesheet; or the project's Tailwind stylesheet at another path (below) |
+| `web.Style(paths…)`, `Script(paths…)`, `CSS(src)`, `JS(src)` | the app's own stylesheets and scripts, unscoped (below) |
 | `web.NoToolbar()` | no development toolbar (below) |
 
 `app.Build()` resolves everything — every parameter of every route, every
@@ -329,7 +330,7 @@ func (c *Counter) Render() ui.Node {
   exported fields of provided types are injected; the others that hold text
   bind from the path segment or query parameter of their name (`form` tag,
   else the field name, ignoring case). The page is the component inside the
-  layout `web.Layout(f)` names, else the app's `web.LiveLayout(f)`, else a bare
+  layout `web.Layout(f, assets…)` names, else the app's `web.LiveLayout(f, assets…)`, else a bare
   document — `f` is `func(page ui.Node) ui.Node`. `web.Use(mw…)` adds
   middleware. From Go: `app.Live("/counter", &Counter{Start: 1})` (the
   value's fields are the defaults).
@@ -780,6 +781,55 @@ and serves pages unstyled; `vuka build` fails.
 
 `web.RegisterCSS(name, css)` serves another stylesheet at `/_vuka/<name>`;
 the file `vuka build` generates registers `app.css` with it.
+
+## Styles and scripts
+
+A component's own stylesheet and script — a keyframe animation, a canvas
+drawn on mount — are declared beside it, and the `vuka` command compiles
+them:
+
+```vuka
+@web.Live("/counter",
+	web.Layout(counterPage, web.Style("layout.css")),
+	web.Style("counter.css", "parts/*.css"),
+	web.Script("counter.ts"),
+)
+type Counter struct { … }
+```
+
+- `web.Style(paths…)`, `web.Script(paths…)`, `` web.CSS(`…`) `` and
+  `` web.JS(`…`) `` are options of `@web.Live` (the component's), of
+  `web.Layout` and `web.LiveLayout` (the layout's own markup) and of
+  `web.New` (the app's, unscoped). `web.Global` among the arguments makes one
+  unscoped. Paths are string literals relative to the `.vuka` file; globs
+  work.
+- **Scoped CSS.** Every element a scoped component's markup writes carries
+  `data-vk-s="<scope>"`, fixed markup the transpiler adds (a templ layout's
+  too), and its selectors are rewritten to match only those: `:global(…)`
+  and `:root` stay unscoped, `:deep(…)` reaches into child components,
+  `:scope` is the root, keyframes are the component's own. They compile
+  into the app's Tailwind `app.css`, so `@apply` and variants work.
+- **Scripts** (TypeScript or JavaScript, bundled with esbuild inside the
+  `vuka` command) are one module per component under `/_vuka/c/`; every
+  full page of an app with scripts loads a small loader
+  (`/_vuka/c/loader.js`), which imports a component's module the first time
+  it renders and runs its hooks: `mounted(el, ctx)` on load, join or
+  arrival, `updated` after a patch that keeps it, `destroyed` when it leaves
+  (live navigation too). `ctx.push("Inc", payload)` calls a Go method of the
+  component as an event — only those its scripts name in `ctx.push("…")`
+  literals, which the `vuka` command lists in the manifest and the app
+  allows (`live.AllowPush`); any other name is refused, `ctx.on(name, fn)` receives `c.PushEvent(name, payload)`,
+  `ctx.ref(name)` finds its `ref` element. `ui.JS.Call("bump")` reaches the
+  component's own methods before `vuka.register`'s and `window`'s.
+- `vuka run` keeps them compiled in `.vuka/assets` (`VUKA_ASSETS`): a saved
+  stylesheet restyles open pages, a saved script loads on the next mount.
+  `vuka build` embeds them with a generated `vuka_assets_gen.go`, which
+  calls `web.RegisterAssets(manifest)` and `web.RegisterScript(name, js)`.
+- The development toolbar's Assets panel lists the page's scoped
+  components and their files.
+
+Options given from Go (`app.Live(…, web.Style(…))`) do nothing: the `vuka`
+command reads them from `.vuka` files.
 
 ## Development toolbar
 

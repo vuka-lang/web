@@ -60,7 +60,9 @@ func (u Uses) liveOption(s *liveSpec) {
 }
 
 // Layout wraps a Live page's component: the page is layout(component).
-func Layout(layout func(page ui.Node) ui.Node) LiveOption {
+// Styles and scripts (Style, Script, CSS, JS) given with it belong to the
+// layout's own markup.
+func Layout(layout func(page ui.Node) ui.Node, assets ...Asset) LiveOption {
 	return liveOptionFunc(func(s *liveSpec) { s.layout = layout })
 }
 
@@ -85,8 +87,9 @@ func (a *App) Live(path string, component ui.Stateful, opts ...LiveOption) *App 
 	return a
 }
 
-// LiveLayout is the layout of every Live page without its own.
-func LiveLayout(layout func(page ui.Node) ui.Node) Option {
+// LiveLayout is the layout of every Live page without its own. Styles and
+// scripts given with it belong to the layout's own markup, as Layout's do.
+func LiveLayout(layout func(page ui.Node) ui.Node, assets ...Asset) Option {
 	return OptionFunc(func(a *App) { a.liveLayout = layout })
 }
 
@@ -359,6 +362,13 @@ func (a *App) page(rq *request, n ui.Node) {
 			html = injectScript(html, a.scriptTag(r, live))
 		}
 		html = a.linkCSS(r, html)
+		if a.tb != nil && a.assets != nil {
+			if e := entryOf(rq.ctx); e != nil {
+				e.mu.Lock()
+				e.Assets = a.assets.pageAssets(html)
+				e.mu.Unlock()
+			}
+		}
 	} else {
 		var b bytes.Buffer
 		if n != nil {

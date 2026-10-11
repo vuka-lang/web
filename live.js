@@ -40,6 +40,8 @@
       busy.forEach((b) => b.el.removeAttribute("aria-busy"));
       busy.clear();
       [...preds.keys()].forEach((r) => settle(r, true)); // no reply comes
+      replies.forEach((w) => w.reject(new Error("live: the connection closed")));
+      replies.clear();
       if (e.code === 4001) return reload(e.reason);
       if (e.code === 4004 || e.code === 1000) return state("closed");
       state("disconnected");
@@ -77,8 +79,9 @@
           trees = null;
           page(m.html);
         }
-        emit("vk:patched", { ids: ["c0"] });
+        emit("vk:patched", { ids: ["c0"], join: true });
         pushed(m.js);
+        waiting.splice(0).forEach((f) => f());
         break;
       case "patch": {
         let ups = m.updates || [];
@@ -116,6 +119,12 @@
       b.el.removeAttribute("aria-busy");
     }
     if (m.ref && m.type !== "redirect") settle(m.ref, m.type === "error" || !!m.error);
+    const w = m.ref && replies.get(m.ref);
+    if (w) {
+      replies.delete(m.ref);
+      if (m.type === "error" || m.error) w.reject(new Error(m.error || "live: " + m.type));
+      else w.resolve();
+    }
   }
 
   function fail(message, ref) {
@@ -563,12 +572,15 @@
     }
   }
 
-  // Calling JavaScript: a function registered with vuka.register, else one
-  // at a dotted path on window, called as fn(ctx, ...args) — never eval'd.
+  // Calling JavaScript: a method of the component's own script (the
+  // component loader's), a function registered with vuka.register, else
+  // one at a dotted path on window, called as fn(ctx, ...args) — never
+  // eval'd.
   const fns = new Map(), stop = {};
   function call(el, a, e) {
     const path = String(a.fn || "");
-    let fn = fns.get(path), self = window;
+    const own = window.vukaComponents && window.vukaComponents.method(el, path);
+    let fn = own || fns.get(path), self = window;
     if (!fn && /^[A-Za-z_$][\w$]*(\.[A-Za-z_$][\w$]*)*$/.test(path)) {
       fn = window;
       for (const k of path.split(".")) { self = fn; fn = fn == null ? undefined : fn[k]; }
@@ -580,7 +592,7 @@
     const ctx = { el: a.to ? targets(el, a.to)[0] || null : el, event: e,
       root: el && el.closest("[data-vk-id]") || document, target: (to) => targets(el, to) };
     try {
-      return fn.apply(fns.has(path) ? undefined : self, [ctx, ...(a.args || []).map((v) => arg(el, v))]);
+      return fn.apply(own || fns.has(path) ? undefined : self, [ctx, ...(a.args || []).map((v) => arg(el, v))]);
     } catch (err) {
       return failed(el, path, err);
     }
@@ -1011,11 +1023,35 @@
     window.dispatchEvent(new CustomEvent("vk:navigate", { detail: { url: u.href, patch: !!n.patch } }));
   }
 
+  // push sends an event to a method of el's live component by name (a
+  // component script's ctx.push): one payload at most, a value or an
+  // object of form fields. Sent once the page is joined; the promise
+  // settles with the reply.
+  const replies = new Map(), waiting = [];
+  function push(el, name, payload) {
+    const root = el && el.closest("[data-vk-id]");
+    if (!live || !root) return Promise.reject(new Error("live: push needs a live component"));
+    return new Promise((resolve, reject) => {
+      const go = () => {
+        const msg = { type: "event", target: root.getAttribute("data-vk-id") + ":" + name, event: "push" };
+        if (payload && typeof payload === "object") {
+          msg.form = {};
+          for (const [k, v] of Object.entries(payload)) msg.form[k] = [].concat(v).map(String);
+        } else if (payload !== undefined && payload !== null) msg.value = String(payload);
+        const id = send(msg, null, null);
+        if (id) replies.set(id, { resolve, reject });
+        else reject(new Error("live: not connected"));
+      };
+      if (joined) go();
+      else waiting.push(go);
+    });
+  }
+
   // register names a function for call; a page's script that runs first
   // queues its calls on window.vuka.q.
   const register = (name, fn) => { fns.set(String(name), fn); };
   ((window.vuka && window.vuka.q) || []).forEach((r) => register(...r));
-  window.vuka = { connect, tree, register, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
+  window.vuka = { connect, tree, register, push, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   listenIn(document.documentElement.outerHTML);
   if (!live) return;
   history.replaceState({ ...history.state, vk: pageID }, "");

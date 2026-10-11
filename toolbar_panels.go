@@ -90,6 +90,9 @@ func renderPanels(w io.Writer, r tbRecord) error {
 		}
 		add("Live", count(len(r.Live)), tone, "live", lv)
 	}
+	if len(r.Assets) > 0 {
+		add("Assets", count(len(r.Assets)), "", "assets", assetsOf(r.Assets))
+	}
 	ps = append(ps, notePanels(r.Notes)...)
 	return panelTemplates.ExecuteTemplate(w, "panels", map[string]any{"Panels": ps, "Dropped": r.Dropped})
 }
@@ -387,4 +390,21 @@ func renderPanel(w io.Writer, render func([]any) ui.Node, vals []any) (err error
 		return n.Render(context.Background(), w)
 	}
 	return nil
+}
+
+type assetView struct {
+	tbAsset
+	Size string
+}
+
+func assetsOf(as []tbAsset) []assetView {
+	var out []assetView
+	for _, a := range as {
+		v := assetView{tbAsset: a}
+		if a.CSS > 0 {
+			v.Size = bytesText(a.CSS)
+		}
+		out = append(out, v)
+	}
+	return out
 }
