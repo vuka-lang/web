@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -490,6 +491,30 @@ func TestBrowserToolbar(t *testing.T) {
 	if s := text(); !strings.Contains(s, "join") {
 		t.Errorf("the Live panel: %s", s)
 	}
+
+	// The click's entry, opened: its frames decoded, fetched on opening.
+	entry := tb + `.querySelector('.panel[data-panel="Live"] details')`
+	p.Eval(`(() => { const d = `+entry+`; d.open = true; })()`, nil)
+	p.Wait(entry + `.querySelector('.wpanel[data-wpanel="summary"]:not([hidden])')`)
+	wpanel := func(name string) string {
+		var s string
+		p.ClickElement(entry + `.querySelector('.wtab[data-wtab="` + name + `"]')`)
+		p.Wait(entry + `.querySelector('.wpanel[data-wpanel="` + name + `"]:not([hidden])')`)
+		p.Eval(entry+`.querySelector('.wpanel[data-wpanel="`+name+`"]').textContent`, &s)
+		return s
+	}
+	if s := wpanel("summary"); !strings.Contains(s, "c1") || !strings.Contains(s, "counter") || !strings.Contains(s, "n=1") || !strings.Contains(s, "dynamics") {
+		t.Errorf("Summary: %s", s)
+	}
+	if s := wpanel("diff"); !strings.Contains(s, "c1 › u.") || !strings.Contains(s, "n=0") || !strings.Contains(s, "n=1") {
+		t.Errorf("Diff: %s", s)
+	}
+	if s := wpanel("raw"); !strings.Contains(s, `"type": "patch"`) || !strings.Contains(s, `"type": "event"`) || !strings.Contains(s, `"trees"`) {
+		t.Errorf("Raw: %s", s)
+	}
+	if dir := os.Getenv("VUKA_SCREENSHOTS"); dir != "" {
+		p.Screenshot(filepath.Join(dir, "toolbar-raw.png"))
+	}
 	if dir := os.Getenv("VUKA_SCREENSHOTS"); dir != "" {
 		p.Screenshot(filepath.Join(dir, "toolbar-live.png"))
 	}
@@ -502,6 +527,70 @@ func TestBrowserToolbar(t *testing.T) {
 	p.Eval(tb+`.querySelector("select").selectedOptions[0].textContent`, &option)
 	if option != "GET /json → 200" {
 		t.Errorf("the fetch's entry: %q", option)
+	}
+}
+
+// TestBrowserToolbarNavigate follows a live navigation: a link from / to
+// /counter moves the handle and the Request panel to /counter's record,
+// and back returns to /'s.
+func TestBrowserToolbarNavigate(t *testing.T) {
+	withToolbar(t)
+	a := New(Only("none"), Dev())
+	a.Get("/", func(ctx context.Context) ui.Node {
+		NoteStatement(ctx, Statement{SQL: "SELECT 1", Start: time.Now(), Rows: -1})
+		return fullPage(ui.El("main", nil, ui.Link(ui.LinkProps{Href: "/counter", ID: "go", Children: ui.Text("Counter")}),
+			ui.Component("home#1", nil, &counter{Label: "home="})))
+	})
+	a.Live("/counter", &counter{Label: "n="}, Layout(func(page ui.Node) ui.Node {
+		return fullPage(ui.El("main", nil, ui.Link(ui.LinkProps{Href: "/", ID: "home", Children: ui.Text("Home")}), page))
+	}))
+	srv := httptest.NewServer(a.Handler())
+	t.Cleanup(srv.Close)
+
+	b := chrome.Launch(t)
+	p := b.Open(srv.URL + "/")
+	p.Viewport(1400, 800, false)
+	tb := `document.querySelector("vuka-toolbar").shadowRoot`
+	p.Wait(tb + `.querySelector(".handle .num") && document.documentElement.getAttribute("data-vk-state") === "connected"`)
+	handle := func() string {
+		var s string
+		p.Eval(tb+`.querySelector(".handle").textContent`, &s)
+		return s
+	}
+	if h := handle(); !strings.Contains(h, "1 q") {
+		t.Errorf("the handle on /: %q", h)
+	}
+	p.ClickElement(tb + `.querySelector(".handle")`)
+	p.Wait(tb + `.querySelector('.panel[data-panel="Request"]:not([hidden])')`)
+	var first string
+	p.Eval(tb+`.querySelector("select").value`, &first)
+
+	p.Click("#go")
+	p.WaitText("main span", "n=0")
+	p.Wait(`location.pathname === "/counter" && ` + tb + `.querySelector("select").selectedOptions[0].textContent === "page /counter"`)
+	p.Wait(tb + `.querySelector('.panel[data-panel="Request"]:not([hidden])') && ` + tb + `.querySelector('.panel[data-panel="Request"]').textContent.includes("GET /counter")`)
+	p.Wait(`!` + tb + `.querySelector(".handle").textContent.includes("loading")`)
+	if h := handle(); !strings.Contains(h, "0 q") {
+		t.Errorf("the handle on /counter: %q", h)
+	}
+	var req string
+	p.Eval(tb+`.querySelector('.panel[data-panel="Request"]').textContent`, &req)
+	if !strings.Contains(req, "live page web.counter") {
+		t.Errorf("the Request panel: %s", req)
+	}
+	p.ClickElement(tb + `.querySelector('.tab[data-tab="Live"]')`)
+	p.Wait(tb + `.querySelector('.panel[data-panel="Live"]:not([hidden])') && ` + tb + `.querySelector('.panel[data-panel="Live"]').textContent.includes("navigate")`)
+	if dir := os.Getenv("VUKA_SCREENSHOTS"); dir != "" {
+		p.Screenshot(filepath.Join(dir, "toolbar-navigate.png"))
+	}
+
+	p.Eval(`history.back()`, nil)
+	p.Wait(`location.pathname === "/" && document.querySelector("#go") !== null`)
+	p.Wait(tb + `.querySelector("select").value === ` + strconv.Quote(first))
+	var options int
+	p.Eval(tb+`.querySelectorAll("select option").length`, &options)
+	if options != 2 {
+		t.Errorf("%d entries in the list", options)
 	}
 }
 

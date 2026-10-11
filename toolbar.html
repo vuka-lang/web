@@ -50,16 +50,57 @@
 </table>{{end}}{{end}}
 
 {{define "live"}}<div class="live">
-	{{- range .}}<details class="msg {{.Tone}}" data-ref="{{.Ref}}"{{if .Err}} data-err{{end}}>
+	{{- range .}}<details class="msg {{.Tone}}" data-ref="{{.Ref}}"{{if .Err}} data-err{{end}} data-seq="{{.Seq}}">
 		<summary><span class="type t-{{.Type}}">{{.Type}}</span> <code>{{.Subject}}</code>
 			<span class="meta">{{.Ms}} · {{.Q}} q · {{.Bytes}} <span class="dim">{{.Clock}}</span></span>
 			{{- if .Err}}<div class="errtext">{{.Err}}</div>{{end}}</summary>
 		<div class="msgbody">
+			{{- if .Frames}}<div class="wire" data-wire="{{.Seq}}"><p class="dim">Loading the frames…</p></div>
+			{{- else if .Dropped}}<p class="note">This message's frames were dropped: a page keeps its latest messages' frames, up to 1 MB.</p>{{end}}
 			{{- if .SQL.Rows}}<h4>SQL</h4>{{template "sql" .SQL}}{{end}}
 			<h4>Timeline</h4>{{template "timeline" .Timeline}}
 			{{- if .Logs}}<h4>Logs</h4>{{template "logs" .Logs}}{{end}}
 		</div>
 	</details>{{end}}
+</div>{{end}}
+
+{{define "wire"}}<nav class="wtabs" role="tablist">
+	<button type="button" role="tab" class="wtab" data-wtab="summary">Summary</button>
+	<button type="button" role="tab" class="wtab" data-wtab="diff">Diff{{if .Changes}} <span class="count">{{.Changes}}</span>{{end}}</button>
+	<button type="button" role="tab" class="wtab" data-wtab="raw">Raw</button>
+</nav>
+<div class="wpanel" data-wpanel="summary">
+	{{- with .Client}}<div class="frame-head"><span class="dir">→</span> <b>{{.Label}}</b> <span class="dim">{{.Size}} from the browser</span>{{with .Detail}} <code>{{.}}</code>{{end}}</div>{{end}}
+	{{- range .Server}}<div class="frame-head"><span class="dir">←</span> <b>{{.Label}}</b> <span class="dim">{{.Size}}</span>{{with .Report}}{{if .Error}} <span class="errtext">{{.Error}}</span>{{end}}{{if .URL}} <code>{{.URL}}</code>{{end}}{{end}}</div>
+	<div class="split" title="{{.Split}}">{{range .Bars}}<i class="b-{{.Name}}" style="{{.Style}}" title="{{.Text}}"></i>{{end}}</div>
+	<p class="splittext">{{.Split}}</p>
+	{{- with .Report}}{{if .Insts}}<table class="grid insts">
+		<tr><th>Instance</th><th>Sent</th><th class="num">Dynamics</th><th class="num">List steps</th><th class="num">New statics</th><th class="num">Token patches</th><th class="num">Refs</th><th class="num">Bytes</th></tr>
+		{{- range .Insts}}<tr><td><code>{{.ID}}</code> {{.Type}}</td><td><span class="kind k-{{.Kind}}">{{if eq .Kind "full"}}full tree{{else if eq .Kind "diff"}}diff{{else}}HTML{{end}}</span></td>
+			<td class="num">{{if eq .Kind "diff"}}{{.Dyn}}{{else}}—{{end}}</td><td class="num">{{.Steps}}</td>
+			<td class="num">{{.Statics}}{{if .Statics}} <span class="dim">{{bytes .SBytes}}</span>{{end}}</td>
+			<td class="num">{{.Patches}}</td><td class="num">{{.Refs}}{{if .NewRefs}} <span class="dim">+{{.NewRefs}} kept</span>{{end}}</td><td class="num">{{bytes .Bytes}}</td></tr>{{end}}
+	</table>{{end}}
+	{{- if .Rows}}<ul class="changes">{{range $i, $r := .Rows}}{{if lt $i 5}}<li><code>{{$r.Path}}</code> {{if $r.HasOld}}<code class="old">{{markOld $r.Old $r.New}}</code> <span class="arrow">→</span> <code class="new">{{markNew $r.Old $r.New}}</code>{{else}}<code class="new">"{{$r.New}}"</code>{{end}}{{if $r.Note}} <span class="dim">{{$r.Note}}</span>{{end}}</li>{{end}}{{end}}
+		{{- if gt (len .Rows) 5}}<li class="dim">{{sub (len .Rows) 5}} more in Diff</li>{{end}}</ul>{{end}}
+	{{- if .JS}}<p class="jslist"><b>JS pushed</b> {{range $i, $j := .JS}}{{if $i}}, {{end}}<code>{{$j}}</code>{{end}}</p>{{end}}{{end}}
+	{{- end}}
+</div>
+<div class="wpanel" data-wpanel="diff" hidden>
+	{{- range .Server}}{{with .Report}}<div class="frame-head"><span class="dir">←</span> <b>{{.Type}}</b></div>
+	{{- if not .Rows}}<p class="empty">Nothing changed.</p>{{else}}<table class="grid diff">
+		{{- range .Rows}}<tr><td class="path"><code>{{.Path}}</code>{{if .At}}<div class="at" title="the markup before it">{{.At}}</div>{{end}}{{if .Note}}<div class="dim">{{.Note}}</div>{{end}}</td>
+			<td class="vals">{{if .HasOld}}<code class="old">{{markOld .Old .New}}</code> <span class="arrow">→</span> <code class="new">{{markNew .Old .New}}</code>{{else}}<code class="new">"{{.New}}"</code>{{end}}</td></tr>{{end}}
+	</table>{{if .MoreRows}}<p class="foot">{{.MoreRows}} more changes weren't kept.</p>{{end}}{{end}}{{end}}{{end}}
+</div>
+<div class="wpanel" data-wpanel="raw" hidden>
+	{{- with .Client}}{{template "rawframe" .}}{{end}}
+	{{- range .Server}}{{template "rawframe" .}}{{end}}
+</div>{{end}}
+
+{{define "rawframe"}}<div class="raw">
+	<div class="frame-head"><span class="dir">{{if eq .Dir "client"}}→{{else}}←{{end}}</span> <b>{{.Label}}</b> <span class="dim">{{.Size}}{{if .Truncated}} · the first 64 kB shown{{end}}</span><button type="button" class="copy">Copy</button></div>
+	<pre class="json">{{.JSON}}</pre>
 </div>{{end}}
 
 {{define "notes"}}{{if not .}}<p class="empty">Nothing noted.</p>{{else}}<ol class="notes">{{range .}}<li><pre>{{.}}</pre></li>{{end}}</ol>{{end}}{{end}}

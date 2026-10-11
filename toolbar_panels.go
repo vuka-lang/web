@@ -23,7 +23,8 @@ import (
 //go:embed toolbar.html
 var toolbarHTML string
 
-var panelTemplates = template.Must(template.New("toolbar").Funcs(template.FuncMap{"sql": highlightSQL}).Parse(toolbarHTML))
+var panelTemplates = template.Must(template.New("toolbar").Funcs(template.FuncMap{"sql": highlightSQL, "bytes": bytesText, "sub": func(a, b int) int { return a - b },
+	"markOld": func(a, b string) template.HTML { return marked(a, b, 0) }, "markNew": func(a, b string) template.HTML { return marked(a, b, 1) }}).Parse(toolbarHTML))
 
 type panelView struct {
 	Name, Count, Tone string
@@ -33,7 +34,7 @@ type panelView struct {
 // summary is what the handle shows of a record.
 func summary(r tbRecord) map[string]any {
 	return map[string]any{"id": r.ID, "method": r.Method, "uri": r.URI, "status": r.Status, "ms": ms(r.Dur),
-		"queries": len(r.Queries), "live": len(r.Live), "done": r.Done, "earlier": r.Earlier, "tone": worst(tones(r)...)}
+		"queries": len(r.Queries), "live": len(r.Live), "now": r.Now, "done": r.Done, "earlier": r.Earlier, "tone": worst(tones(r)...)}
 }
 
 func tones(r tbRecord) []string {
@@ -300,7 +301,8 @@ func logsOf(ls []tbLog) []logRow {
 
 type liveMsg struct {
 	Type, Subject, Clock, Ms, Bytes, Err, Tone string
-	Ref, Q                                     int
+	Ref, Q, Seq, Frames                        int
+	Dropped                                    bool
 	SQL                                        sqlView
 	Timeline                                   []timelineRow
 	Logs                                       []logRow
@@ -313,7 +315,7 @@ func liveOf(msgs []*tbEntry) []liveMsg {
 		m := msgs[i].snapshot()
 		s := sqlOf(m.Queries)
 		v := liveMsg{Type: m.Method, Subject: m.URI, Clock: m.Start.Format("15:04:05.000"), Ms: ms(m.Dur), Bytes: bytesText(m.Bytes),
-			Err: m.Err, Ref: m.Ref, Q: len(m.Queries), SQL: s, Timeline: timelineOf(m), Logs: logsOf(m.Logs)}
+			Err: m.Err, Ref: m.Ref, Q: len(m.Queries), Seq: m.Seq, Frames: len(m.Frames), Dropped: m.FramesDropped, SQL: s, Timeline: timelineOf(m), Logs: logsOf(m.Logs)}
 		switch {
 		case m.Err != "": // red only for a message that failed; what it ran warns
 			v.Tone = "err"

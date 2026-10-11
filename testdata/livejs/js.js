@@ -584,7 +584,7 @@ test("navigation: a patch link sends navigate, then the address follows the repl
   p.window.addEventListener("vk:navigate", (e) => seen.push(e.detail));
   const e = p.fire("#next", "click", { button: 0 });
   eq([e.defaultPrevented, navs(p)], [true, [{ type: "navigate", url: "/shelf?page=2", patch: true }]], "sent");
-  eq(p.doc.documentElement.hasAttribute("data-vk-navigating"), true, "in flight");
+  eq(p.doc.documentElement.getAttribute("data-vk-navigating"), "/shelf?page=2", "in flight, to where");
   p.fire("#inc", "click");
   eq(p.ws().sent.filter((m) => m.type === "event").length, 0, "no events while a navigation is in flight");
   p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c1", html: shelf(2).slice(6, -7) }], url: "/shelf?page=2", token: "t2" });

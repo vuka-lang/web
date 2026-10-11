@@ -153,9 +153,10 @@ type conn struct {
 	r      *http.Request // the upgrade request
 	uri    string        // the page, from its token
 	s      liveproto.Session
-	topics []string // guarded by the hub's mutex
-	tb     *tbSink  // the development toolbar's record of the page, its messages under it
-	out    []byte   // with tb, the last message written
+	topics []string    // guarded by the hub's mutex
+	tb     *tbSink     // the development toolbar's record of the page, its messages under it
+	wire   *wireMirror // with tb, what the browser holds, to decode the frames sent
+	frames []tbFrame   // with tb, the frames the message being recorded sent
 
 	mu    sync.Mutex
 	inbox []delivery
@@ -204,6 +205,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	if a.tb != nil {
 		if c.tb = a.tb.liveSink(r.URL.Query().Get("tb"), uri); c.tb != nil {
 			ctx = context.WithValue(ctx, tbKey{}, c.tb)
+			c.wire = newWireMirror(c.instanceType)
 		}
 	}
 	if !a.hub.add(c) {
@@ -263,7 +265,9 @@ func (c *conn) write(ctx context.Context, m any) {
 	e.Encode(m)
 	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 	if c.tb != nil {
-		c.out = b
+		f := newFrame("server", b)
+		f.Report = c.wire.apply(b)
+		c.frames = append(c.frames, f)
 	}
 	wctx, done := context.WithTimeout(ctx, writeTimeout)
 	defer done()
@@ -283,7 +287,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		return true
 	}
 	if c.tb != nil {
-		defer c.record(m.ClientMessage)()
+		defer c.record(m.ClientMessage, data)()
 	}
 	switch {
 	case m.Type == live.Join:
@@ -300,7 +304,12 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 	case c.s == nil:
 		c.write(ctx, live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: "live: join first"})
 	case m.Type == live.Navigate:
-		c.write(ctx, c.navigate(ctx, m.ClientMessage))
+		reply := c.navigate(ctx, m.ClientMessage)
+		if _, moved := reply.(withToken); moved && c.tb != nil {
+			// before the reply: the toolbar asks for the page once it lands
+			c.tb.navigated(c.tb.cur.Load(), c.uri, m.Patch, c.r.Header)
+		}
+		c.write(ctx, reply)
 	default:
 		c.write(ctx, c.s.Event(m.ClientMessage))
 	}
@@ -374,7 +383,7 @@ func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, erro
 	req := c.r.Clone(context.WithValue(ctx, joinKey{}, j))
 	req.Method, req.URL, req.RequestURI = http.MethodGet, u, uri
 	req.Body, req.ContentLength = http.NoBody, 0
-	for _, h := range []string{"Upgrade", "Connection", "Sec-Websocket-Key", "Sec-Websocket-Version", "Sec-Websocket-Extensions", "Sec-Websocket-Protocol"} {
+	for _, h := range upgradeHeaders {
 		req.Header.Del(h)
 	}
 	req.Header.Set("X-Vuka-Live", why)
@@ -382,6 +391,10 @@ func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, erro
 	c.app.handler.ServeHTTP(rec, req)
 	return j, rec, nil
 }
+
+// upgradeHeaders are the upgrade request's own headers, which a run of a
+// route for the connection doesn't carry.
+var upgradeHeaders = []string{"Upgrade", "Connection", "Sec-Websocket-Key", "Sec-Websocket-Version", "Sec-Websocket-Extensions", "Sec-Websocket-Protocol"}
 
 // withToken is a navigation's reply with the token of the page it moved to.
 type withToken struct {
@@ -443,7 +456,7 @@ func (c *conn) syncTopics() {
 // record starts recording a client message for the development toolbar:
 // what it ran (statements, spans, logs) and its reply, ended by the
 // function returned.
-func (c *conn) record(m live.ClientMessage) func() {
+func (c *conn) record(m live.ClientMessage, data []byte) func() {
 	typ, subject := m.Type, c.uri
 	switch m.Type {
 	case live.Join:
@@ -461,24 +474,40 @@ func (c *conn) record(m live.ClientMessage) func() {
 			subject += " (" + m.Event.Type + ")"
 		}
 	}
-	return c.recording(typ, subject, m.Ref)
+	return c.recording(typ, subject, m.Ref, c.wire.maskClient(data))
 }
 
 // recordInfo starts recording a broadcast's delivery.
 func (c *conn) recordInfo(d delivery) func() {
-	return c.recording("broadcast", fmt.Sprintf("%s %T", cmp.Or(d.topic, `""`), d.msg), 0)
+	return c.recording("broadcast", fmt.Sprintf("%s %T", cmp.Or(d.topic, `""`), d.msg), 0, nil)
 }
 
-func (c *conn) recording(typ, subject string, ref int) func() {
-	m := c.tb.message(typ, subject, ref)
+func (c *conn) recording(typ, subject string, ref int, client []byte) func() {
+	m := c.tb.message(typ, subject, ref, client)
 	unbind := bindGoroutine(c.tb)
 	end := m.span(typ, subject) // the message's whole handling, what it ran inside
-	c.out = nil
+	c.frames = nil
 	return func() {
 		end()
 		unbind()
-		c.tb.done(m, c.out)
+		frames := c.frames
+		c.frames = nil
+		c.tb.done(m, frames)
 	}
+}
+
+// instanceType names an instance's component for the toolbar, from its
+// first handler when the session says (Counter.Inc: Counter).
+func (c *conn) instanceType(id string) string {
+	if id == "c0" {
+		return "page"
+	}
+	h, ok := c.s.(interface{ Handler(string) any })
+	if !ok {
+		return ""
+	}
+	t, _, _ := strings.Cut(handlerName(h.Handler(id+":0")), ".")
+	return t
 }
 
 // recorder is the response of a join's run of the route: only its status and

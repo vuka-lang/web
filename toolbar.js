@@ -36,10 +36,14 @@
   const handle = $(".handle"), drawer = $(".drawer"), select = $("select"), body = $(".body");
   const chip = $(".chip"), buildOut = $(".build-out"), stateEl = $(".state");
 
-  const calls = [{ id: pageID, label: "page " + location.pathname + location.search }];
+  const calls = [{ id: pageID, label: "page " + location.pathname + location.search, page: true }];
   const browserErrors = []; // failures the server never saw: a push timing out, a dropped connection
   let page = null, build = { state: "" }, selected = pageID, tab = recall("tab") || "Request";
   let buildAt = 0;
+  let current = pageID; // the record of the page on screen: a live navigation moves it
+  let going = ""; // where a live navigation in flight goes
+  let wtab = recall("wtab") || "summary";
+  const wires = new Map(); // "record:seq" → a socket message's frames, drawn: they don't change once sent
 
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const get = (path) => fetch(base + path, { cache: "no-store" }).then((r) => r.json());
@@ -47,6 +51,11 @@
   // The handle: the build when it isn't ok, else the page's time and queries.
   function drawHandle() {
     handle.className = "handle";
+    if (going) {
+      handle.classList.add("building");
+      stateEl.innerHTML = `<span class="spin"></span> <span class="build-text">loading ${esc(going)}…</span>`;
+      return;
+    }
     if (build.state === "building") {
       const s = build.elapsed + (Date.now() - buildAt) / 1000;
       handle.classList.add("building");
@@ -60,7 +69,7 @@
     }
     if (!page) { stateEl.textContent = "…"; return; }
     if (page.tone) handle.classList.add(page.tone);
-    const n = calls.length - 1;
+    const n = calls.filter((c) => !c.page).length;
     stateEl.innerHTML = `<span class="num">${esc(page.ms)}</span><span class="sep">·</span><span class="num">${page.queries} q</span>` +
       (n ? `<span class="calls" title="fetch and XHR calls">+${n}</span>` : "");
   }
@@ -88,12 +97,12 @@
       body.innerHTML = `<p class="gone">${esc((r && r.error) || "The app isn't answering.")}</p>`;
       return;
     }
-    if (id === pageID) { page = r; drawHandle(); }
+    if (id === current) { page = r; drawHandle(); }
     const scroll = (body.querySelector(".panel:not([hidden])") || {}).scrollTop || 0;
-    const open = [...body.querySelectorAll("details[open]")].map((d) => d.dataset.ref);
+    const open = [...body.querySelectorAll("details[open]")].map((d) => d.dataset.seq || d.dataset.ref);
     body.innerHTML = r.html;
-    if (id === pageID) addBrowserErrors();
-    for (const d of body.querySelectorAll("details")) if (open.includes(d.dataset.ref)) d.open = true;
+    if (id === current) addBrowserErrors();
+    for (const d of body.querySelectorAll("details")) if (open.includes(d.dataset.seq || d.dataset.ref)) { d.open = true; wire(d); }
     show(body.querySelector(`[data-tab="${CSS.escape(tab)}"]`) ? tab : "Request");
     const p = body.querySelector(".panel:not([hidden])");
     if (p) p.scrollTop = scroll;
@@ -118,6 +127,35 @@
     }
   }
 
+  // wire draws a socket message's frames (Summary, Diff, Raw) when its entry
+  // opens: fetched once, as they can be large.
+  async function wire(d) {
+    const box = d.querySelector(".wire[data-wire]");
+    if (!box || box.dataset.drawn) return;
+    const id = selected, key = id + ":" + box.dataset.wire;
+    let html = wires.get(key);
+    if (!html) {
+      const r = await get("r/" + encodeURIComponent(id) + "?wire=" + encodeURIComponent(box.dataset.wire)).catch(() => null);
+      if (!r || r.error) { box.innerHTML = `<p class="gone">${esc((r && r.error) || "The app isn't answering.")}</p>`; return; }
+      html = r.html;
+      if (wires.size > 200) wires.delete(wires.keys().next().value);
+      wires.set(key, html);
+    }
+    if (!box.isConnected) {
+      const again = body.querySelector(`details[data-seq="${CSS.escape(box.dataset.wire)}"]`);
+      if (again && again.open) wire(again);
+      return;
+    }
+    box.innerHTML = html;
+    box.dataset.drawn = "1";
+    showWire(box, wtab);
+  }
+
+  function showWire(box, name) {
+    for (const t of box.querySelectorAll(".wtab")) t.setAttribute("aria-selected", String(t.dataset.wtab === name));
+    for (const p of box.querySelectorAll(".wpanel")) p.hidden = p.dataset.wpanel !== name;
+  }
+
   function toggle(open) {
     drawer.hidden = !open;
     handle.setAttribute("aria-expanded", String(open));
@@ -131,7 +169,16 @@
   body.addEventListener("click", (e) => {
     const t = e.target.closest(".tab");
     if (t) { show(t.dataset.tab); remember("tab", tab); }
+    const w = e.target.closest(".wtab");
+    if (w) { wtab = w.dataset.wtab; remember("wtab", wtab); showWire(w.closest(".wire"), wtab); }
+    const c = e.target.closest(".copy");
+    if (c) {
+      const text = c.closest(".raw").querySelector("pre").textContent;
+      const done = () => { c.textContent = "Copied"; setTimeout(() => { c.textContent = "Copy"; }, 1200); };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => { c.textContent = "Copy failed"; });
+    }
   });
+  body.addEventListener("toggle", (e) => { if (e.target.matches && e.target.matches("details.msg") && e.target.open) wire(e.target); }, true);
   root.addEventListener("keydown", (e) => { if (e.key === "Escape") toggle(false); });
 
   // Each fetch and XHR call answered with a record joins the list.
@@ -157,11 +204,42 @@
   };
 
   // The live connection's messages are the page's: refresh after each.
-  document.addEventListener("vk:patched", () => { if (selected === pageID) reload(); });
+  document.addEventListener("vk:patched", () => { if (selected === current) reload(); });
   document.addEventListener("vk:error", (e) => {
     const d = e.detail || {};
     browserErrors.push({ message: d.message || String(d.error || "error"), ref: d.ref, at: new Date().toLocaleTimeString() });
-    if (selected === pageID) reload();
+    if (selected === current) reload();
+  });
+
+  // A live navigation moves the page over its socket: the handle says where
+  // to while it is in flight, then follows the page on screen — the record
+  // the server made of the navigation (the one it had, back or forward).
+  const html = document.documentElement;
+  let arriving = false; // the page landed: the handle says loading until its record is here
+  new MutationObserver(() => {
+    const to = html.getAttribute("data-vk-navigating");
+    if (to != null) going = to || "…";
+    else if (!arriving) going = "";
+    drawHandle();
+  }).observe(html, { attributes: true, attributeFilter: ["data-vk-navigating"] });
+  window.addEventListener("vk:navigate", async (e) => {
+    const d = e.detail || {}, u = new URL(d.url || location.href);
+    arriving = true;
+    const r = await get("r/" + encodeURIComponent(pageID)).catch(() => null);
+    const id = (r && !r.error && r.now) || current;
+    const label = "page " + u.pathname + u.search;
+    const follow = selected === current;
+    let c = calls.find((x) => x.id === id);
+    if (!c) calls.push(c = { id, label, page: true }); else c.label = label;
+    current = id;
+    if (follow) selected = id;
+    drawSelect();
+    const p = await get("r/" + encodeURIComponent(id)).catch(() => null);
+    if (p && !p.error && id === current) page = p;
+    arriving = false;
+    if (html.getAttribute("data-vk-navigating") == null) going = "";
+    drawHandle();
+    if (follow && !drawer.hidden) load();
   });
 
   // vuka run -watch's build: the server sends each change over one stream,

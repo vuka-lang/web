@@ -977,7 +977,7 @@
     flush();
     if (nav) clearTimeout(nav.timer);
     nav = { ref: ++ref, href: u.href, patch, pop, timer: setTimeout(() => load(u.href, pop), 10000) };
-    document.documentElement.setAttribute("data-vk-navigating", "");
+    document.documentElement.setAttribute("data-vk-navigating", at); // where to, for the development toolbar
     ws.send(JSON.stringify({ type: "navigate", ref: nav.ref, url: at, patch: patch || undefined }));
   }
 

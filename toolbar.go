@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"log"
 	"log/slog"
 	"net"
@@ -136,6 +137,14 @@ type tbRecord struct {
 	Bytes   int    // its reply's size
 	Err     string // its reply's error
 	Dropped int    // rows over toolbarMaxRows
+	Seq     int    // a socket message's number, for its frames' views
+	Frames  []tbFrame
+	// FramesDropped says a socket message's frames were dropped, the
+	// page's record keeping the latest messages' (wirePageMax).
+	FramesDropped bool
+	// Now is the record of the page a live connection opened from this
+	// page shows now, after navigating over the socket; "" when it hasn't.
+	Now string
 }
 
 type tbParam struct{ Name, From, Value string }
@@ -257,6 +266,7 @@ func (e *tbEntry) snapshot() tbRecord {
 	r := e.tbRecord
 	r.Params, r.Queries, r.Spans = slices.Clone(r.Params), slices.Clone(r.Queries), slices.Clone(r.Spans)
 	r.Logs, r.Notes, r.Live = slices.Clone(r.Logs), slices.Clone(r.Notes), slices.Clone(r.Live)
+	r.Frames = slices.Clone(r.Frames)
 	if !r.Done {
 		r.Dur = time.Since(r.Start)
 	}
@@ -267,8 +277,11 @@ func (e *tbEntry) snapshot() tbRecord {
 // connection's sink moves from message to message.
 type tbSink struct {
 	tb   *toolbar
-	page *tbEntry // a live connection's page
+	page *tbEntry // a live connection's page: the one on screen
 	cur  atomic.Pointer[tbEntry]
+
+	origin *tbEntry            // the page the connection was opened by
+	shown  map[string]*tbEntry // the connection's pages, by URI
 }
 
 type tbKey struct{}
@@ -683,6 +696,20 @@ func (a *App) routeToolbar() {
 			return
 		}
 		rec := e.snapshot()
+		if q := r.URL.Query(); q.Has("wire") {
+			seq, _ := strconv.Atoi(q.Get("wire"))
+			i := slices.IndexFunc(rec.Live, func(m *tbEntry) bool { return m.Seq == seq })
+			if i < 0 {
+				writeJSON(w, http.StatusNotFound, map[string]any{"error": "the toolbar keeps the latest " + strconv.Itoa(toolbarLive) + " messages of a page; this one is gone"})
+				return
+			}
+			var b bytes.Buffer
+			if err := renderWire(&b, rec.Live[i].snapshot()); err != nil {
+				fmt.Fprintf(&b, "<p class=errtext>%s</p>", template.HTMLEscapeString(err.Error()))
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"html": b.String()})
+			return
+		}
 		out := summary(rec)
 		if r.URL.Query().Has("panels") {
 			var b bytes.Buffer
@@ -737,9 +764,10 @@ func readBuildState(dir string) buildState {
 }
 
 // liveSink is the sink of a live connection opened by the page whose
-// record is id: its messages are recorded under the page. A page an
-// earlier run of the app rendered (vuka run -watch swapped the build) gets
-// a record of its own under the same id.
+// record is id: its messages are recorded under the page — or under the page
+// it navigated to since, on a reconnect. A page an earlier run of the app
+// rendered (vuka run -watch swapped the build) gets a record of its own
+// under the same id.
 func (tb *toolbar) liveSink(id, uri string) *tbSink {
 	if !validToolbarID(id) {
 		return nil
@@ -749,35 +777,110 @@ func (tb *toolbar) liveSink(id, uri string) *tbSink {
 		e = &tbEntry{tbRecord: tbRecord{ID: id, Method: http.MethodGet, URI: uri, Start: time.Now(), Done: true, Earlier: true}}
 		tb.add(e)
 	}
-	return &tbSink{tb: tb, page: e}
+	s := &tbSink{tb: tb, page: e, origin: e, shown: map[string]*tbEntry{}}
+	e.mu.Lock()
+	now, at := e.Now, e.URI
+	e.mu.Unlock()
+	s.shown[at] = e
+	if p := tb.get(now); p != nil && now != "" {
+		s.page = p
+		p.mu.Lock()
+		s.shown[p.URI] = p
+		p.mu.Unlock()
+	}
+	return s
 }
 
-// message starts recording a socket message under the page.
-func (s *tbSink) message(typ, subject string, ref int) *tbEntry {
-	m := &tbEntry{tbRecord: tbRecord{Method: typ, URI: subject, Ref: ref, Start: time.Now()}}
-	p := s.page
+var tbSeq atomic.Int64
+
+// message starts recording a socket message under the page; client is its
+// frame (nil for a broadcast).
+func (s *tbSink) message(typ, subject string, ref int, client []byte) *tbEntry {
+	m := &tbEntry{tbRecord: tbRecord{Method: typ, URI: subject, Ref: ref, Start: time.Now(), Seq: int(tbSeq.Add(1))}}
+	if client != nil {
+		m.Frames = []tbFrame{newFrame("client", client)}
+	}
+	s.page.addLive(m)
+	s.cur.Store(m)
+	return m
+}
+
+func (p *tbEntry) addLive(m *tbEntry) {
 	p.mu.Lock()
 	if len(p.Live) >= toolbarLive {
 		p.Live = slices.Delete(p.Live, 0, 1)
 	}
 	p.Live = append(p.Live, m)
 	p.mu.Unlock()
-	s.cur.Store(m)
-	return m
 }
 
-// done ends a socket message: out is the reply sent, nil for none.
-func (s *tbSink) done(m *tbEntry, out []byte) {
-	var reply struct {
-		Type  string `json:"type"`
-		Error string `json:"error"`
-	}
-	json.Unmarshal(out, &reply)
-	if reply.Type == "error" && reply.Error == "" {
-		reply.Error = "error"
-	}
+// done ends a socket message: frames are the server frames it sent.
+func (s *tbSink) done(m *tbEntry, frames []tbFrame) {
 	m.mu.Lock()
-	m.Dur, m.Done, m.Bytes, m.Err = time.Since(m.Start), true, len(out), reply.Error
+	m.Dur, m.Done = time.Since(m.Start), true
+	m.Frames = append(m.Frames, frames...)
+	if n := len(frames); n > 0 {
+		last := frames[n-1]
+		m.Bytes = last.Size
+		if r := last.Report; r != nil && r.Type == "error" {
+			m.Err = cmp.Or(r.Error, "error")
+		} else if r != nil {
+			m.Err = r.Error
+		}
+		if m.Method == "broadcast" && slices.IndexFunc(frames, func(f tbFrame) bool { return f.Report != nil && len(f.Report.Insts) > 0 }) < 0 &&
+			slices.IndexFunc(frames, func(f tbFrame) bool { return f.Report != nil && len(f.Report.JS) > 0 }) >= 0 {
+			m.Method = "push" // JS commands only
+		}
+	}
 	m.mu.Unlock()
 	s.cur.Store(nil)
+	s.page.trimFrames()
+}
+
+// navigated follows the page to uri, where the socket message m moved it:
+// a patch updates the page's URI and parameters; another page gets a
+// record of its own — the one it had when the connection showed it before
+// and the record is still kept — holding m's server work, and m.
+func (s *tbSink) navigated(m *tbEntry, uri string, patch bool, h http.Header) {
+	r := m.snapshot()
+	if patch {
+		p := s.page
+		p.mu.Lock()
+		p.URI = uri
+		if r.Route != "" {
+			p.Route, p.Handler, p.Params = r.Route, r.Handler, r.Params
+		}
+		p.mu.Unlock()
+		s.shown[uri] = p
+		return
+	}
+	old := s.page
+	p := s.shown[uri]
+	if p == nil || s.tb.get(p.ID) != p {
+		p = &tbEntry{tbRecord: tbRecord{ID: newToolbarID()}}
+		s.tb.add(p)
+		s.shown[uri] = p
+	}
+	req := hideSecrets(h.Clone())
+	for _, k := range upgradeHeaders {
+		req.Del(k)
+	}
+	req.Set("X-Vuka-Live", "navigate")
+	p.mu.Lock()
+	p.Method, p.URI, p.Route, p.Handler, p.Params = http.MethodGet, uri, r.Route, r.Handler, r.Params
+	p.Queries, p.Spans, p.Logs, p.Notes, p.Dropped = r.Queries, r.Spans, r.Logs, r.Notes, r.Dropped
+	p.Status, p.Start, p.Dur, p.Done, p.Earlier, p.Req, p.Resp = http.StatusOK, r.Start, r.Dur, true, false, req, nil
+	p.mu.Unlock()
+	if old != p {
+		old.mu.Lock()
+		if i := slices.Index(old.Live, m); i >= 0 {
+			old.Live = slices.Delete(old.Live, i, i+1)
+		}
+		old.mu.Unlock()
+		p.addLive(m)
+	}
+	s.page = p
+	s.origin.mu.Lock()
+	s.origin.Now = p.ID
+	s.origin.mu.Unlock()
 }
