@@ -76,6 +76,16 @@ func (x native) Handler(target string) any {
 	}
 	return nil
 }
+
+// Component is the component an event's target belongs to, when this
+// Vuka's session says (live.Session.Component); nil otherwise.
+func (x native) Component(target string) ui.Stateful {
+	if c, ok := any(x.s).(interface{ Component(string) ui.Stateful }); ok {
+		return c.Component(target)
+	}
+	return nil
+}
+
 func (x native) Topics() []string { return x.s.Topics() }
 func (x native) Close()           { x.s.Close() }
 

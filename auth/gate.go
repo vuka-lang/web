@@ -1,11 +1,14 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
+	"sync/atomic"
 
 	"github.com/vuka-lang/vuka"
 	"github.com/vuka-lang/web"
@@ -244,34 +247,148 @@ func Next(r *http.Request, home string) string {
 // errNoAuthEvent refuses a gated live event of an app without auth.
 var errNoAuthEvent = errors.New("auth: this event is gated, and the app has no auth.Module")
 
-// call is a gate's call decorator: when the method is called while a live
-// event's handler runs — as the handler, or from it, a function literal
-// handler (onClick={() => b.Clear()}) included — it refuses the call unless
-// the page's identity passes the gate. Otherwise it is not the gate's
-// business: routes and pages are gated by their middleware, and a call from
-// Go outside an event, or the render after one (Render, Mount, a helper), is
-// the app's own. On a type, it advises every method, and gates those an
-// event's handler calls.
-func (g Gate) call(c *vuka.Call) {
-	ev := web.CurrentLiveEvent()
-	if ev == nil || !ev.Handling() {
-		c.Next()
-		return
+// strictGates is Config.StrictGates of an app built with it: a gated call
+// outside any request has no app to ask, so it holds for the process.
+var strictGates atomic.Bool
+
+// errNoIdentity refuses, under StrictGates, a gated call nothing says
+// whose it is.
+var errNoIdentity = fmt.Errorf("auth: a gated call with no identity (Config.StrictGates): pass it a request's context, or one from auth.WithIdentity or auth.System: %w", web.Unauthorized)
+
+type systemKey struct{}
+
+// System is ctx marked as the app's own work — a cron, a job, a migration,
+// main — which gated methods given it let through, whoever ctx's identity
+// is. Under Config.StrictGates a gated call is refused without an identity
+// or this mark; without it, a call outside any request runs anyway, and
+// the mark only says so.
+func System(ctx context.Context) context.Context { return context.WithValue(ctx, systemKey{}, true) }
+
+func isSystem(ctx context.Context) bool { v, _ := ctx.Value(systemKey{}).(bool); return v }
+
+// guardEvent decides a live event before its handler runs (web's
+// GuardLiveEvents): the gates of the component's type, of the handler's
+// receiver type, then of the handler — an @auth.Public on the handler
+// opening it — checked against the identity the page joined with.
+func (a *Auth) guardEvent(ctx context.Context, h web.LiveHandler) error {
+	attrs := append([]any(nil), vuka.TypeAttrs(h.Component)...)
+	if h.Recv != nil && h.Recv != h.Component {
+		attrs = append(attrs, vuka.TypeAttrs(h.Recv)...)
 	}
-	st := stateOf(ev.Context())
-	var err error
+	attrs = append(attrs, h.Attrs...)
+	gs, _ := gatesOf(attrs)
+	if len(gs) == 0 {
+		return nil
+	}
+	st := stateOf(ctx)
 	if st == nil {
-		err = errNoAuthEvent
-	} else {
-		err = g.allow(st.id)
+		return errNoAuthEvent
 	}
+	for _, g := range gs {
+		if err := g.allow(st.id); err != nil {
+			web.NoteRequest(ctx, web.RequestNote{Section: "Auth", Name: "Event gate", Value: describe(gs) + " on " + h.Name + ": refused, " + err.Error(), Refused: true})
+			return err
+		}
+	}
+	return nil
+}
+
+// call is a gate's call decorator. The identity it checks is, in order:
+//
+//   - the one the call's context.Context carries — a request's, a live
+//     page's (what an event's handler is given), auth.WithIdentity's — on
+//     whatever goroutine; auth.System's lets it through;
+//   - on a live connection's goroutine, the page's while an event's handler
+//     runs (the handler itself, or anything it calls synchronously, a
+//     function literal's calls included) — not the render after it, which
+//     isn't an action;
+//   - on a goroutine a live connection's goroutine started (go b.Clear()
+//     in a handler, a decorator moving the call), that page's.
+//
+// A call none of these attributes runs — the app's own code: a cron, a job,
+// main — unless Config.StrictGates, which refuses it. A gate on a type
+// advises its methods but leaves alone those a live component's session
+// calls itself (Render, Mount, Update) and those marked @auth.Public.
+func (g Gate) call(c *vuka.Call) {
+	own := c.Attrs()
+	if !hasGate(own, g) {
+		if isPublic(own) || c.Receiver != nil && lifecycle(c.Name) {
+			c.Next()
+			return
+		}
+	}
+	err, where := g.decide(c.Context())
 	if err == nil {
 		c.Next()
 		return
 	}
-	web.NoteRequest(ev.Context(), web.RequestNote{Section: "Auth", Name: "Event gate", Value: g.String() + " on " + c.Name + ": refused, " + err.Error(), Refused: true})
-	ev.Refuse(err)
+	ev := web.CurrentLiveEvent()
+	if where == nil && ev != nil {
+		where = ev.Context()
+	}
+	if where != nil {
+		web.NoteRequest(where, web.RequestNote{Section: "Auth", Name: "Gate", Value: g.String() + " on " + c.Name + ": refused, " + err.Error(), Refused: true})
+	}
+	if ev != nil && ev.Handling() {
+		ev.Refuse(err)
+	}
 	refuse(c, err)
+}
+
+// decide is nil when the caller ctx (or the live page the call comes from)
+// names may pass g; where is the context the identity came from.
+func (g Gate) decide(ctx context.Context) (err error, where context.Context) {
+	if isSystem(ctx) {
+		return nil, ctx
+	}
+	if st := stateOf(ctx); st != nil {
+		return g.allow(st.id), ctx
+	}
+	if ev := web.CurrentLiveEvent(); ev != nil {
+		if ev.Handling() {
+			st := stateOf(ev.Context())
+			if st == nil {
+				return errNoAuthEvent, ev.Context()
+			}
+			return g.allow(st.id), ev.Context()
+		}
+	} else if o := web.LiveOrigin(); o != nil {
+		if st := stateOf(o); st != nil {
+			return g.allow(st.id), o
+		}
+		return errNoAuthEvent, o
+	}
+	if strictGates.Load() {
+		return errNoIdentity, nil
+	}
+	return nil, nil
+}
+
+// hasGate reports whether attrs hold g: the declaration's own gate, not its
+// type's.
+func hasGate(attrs []any, g Gate) bool {
+	for _, x := range attrs {
+		if o, ok := x.(Gate); ok && o.kind == g.kind && slices.Equal(o.perms, g.perms) {
+			return true
+		}
+	}
+	return false
+}
+
+func isPublic(attrs []any) bool {
+	for _, x := range attrs {
+		if o, ok := x.(Gate); ok && o.kind == public {
+			return true
+		}
+	}
+	return false
+}
+
+// lifecycle reports whether a method ("Board.Render") is one a live
+// component's session calls itself, never an event.
+func lifecycle(name string) bool {
+	m := name[strings.LastIndexByte(name, '.')+1:]
+	return m == "Render" || m == "Mount" || m == "Update" || strings.HasPrefix(m, "Update__")
 }
 
 // refuse ends a call without running the function: with err when it
