@@ -164,18 +164,19 @@
     if (selected === pageID) reload();
   });
 
-  // vuka run -watch's build: polled while the page is open.
-  async function poll() {
-    try {
-      const st = await get("build");
+  // vuka run -watch's build: the server sends each change over one stream,
+  // which reconnects by itself while the app swaps builds.
+  function watchBuild() {
+    const es = new EventSource(base + "build");
+    es.onmessage = (e) => {
+      const st = JSON.parse(e.data);
+      st.elapsed = st.since ? Math.max(0, (Date.now() - Date.parse(st.since)) / 1000) : 0;
       const changed = st.state !== build.state || st.output !== build.output;
       build = st;
       buildAt = Date.now();
       if (changed) { drawBuild(); drawHandle(); }
-    } catch {
-      build = { state: build.state === "ok" ? "" : build.state }; // the app is swapping builds
-    }
-    setTimeout(poll, build.state === "building" ? 400 : 1000);
+    };
+    es.onerror = () => { if (build.state === "ok") { build = { state: "" }; drawHandle(); } }; // the app is swapping builds
   }
   setInterval(() => { if (build.state === "building") drawHandle(); }, 100);
 
@@ -183,6 +184,6 @@
   drawSelect();
   drawHandle();
   get("r/" + encodeURIComponent(pageID)).then((r) => { if (!r.error) { page = r; drawHandle(); } }, () => {});
-  if (script.hasAttribute("data-vk-build")) poll();
+  if (script.hasAttribute("data-vk-build")) watchBuild();
   if (recall("open")) toggle(true);
 })();

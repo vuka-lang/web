@@ -87,7 +87,7 @@ func (a *App) newToolbar() *toolbar {
 	if a.noToolbar || !a.dev && dir == "" || testing.Testing() && dir == "" && !toolbarInTests {
 		return nil
 	}
-	return &toolbar{byID: map[string]*tbEntry{}, dir: dir}
+	return &toolbar{byID: map[string]*tbEntry{}, dir: dir, streams: newStreams()}
 }
 
 // toolbar is an app's ring of request records.
@@ -97,6 +97,8 @@ type toolbar struct {
 	next int
 	byID map[string]*tbEntry
 	dir  string
+
+	streams *streams // pages hearing of vuka run -watch's build state
 }
 
 // tbEntry is a request's record, or a live page's socket message's.
@@ -687,6 +689,16 @@ func (a *App) routeToolbar() {
 		writeJSON(w, http.StatusOK, out)
 	}))
 	a.router.Handle(http.MethodGet, toolbarBuild, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			// The page's stream: the state when it connects, then each change.
+			tb.streams.serve(w, r, func() (string, bool) {
+				st := readBuildState(tb.dir)
+				st.Elapsed = 0 // the page counts from Since
+				b, _ := json.Marshal(st)
+				return string(b), true
+			})
+			return
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, readBuildState(tb.dir))
 	}))

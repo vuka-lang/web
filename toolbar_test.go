@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -501,5 +502,60 @@ func TestBrowserToolbar(t *testing.T) {
 	p.Eval(tb+`.querySelector("select").selectedOptions[0].textContent`, &option)
 	if option != "GET /json → 200" {
 		t.Errorf("the fetch's entry: %q", option)
+	}
+}
+
+// A page hears of each build state over one stream, which Stop ends.
+func TestToolbarBuildStream(t *testing.T) {
+	withToolbar(t)
+	dir := t.TempDir()
+	t.Setenv(DevDirEnv, dir)
+	write := func(s string) { os.WriteFile(filepath.Join(dir, "build.json"), []byte(s), 0o644) }
+	write(`{"state":"ok","took":1.5}`)
+	app := toolbarApp()
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	req, _ := http.NewRequest("GET", srv.URL+"/_vuka/toolbar/build", nil)
+	req.Header.Set("Accept", "text/event-stream")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	events := make(chan buildState)
+	go func() {
+		sc := bufio.NewScanner(res.Body)
+		for sc.Scan() {
+			if d, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
+				var st buildState
+				json.Unmarshal([]byte(d), &st)
+				events <- st
+			}
+		}
+		close(events)
+	}()
+	next := func() (buildState, bool) {
+		select {
+		case st, ok := <-events:
+			return st, ok
+		case <-time.After(2 * time.Second):
+			t.Fatal("no event")
+			return buildState{}, false
+		}
+	}
+	if st, _ := next(); st.State != "ok" || st.Took != 1.5 {
+		t.Errorf("on connect: %+v", st)
+	}
+	write(fmt.Sprintf(`{"state":"building","since":%q}`, time.Now().Format(time.RFC3339Nano)))
+	if st, _ := next(); st.State != "building" || st.Since.IsZero() || st.Elapsed != 0 {
+		t.Errorf("building: %+v", st)
+	}
+	write(`{"state":"failed","output":"./main.vuka:3:1: undefined: x\n"}`)
+	if st, _ := next(); st.State != "failed" || !strings.Contains(st.Output, "undefined: x") {
+		t.Errorf("failed: %+v", st)
+	}
+	app.Stop(context.Background())
+	if _, ok := next(); ok {
+		t.Error("the stream outlived Stop")
 	}
 }

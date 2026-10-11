@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
-	"fmt"
 	"net/http"
 	"os"
 	"sync"
@@ -64,9 +63,7 @@ type stylesheet struct {
 	checked    time.Time
 	found, dev bool
 
-	stop     chan struct{} // closed when the server shuts down: ends the event streams
-	stopOnce sync.Once
-	servers  sync.Map // *http.Server → struct{}: those told to end the streams on Shutdown
+	streams *streams // development: the pages hearing of each new tag
 }
 
 func newStylesheet(css []byte) *stylesheet {
@@ -87,7 +84,7 @@ func (a *App) appCSS() *stylesheet {
 		return nil
 	}
 	if f := os.Getenv(CSSEnv); f != "" {
-		return &stylesheet{file: f, dev: true, stop: make(chan struct{})}
+		return &stylesheet{file: f, dev: true, streams: newStreams()}
 	}
 	cssMu.Lock()
 	defer cssMu.Unlock()
@@ -123,47 +120,16 @@ func (s *stylesheet) current() ([]byte, string, bool) {
 // events streams the stylesheet's tag: the current one when a page
 // connects, then each new one as the file changes.
 func (s *stylesheet) events(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-	if srv, ok := r.Context().Value(http.ServerContextKey).(*http.Server); ok {
-		if _, seen := s.servers.LoadOrStore(srv, struct{}{}); !seen {
-			srv.RegisterOnShutdown(s.close)
-		}
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	sent := ""
-	check := time.NewTicker(100 * time.Millisecond)
-	defer check.Stop()
-	idle := time.Now()
-	for {
-		if _, tag, ok := s.current(); ok && tag != sent {
-			sent, idle = tag, time.Now()
-			fmt.Fprintf(w, "data: %s\n\n", tag)
-			flusher.Flush()
-		} else if time.Since(idle) > 15*time.Second {
-			idle = time.Now()
-			fmt.Fprint(w, ": keep-alive\n\n")
-			flusher.Flush()
-		}
-		select {
-		case <-check.C:
-		case <-r.Context().Done():
-			return
-		case <-s.stop:
-			return
-		}
-	}
+	s.streams.serve(w, r, func() (string, bool) {
+		_, tag, ok := s.current()
+		return tag, ok
+	})
 }
 
-// close ends the event streams, so a graceful shutdown doesn't wait on them:
-// on Shutdown of any server that served one, and on the app's Stop.
+// close ends the event streams.
 func (s *stylesheet) close() {
-	if s != nil && s.stop != nil {
-		s.stopOnce.Do(func() { close(s.stop) })
+	if s != nil {
+		s.streams.close()
 	}
 }
 

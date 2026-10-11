@@ -389,6 +389,9 @@ func (a *App) Start(ctx context.Context) error {
 func (a *App) Stop(ctx context.Context) error {
 	a.hub.closeAll()
 	a.css.close()
+	if a.tb != nil {
+		a.tb.streams.close()
+	}
 	return a.c.stop(ctx)
 }
 
