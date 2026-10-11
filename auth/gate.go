@@ -244,14 +244,17 @@ func Next(r *http.Request, home string) string {
 // errNoAuthEvent refuses a gated live event of an app without auth.
 var errNoAuthEvent = errors.New("auth: this event is gated, and the app has no auth.Module")
 
-// call is a gate's call decorator: when the method is a live event's
-// handler (and only then: routes and pages are gated by their middleware,
-// and a call from Go — Render, Mount, a helper — is the app's own) it
-// refuses the call unless the page's identity passes the gate. On a type,
-// it advises every method, and gates those that handle events.
+// call is a gate's call decorator: when the method is called while a live
+// event's handler runs — as the handler, or from it, a function literal
+// handler (onClick={() => b.Clear()}) included — it refuses the call unless
+// the page's identity passes the gate. Otherwise it is not the gate's
+// business: routes and pages are gated by their middleware, and a call from
+// Go outside an event, or the render after one (Render, Mount, a helper), is
+// the app's own. On a type, it advises every method, and gates those an
+// event's handler calls.
 func (g Gate) call(c *vuka.Call) {
 	ev := web.CurrentLiveEvent()
-	if ev == nil || ev.Handler() != c.Name {
+	if ev == nil || !ev.Handling() {
 		c.Next()
 		return
 	}

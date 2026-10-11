@@ -105,6 +105,39 @@ func (a *advised) Render() ui.Node {
 	return c.Results[0].(ui.Node)
 }
 
+// notice is a component inside a page (shelf): its Dismiss is gated, its
+// Bump isn't, and its third button's handler is a function literal calling
+// Dismiss.
+type notice struct {
+	ui.Live
+	bumps, dismissed int
+}
+
+var noticeDismiss = vuka.Func{Name: "notice.Dismiss", ErrIndex: -1, CtxIndex: -1, Zero: func() []any { return nil }}
+
+func (n *notice) Bump() { n.bumps++ }
+
+// Dismiss is what Vuka generates for
+//
+//	@auth.Requires("admin")
+//	func (n *notice) Dismiss() { n.dismissed++ }
+func (n *notice) Dismiss() {
+	vuka.NewCall(&noticeDismiss, adminOnly.Calls(), n, []any{}, func(*vuka.Call) []any { n.dismissed++; return nil }).Run()
+}
+
+func (n *notice) Render() ui.Node {
+	return ui.El("section", nil, ui.El("output", nil, ui.Text(fmt.Sprintf("bumps=%d dismissed=%d", n.bumps, n.dismissed))),
+		ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(n.Bump)}}, ui.Text("bump")),
+		ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(n.Dismiss)}}, ui.Text("dismiss")),
+		ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(func() { n.bumps++; n.Dismiss() })}}, ui.Text("bump and dismiss")))
+}
+
+type shelf struct{ ui.Live }
+
+func (s *shelf) Render() ui.Node {
+	return ui.El("main", nil, ui.Text("shelf"), ui.Component("shelf.notice", 0, &notice{}))
+}
+
 // whoami is a live page showing who it mounted for.
 type whoami struct {
 	ui.Live
@@ -149,6 +182,7 @@ func newApp(t *testing.T, u *authtest.Users, edit func(*auth.Config), opts ...we
 	}, web.Params("ctx", "owner"), open)
 	app.Live("/board", &board{})
 	app.Live("/advised", &advised{})
+	app.Live("/shelf", &shelf{})
 	app.Live("/staff", &whoami{}, web.Attrs(auth.Requires("admin")))
 	app.Live("/who", &whoami{}, web.Attrs(auth.Public()))
 	return app
@@ -799,6 +833,47 @@ func TestLiveTypeGate(t *testing.T) {
 	ws, m = c.socket("/advised", c.srv.URL)
 	if r := click(t, ws, handler(t, m.HTML, 0), 2); r.Error != "" || !strings.Contains(patched(r), "n=1") {
 		t.Errorf("a type's gate on its event, with the perm: %+v", r)
+	}
+}
+
+func TestLiveComponentEventGate(t *testing.T) {
+	for _, toolbar := range []bool{false, true} {
+		t.Run(fmt.Sprint("toolbar=", toolbar), func(t *testing.T) {
+			if toolbar {
+				// The toolbar binds the goroutine too; both bindings hold.
+				t.Setenv(web.DevDirEnv, t.TempDir())
+			}
+			app := newApp(t, users(), nil)
+			if app.Toolbar() != toolbar {
+				t.Fatalf("toolbar: %v", app.Toolbar())
+			}
+			c := serve(t, app)
+			c.login("bob@example.com", "hunter22", "")
+			ws, m := c.socket("/shelf", c.srv.URL)
+			bump, dismiss, both := handler(t, m.HTML, 0), handler(t, m.HTML, 1), handler(t, m.HTML, 2)
+			if r := click(t, ws, bump, 2); r.Error != "" || !strings.Contains(patched(r), "bumps=1 dismissed=0") {
+				t.Errorf("an ungated event of the component: %+v", r)
+			}
+			if r := click(t, ws, dismiss, 3); r.Error != "forbidden" || strings.Contains(patched(r), "dismissed=1") {
+				t.Errorf("a gated event of the component, without the perm: %+v", r)
+			}
+			if r := click(t, ws, both, 4); r.Error != "forbidden" || !strings.Contains(patched(r), "bumps=2 dismissed=0") {
+				t.Errorf("a function literal calling a gated method, without the perm: %+v", r)
+			}
+			if r := click(t, ws, bump, 5); r.Error != "" || !strings.Contains(patched(r), "bumps=3 dismissed=0") {
+				t.Errorf("after the refusals: %+v", r)
+			}
+
+			c = serve(t, app)
+			c.login("ada@example.com", "correct horse", "")
+			ws, m = c.socket("/shelf", c.srv.URL)
+			if r := click(t, ws, handler(t, m.HTML, 1), 2); r.Error != "" || !strings.Contains(patched(r), "dismissed=1") {
+				t.Errorf("a gated event of the component, with the perm: %+v", r)
+			}
+			if r := click(t, ws, handler(t, m.HTML, 2), 3); r.Error != "" || !strings.Contains(patched(r), "bumps=1 dismissed=2") {
+				t.Errorf("a function literal calling a gated method, with the perm: %+v", r)
+			}
+		})
 	}
 }
 

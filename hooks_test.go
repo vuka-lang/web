@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/coder/websocket"
@@ -139,6 +141,13 @@ type guarded struct {
 	n int
 }
 
+// guardedSeen is CurrentLiveEvent's Handling where guarded saw an event:
+// "inc" in Inc's decorator, "render" in the render after it.
+var guardedSeen struct {
+	sync.Mutex
+	inc, render []bool
+}
+
 var guardedInc = vuka.Func{Name: "guarded.Inc", ErrIndex: -1, CtxIndex: -1, Zero: func() []any { return nil }}
 
 func (g *guarded) Inc() {
@@ -148,6 +157,9 @@ func (g *guarded) Inc() {
 			c.Next()
 			return
 		}
+		guardedSeen.Lock()
+		guardedSeen.inc = append(guardedSeen.inc, ev.Handling())
+		guardedSeen.Unlock()
 		if Request(ev.Context()).URL.Query().Get("ok") != "1" {
 			ev.Refuse(errors.New("not ok"))
 			c.Return()
@@ -159,6 +171,11 @@ func (g *guarded) Inc() {
 }
 
 func (g *guarded) Render() ui.Node {
+	if ev := CurrentLiveEvent(); ev != nil {
+		guardedSeen.Lock()
+		guardedSeen.render = append(guardedSeen.render, ev.Handling())
+		guardedSeen.Unlock()
+	}
 	return ui.El("p", nil, ui.Text(g.n), ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(g.Inc)}}))
 }
 
@@ -187,6 +204,11 @@ func TestLiveEventAndCheck(t *testing.T) {
 	if m := must(t, c); m.Error != "" || len(m.Updates) != 1 {
 		t.Errorf("allowed: %+v", m)
 	}
+	guardedSeen.Lock()
+	if !reflect.DeepEqual(guardedSeen.inc, []bool{true, true}) || !reflect.DeepEqual(guardedSeen.render, []bool{false, false}) {
+		t.Errorf("Handling: in the handler %v, in the render after it %v", guardedSeen.inc, guardedSeen.render)
+	}
+	guardedSeen.Unlock()
 	ended["b"] = true
 	send(t, c, map[string]any{"type": "event", "ref": 3, "target": handlerOf(t, html, "click", 0), "event": "click"})
 	if _, err := recv(c, 5e9); websocket.CloseStatus(err) != closeReload {

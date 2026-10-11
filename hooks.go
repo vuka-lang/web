@@ -163,18 +163,26 @@ func LiveCheck(f func(ctx context.Context) error) Option {
 // returns it to the event's handler and to its decorators, which, unlike
 // the handler, may have no context.Context to read.
 type LiveEvent struct {
-	ctx     context.Context
-	handler string
-	mu      sync.Mutex
-	refused error
+	ctx       context.Context
+	handler   string
+	rendering atomic.Bool // the handler returned, and the page renders
+	mu        sync.Mutex
+	refused   error
 }
 
 // Context is the context the page's route ran with (the join's, or the
 // latest navigation's): its request's values, cookies and middleware's.
 func (e *LiveEvent) Context() context.Context { return e.ctx }
 
-// Handler names the handler the event targets: "Admin.Delete".
+// Handler names the handler the event targets: "Admin.Delete", or
+// "Admin.Render.func1" for a function literal.
 func (e *LiveEvent) Handler() string { return e.handler }
+
+// Handling reports whether the event's handler is running — the handler
+// itself, or anything it calls, a function literal's calls included — rather
+// than the render of what it changed, which follows it on the same
+// goroutine. A gate refusing an event checks calls made while Handling.
+func (e *LiveEvent) Handling() bool { return !e.rendering.Load() }
 
 // Refuse makes err the event's error, which the page receives as a
 // handler's (vk:error); for a decorator that doesn't let a handler without
@@ -204,11 +212,28 @@ func CurrentLiveEvent() *LiveEvent {
 	return ev
 }
 
+// bindLiveEvent makes e the goroutine's live event until unbind, which
+// restores the one bound before, as bindGoroutine does the toolbar's sink.
+//
+// The binding is by goroutine because the gate needing it is a call
+// decorator of the handler: a method the handler's attributes reach only
+// from inside the call (Vuka registers no method's attributes for web to
+// read where it dispatches, and a component type's only when a type
+// decorator takes it), which may have no context.Context, and which the live
+// session calls with the page's context, the same for an event as for Render
+// or a call from Go. Production pays one runtime.Stack per event.
 func bindLiveEvent(e *LiveEvent) (unbind func()) {
 	id := goid()
-	liveEvents.Store(id, e)
+	prev, had := liveEvents.Swap(id, e)
 	liveEventsN.Add(1)
-	return func() { liveEvents.Delete(id); liveEventsN.Add(-1) }
+	return func() {
+		if had {
+			liveEvents.Store(id, prev)
+		} else {
+			liveEvents.Delete(id)
+		}
+		liveEventsN.Add(-1)
+	}
 }
 
 // RequestNote is a row of the development toolbar's Request panel.

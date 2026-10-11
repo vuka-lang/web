@@ -1080,7 +1080,7 @@ never add one. Live connections check their origin themselves.
 | `web.ParamFrom(f)` | parameters of `f`'s result type bind with `f(r)` |
 | `web.Implementation[I](app)` | the provided value implementing interface `I` |
 | `web.LiveCheck(f)` | `f(ctx)` before each message of a live connection; an error closes it (4001) and the page reloads |
-| `web.CurrentLiveEvent()` | the live event the goroutine handles: its context, its handler's name, and `Refuse(err)` — for a decorator of a handler without a `context.Context` |
+| `web.CurrentLiveEvent()` | the live event the goroutine handles: its context, its handler's name, `Handling()` (its handler, or what the handler calls, runs; not the render after it), and `Refuse(err)` — for a decorator of a handler without a `context.Context` |
 | `web.NoteRequest(ctx, note)` | a row in the toolbar's Request panel |
 | `app.WriteError(w, r, err, html)` | answer as a handler's error is answered |
 

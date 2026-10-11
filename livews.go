@@ -158,6 +158,7 @@ type conn struct {
 	tb     *tbSink         // the development toolbar's record of the page, its messages under it
 	wire   *wireMirror     // with tb, what the browser holds, to decode the frames sent
 	frames []tbFrame       // with tb, the frames the message being recorded sent
+	ev     *LiveEvent      // the event being handled, until its reply
 
 	mu    sync.Mutex
 	inbox []delivery
@@ -339,12 +340,26 @@ func (c *conn) event(m live.ClientMessage) any {
 		ev.handler = handlerName(h.Handler(m.Target))
 	}
 	unbind := bindLiveEvent(ev)
+	c.ev = ev
 	reply := c.s.Event(m)
+	c.ev = nil
 	unbind()
 	if ev.refused != nil {
 		return withError{reply, ev.refused.Error()}
 	}
 	return reply
+}
+
+// render is the session's render function for page: the session calls it
+// first when it renders, so an event being handled learns its handler is
+// done (LiveEvent.Handling).
+func (c *conn) render(page ui.Node) liveproto.Render {
+	return func(context.Context) ui.Node {
+		if ev := c.ev; ev != nil {
+			ev.rendering.Store(true)
+		}
+		return page
+	}
 }
 
 // withError is an event's reply carrying err, unless it carries an error
@@ -396,7 +411,7 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
-	c.s, c.page = liveproto.New(j.ctx, func(context.Context) ui.Node { return j.page }, min(v, c.app.liveMax)), j.ctx
+	c.s, c.page = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax)), j.ctx
 	return c.s.Join(ref), 0
 }
 
@@ -421,7 +436,7 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) any {
 		load.URL = cmp.Or(rec.location(), m.URL)
 		return load
 	}
-	reply, ok := c.s.Navigate(m.Ref, uri, live.Route{Ctx: j.ctx, Render: func(context.Context) ui.Node { return j.page }, Updates: j.updates}, m.Patch)
+	reply, ok := c.s.Navigate(m.Ref, uri, live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates}, m.Patch)
 	if !ok {
 		return reply
 	}

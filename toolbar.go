@@ -134,7 +134,7 @@ type tbRecord struct {
 	Spans   []tbSpan
 	Logs    []tbLog
 	Notes   []tbNote
-	Assets  []tbAsset // the page's scoped components and the app-wide assets
+	Assets  []tbAsset     // the page's scoped components and the app-wide assets
 	Facts   []RequestNote // NoteRequest's rows
 	Live    []*tbEntry
 	Ref     int    // a socket message's ref
@@ -334,8 +334,8 @@ func bindGoroutine(s *tbSink) (unbind func()) {
 	}
 }
 
-// goid is the goroutine's id, from the first line of its stack: development
-// only.
+// goid is the goroutine's id, from the first line of its stack: for the
+// toolbar, in development, and for CurrentLiveEvent (hooks.go).
 func goid() uint64 {
 	var b [64]byte
 	s := b[:runtime.Stack(b[:], false)]
