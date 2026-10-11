@@ -400,7 +400,9 @@ func (a *Auth) middleware(next http.Handler) http.Handler {
 		}
 		st := &state{auth: a, w: w, r: r}
 		if err := a.authenticate(r.Context(), st, r); err != nil {
-			log.Printf("auth: %s %s: %v", r.Method, r.URL.Path, err)
+			if !errors.Is(err, errBadCredentials) {
+				log.Printf("auth: %s %s: %v", r.Method, r.URL.Path, err)
+			}
 			a.app.WriteError(w, r, err, web.AcceptsHTML(r))
 			return
 		}

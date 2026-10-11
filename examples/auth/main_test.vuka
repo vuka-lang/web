@@ -1,0 +1,135 @@
+package main
+
+import (
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/internal/chrome"
+)
+
+func server(t *testing.T) *httptest.Server {
+	srv := httptest.NewServer(web.New(options()...).Handler())
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+var noRedirects = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
+func call(t *testing.T, method, url, body string, header ...string) (int, string, http.Header) {
+	req, _ := http.NewRequest(method, url, strings.NewReader(body))
+	for i := 0; i+1 < len(header); i += 2 {
+		req.Header.Set(header[i], header[i+1])
+	}
+	res, err := noRedirects.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(b), res.Header
+}
+
+func TestSignInRequired(t *testing.T) {
+	srv := server(t)
+	for path, to := range map[string]string{"/": "/login?next=%2F", "/board": "/login?next=%2Fboard"} {
+		code, _, h := call(t, "GET", srv.URL+path, "", "Accept", "text/html")
+		if code != 302 || h.Get("Location") != to {
+			t.Errorf("GET %s: %d %s", path, code, h.Get("Location"))
+		}
+	}
+	if code, body, _ := call(t, "GET", srv.URL+"/login?next=%2Fboard&error=invalid", ""); code != 200 ||
+		!strings.Contains(body, `name="next" value="/board"`) || !strings.Contains(body, "Invalid login or password.") {
+		t.Errorf("the login page: %d %s", code, body)
+	}
+	if code, _, _ := call(t, "GET", srv.URL+"/api/notices", ""); code != 401 {
+		t.Errorf("the API without a token: %d", code)
+	}
+}
+
+func TestAPIToken(t *testing.T) {
+	srv := server(t)
+	token := func(login, password string) string {
+		code, body, _ := call(t, "POST", srv.URL+"/auth/token", `{"login":"`+login+`","password":"`+password+`"}`, "Content-Type", "application/json")
+		var tr struct {
+			AccessToken string `json:"access_token"`
+		}
+		json.Unmarshal([]byte(body), &tr)
+		if code != 200 || tr.AccessToken == "" {
+			t.Fatalf("token for %s: %d %s", login, code, body)
+		}
+		return tr.AccessToken
+	}
+	bob := token("bob@example.com", "hunter2hunter2")
+	code, body, _ := call(t, "POST", srv.URL+"/api/notices", `{"text":"lunch at noon"}`, "Content-Type", "application/json", "Authorization", "Bearer "+bob)
+	if code != 200 || !strings.Contains(body, `"by":"Bob"`) {
+		t.Errorf("posting with a token: %d %s", code, body)
+	}
+	if code, body, _ := call(t, "GET", srv.URL+"/api/notices", "", "Authorization", "Bearer "+bob); code != 200 || !strings.Contains(body, "lunch at noon") {
+		t.Errorf("reading with a token: %d %s", code, body)
+	}
+	if code, body, _ := call(t, "GET", srv.URL+"/auth/me", "", "Authorization", "Bearer "+bob); !strings.Contains(body, `"name":"Bob"`) || strings.Contains(body, "argon2") {
+		t.Errorf("me: %d %s", code, body)
+	}
+	call(t, "POST", srv.URL+"/auth/logout", "", "Authorization", "Bearer "+bob)
+	if code, _, _ := call(t, "GET", srv.URL+"/api/notices", "", "Authorization", "Bearer "+bob); code != 401 {
+		t.Errorf("a token after logout: %d", code)
+	}
+	if code, _, _ := call(t, "POST", srv.URL+"/auth/token", `{"login":"bob@example.com","password":"nope"}`, "Content-Type", "application/json"); code != 401 {
+		t.Errorf("a wrong password: %d", code)
+	}
+}
+
+// signIn fills the login form p shows and waits for the board.
+func signIn(p *chrome.Page, login, password string) {
+	p.Type("input[name=login]", login)
+	p.Type("input[name=password]", password)
+	p.Click(".vk-login button")
+	p.Wait(`location.pathname === "/board" && document.documentElement.dataset.vkState === "connected"`)
+}
+
+func TestBrowserSignIn(t *testing.T) {
+	b := chrome.Launch(t)
+	srv := server(t)
+
+	// The board sends Bob to sign in, then back to it.
+	bob := b.Load(srv.URL + "/board")
+	bob.Wait(`location.pathname === "/login" && location.search === "?next=%2Fboard"`)
+	bob.Type("input[name=login]", "bob@example.com")
+	bob.Type("input[name=password]", "wrong")
+	bob.Click(".vk-login button")
+	bob.WaitText(".vk-login-error", "Invalid login or password.")
+	bob.Wait(`document.querySelector("input[name=next]").value === "/board"`)
+	signIn(bob, "bob@example.com", "hunter2hunter2")
+	bob.WaitText(".who", "Signed in as Bob")
+
+	bob.Type("input[name=text]", "standup moved to 10")
+	bob.Press("Enter")
+	bob.Wait(`document.querySelector(".notices").textContent.includes("standup moved to 10 — Bob")`)
+
+	// Clearing is for admins: Bob's click is refused, the notices stay.
+	bob.Click(".clear")
+	bob.WaitText("#error", "forbidden")
+	if !strings.Contains(bob.Text(".notices"), "standup moved to 10") {
+		t.Error("Bob cleared the board")
+	}
+
+	// Ada, an admin, clears it; Bob's board follows.
+	ada := b.Load(srv.URL + "/login?next=%2Fboard")
+	signIn(ada, "ada@example.com", "correct horse battery")
+	ada.WaitText(".who", "Signed in as Ada")
+	ada.Wait(`document.querySelector(".notices").textContent.includes("standup")`)
+	ada.Click(".clear")
+	ada.Wait(`document.querySelectorAll(".notices li").length === 0`)
+	bob.Wait(`document.querySelectorAll(".notices li").length === 0`)
+
+	// Signing out ends Bob's session: the board sends him to sign in again.
+	bob.Click(".logout")
+	bob.Wait(`location.pathname === "/login"`)
+	bob.Eval(`location.href = "/board"`, nil)
+	bob.Wait(`location.pathname === "/login" && location.search === "?next=%2Fboard"`)
+}
