@@ -167,12 +167,15 @@ func (s *stylesheet) headTags() string {
 }
 
 // linkCSS adds the stylesheet to a full page (one with </head> or </body>)
-// that doesn't link it already, and in development the toolbar's script
-// for the request r.
+// that doesn't link it already, the loader of component scripts, and in
+// development the toolbar's script for the request r.
 func (a *App) linkCSS(r *http.Request, html []byte) []byte {
 	var tags string
 	if a.css != nil && !bytes.Contains(html, []byte(cssPath)) {
 		tags = a.css.headTags()
+	}
+	if a.assets != nil && !bytes.Contains(html, []byte(loaderPath)) {
+		tags += a.assets.headTag()
 	}
 	if a.tb != nil {
 		tags += a.tb.tag(r)

@@ -56,6 +56,7 @@ type App struct {
 	noCSS     bool
 	cssSource string      // web.Tailwind's path, for the vuka command
 	css       *stylesheet // nil: pages link no stylesheet
+	assets    *assetSet   // nil: no compiled styles or scripts
 
 	once    sync.Once
 	handler http.Handler
@@ -82,6 +83,7 @@ func New(opts ...Option) *App {
 		a.router = NewServeMux()
 	}
 	a.css = a.appCSS()
+	a.assets = a.appAssets()
 	a.tb = a.newToolbar()
 	return a
 }
@@ -312,6 +314,7 @@ func (a *App) build() (http.Handler, error) {
 	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(serveLiveJS))
 	a.router.Handle(http.MethodGet, liveSocket, http.HandlerFunc(a.serveLive))
 	a.routeCSS()
+	a.routeAssets()
 	if a.tb != nil {
 		a.routeToolbar()
 		a.tb.install()
@@ -389,6 +392,7 @@ func (a *App) Start(ctx context.Context) error {
 func (a *App) Stop(ctx context.Context) error {
 	a.hub.closeAll()
 	a.css.close()
+	a.assets.close()
 	if a.tb != nil {
 		a.tb.streams.close()
 	}

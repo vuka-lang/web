@@ -126,6 +126,7 @@ type tbRecord struct {
 	Spans   []tbSpan
 	Logs    []tbLog
 	Notes   []tbNote
+	Assets  []tbAsset // the page's scoped components and the app-wide assets
 	Live    []*tbEntry
 	Ref     int    // a socket message's ref
 	Bytes   int    // its reply's size
