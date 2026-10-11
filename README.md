@@ -970,7 +970,9 @@ web.AddPanel("Cache", func(notes []any) ui.Node {
 })
 ```
 
-A panel noted without `AddPanel` lists its values.
+A panel noted without `AddPanel` lists its values. A panel's markup may
+use the toolbar's classes: `kv` and `grid` tables, `dim`, `errtext`,
+`status`, and `preview` for an `<iframe>` (the Mail panel's).
 
 ## Static files
 

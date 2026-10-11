@@ -99,7 +99,7 @@ func TestSignupAndToolbar(t *testing.T) {
 	for _, want := range []string{
 		`data-tab="Mail">Mail <span class="count">2</span>`,
 		`<b>Welcome</b>`, `logged, not sent`, `<td>Ada &lt;ada@example.com&gt;</td>`,
-		`<iframe class="mail-preview" sandbox="" title="Welcome" srcdoc="&lt;div&gt;&lt;h1&gt;Welcome, Ada&lt;/h1&gt;`,
+		`<iframe class="preview mail-preview" sandbox="" title="Welcome" srcdoc="&lt;div&gt;&lt;h1&gt;Welcome, Ada&lt;/h1&gt;`,
 		`<b>New sign-up</b>`, `<pre class="wrap">ada@example.com</pre>`,
 	} {
 		if !strings.Contains(html, want) {

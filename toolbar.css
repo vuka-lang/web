@@ -253,3 +253,4 @@ pre.json { margin: 0; max-height: 50vh; overflow: auto; padding: 8px 10px; borde
 .linkish { padding: 0; border: 0; background: none; color: var(--bar); text-align: left; }
 .linkish:hover { text-decoration: underline; }
 .crons td { vertical-align: middle; }
+.preview { display: block; width: 100%; height: 360px; margin: 8px 0; border: 1px solid var(--line); border-radius: 6px; background: #fff; }

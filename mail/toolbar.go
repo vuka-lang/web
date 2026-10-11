@@ -110,8 +110,8 @@ func (n *noted) node() ui.Node {
 	case n.HTML != "":
 		// sandbox without allow-scripts: the message's scripts don't run,
 		// and it can't reach the page.
-		preview = ui.El("iframe", []ui.Attr{{Name: "class", Value: "mail-preview"}, {Name: "sandbox", Value: ""}, {Name: "title", Value: n.Subject},
-			{Name: "srcdoc", Value: n.HTML}, {Name: "style", Value: ui.Style{"width": "100%", "height": "360px", "border": "1px solid var(--line)", "border-radius": "6px", "background": "#fff"}}})
+		preview = ui.El("iframe", []ui.Attr{{Name: "class", Value: "preview mail-preview"}, {Name: "sandbox", Value: ""}, {Name: "title", Value: n.Subject},
+			{Name: "srcdoc", Value: n.HTML}})
 	case n.Text != "":
 		preview = ui.El("pre", []ui.Attr{{Name: "class", Value: "wrap"}}, ui.Text(n.Text))
 	}
