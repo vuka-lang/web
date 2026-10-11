@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -153,12 +154,13 @@ type conn struct {
 	r      *http.Request // the upgrade request
 	uri    string        // the page, from its token
 	s      liveproto.Session
-	page   context.Context // the context the page's route ran with: the join's, else the latest navigation's
-	topics []string        // guarded by the hub's mutex
-	tb     *tbSink         // the development toolbar's record of the page, its messages under it
-	wire   *wireMirror     // with tb, what the browser holds, to decode the frames sent
-	frames []tbFrame       // with tb, the frames the message being recorded sent
-	ev     *LiveEvent      // the event being handled, until its reply
+	page   context.Context                 // the context the page's route ran with: the join's, else the latest navigation's
+	topics []string                        // guarded by the hub's mutex
+	tb     *tbSink                         // the development toolbar's record of the page, its messages under it
+	wire   *wireMirror                     // with tb, what the browser holds, to decode the frames sent
+	frames []tbFrame                       // with tb, the frames the message being recorded sent
+	ev     *LiveEvent                      // the event being handled, until its reply
+	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
 	mu    sync.Mutex
 	inbox []delivery
@@ -185,6 +187,8 @@ func (c *conn) post(topic string, msg any) {
 type joinKey struct{}
 
 type join struct {
+	why     string      // "join" or "navigate"
+	done    atomic.Bool // the route's run returned (IsLiveJoin)
 	page    ui.Node
 	ctx     context.Context
 	updates map[ui.Stateful]any // a Live page's URLParams for its Update, on a patch
@@ -215,6 +219,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer a.hub.remove(c)
+	defer bindConn(c)()
 	defer func() {
 		if c.s != nil {
 			c.s.Close()
@@ -332,18 +337,41 @@ func (c *conn) check() bool {
 	return true
 }
 
-// event runs an event's handler on this goroutine, bound as the
-// CurrentLiveEvent; an event a decorator refused replies with its error.
+// setPage makes ctx the page's context: its events' and LiveOrigin's.
+func (c *conn) setPage(ctx context.Context) {
+	c.page = ctx
+	c.shared.Store(&ctx)
+}
+
+// pageCtx is the page's context, from any goroutine.
+func (c *conn) pageCtx() context.Context {
+	if p := c.shared.Load(); p != nil {
+		return *p
+	}
+	return nil
+}
+
+// event runs an event's handler on this goroutine, the CurrentLiveEvent
+// while it does, once the app's GuardLiveEvents let it; an event a guard or
+// a decorator refused replies with its error.
 func (c *conn) event(m live.ClientMessage) any {
 	ev := &LiveEvent{ctx: c.page}
+	var fn any
 	if h, ok := c.s.(interface{ Handler(string) any }); ok {
-		ev.handler = handlerName(h.Handler(m.Target))
+		fn = h.Handler(m.Target)
+		ev.handler = handlerName(fn)
 	}
-	unbind := bindLiveEvent(ev)
+	if len(c.app.liveGuards) > 0 && fn != nil {
+		h := c.liveHandler(m.Target, fn, ev.handler)
+		for _, g := range c.app.liveGuards {
+			if err := g(c.page, h); err != nil {
+				return live.ServerMessage{Type: live.PatchMsg, Ref: m.Ref, Error: err.Error()}
+			}
+		}
+	}
 	c.ev = ev
 	reply := c.s.Event(m)
 	c.ev = nil
-	unbind()
 	if ev.refused != nil {
 		return withError{reply, ev.refused.Error()}
 	}
@@ -411,7 +439,8 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
-	c.s, c.page = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax)), j.ctx
+	c.s = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax))
+	c.setPage(j.ctx)
 	return c.s.Join(ref), 0
 }
 
@@ -440,7 +469,8 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) any {
 	if !ok {
 		return reply
 	}
-	c.uri, c.page = uri, j.ctx
+	c.uri = uri
+	c.setPage(j.ctx)
 	return withToken{reply, c.app.signToken(uri)}
 }
 
@@ -453,7 +483,8 @@ func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, erro
 	if err != nil {
 		return nil, nil, err
 	}
-	j := &join{}
+	j := &join{why: why}
+	defer j.done.Store(true)
 	req := c.r.Clone(context.WithValue(ctx, joinKey{}, j))
 	req.Method, req.URL, req.RequestURI = http.MethodGet, u, uri
 	req.Body, req.ContentLength = http.NoBody, 0

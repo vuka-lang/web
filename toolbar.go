@@ -335,12 +335,41 @@ func bindGoroutine(s *tbSink) (unbind func()) {
 }
 
 // goid is the goroutine's id, from the first line of its stack: for the
-// toolbar, in development, and for CurrentLiveEvent (hooks.go).
+// toolbar, in development, and for a live connection (hooks.go).
 func goid() uint64 {
 	var b [64]byte
 	s := b[:runtime.Stack(b[:], false)]
 	s = s[len("goroutine "):]
 	id, _ := strconv.ParseUint(string(s[:bytes.IndexByte(s, ' ')]), 10, 64)
+	return id
+}
+
+// parentGoid is the id of the goroutine that started the calling one, from
+// the last line of its stack ("created by f in goroutine 7"); 0 when there is
+// none (the main goroutine) or the stack doesn't say.
+func parentGoid() uint64 {
+	buf := make([]byte, 8<<10)
+	for {
+		n := runtime.Stack(buf, false)
+		if n < len(buf) || len(buf) >= 1<<20 {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	i := bytes.LastIndex(buf, []byte("created by "))
+	if i < 0 {
+		return 0
+	}
+	line := buf[i:]
+	if j := bytes.IndexByte(line, '\n'); j >= 0 {
+		line = line[:j]
+	}
+	k := bytes.LastIndex(line, []byte(" in goroutine "))
+	if k < 0 {
+		return 0
+	}
+	id, _ := strconv.ParseUint(string(bytes.TrimSpace(line[k+len(" in goroutine "):])), 10, 64)
 	return id
 }
 

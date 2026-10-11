@@ -95,7 +95,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.NoToolbar()` | no development toolbar (below) |
 | `web.NoCrons()`, `web.CronClock(c)` | don't schedule the crons; run them by another clock (below) |
 | `web.CSRF(trusted…)` | refuse cross-origin form posts and the like (below) |
-| `web.WrapRoutes`, `ParamFrom`, `LiveCheck` | hooks for libraries guarding routes (below) |
+| `web.WrapRoutes`, `ParamFrom`, `LiveCheck`, `GuardLiveEvents` | hooks for libraries guarding routes and live events (below) |
 | `web.Frontend(fsys, root, opts…)` | a single-page app built by Vite (or anything else) served from the binary (below) |
 
 `app.Build()` resolves everything — every parameter of every route, every
@@ -364,6 +364,27 @@ and the connection closes.
 
 The route's handler runs once per connection: its result is the page, and the
 page is rendered again after every event. State belongs in the components.
+
+**Side effects in a live page's handler.** The route runs twice for one
+visit — the GET, then the join (and again on each reconnect) — so what it
+does besides building the page, sending mail or counting a visit, happens
+twice. `web.IsLiveJoin(ctx)` is true only on the join's run; skip them there:
+
+```vuka
+@web.Get("/welcome")
+func Welcome(ctx context.Context, m *mail.Mailer) (ui.Node, error) {
+	if !web.IsLiveJoin(ctx) {
+		if err := m.Send(ctx, welcomeMail); err != nil {
+			return nil, err
+		}
+	}
+	return <WelcomePage />, nil
+}
+```
+
+A navigation over the connection (`navigate`) is a visit of its own and
+isn't a join. Web marks its own run, so a client sending `X-Vuka-Live`
+can't make it true; events after the join see false too.
 
 **Events.** `onClick={c.Inc}` renders `data-vk-on-click="c1:0"`; the runtime
 listens on the document for each event type a page names and sends the
@@ -842,6 +863,10 @@ its rendered `HTML`, `Text`, `Recipients` and `Raw` MIME). `mailtest.New()`
 is a quiet one to provide; `mailtest.Last(t, m)`, `mailtest.To(t, m, addr)`
 read it, waiting for `SendLater` first.
 
+A live page's route runs again when its socket joins: mail sent from it
+goes once with `if !web.IsLiveJoin(ctx) { … }` around the send (see
+"Side effects in a live page's handler").
+
 ## Router
 
 The default router is `net/http`'s `ServeMux` with Go 1.22 patterns. Any
@@ -1049,7 +1074,7 @@ func Login(r *http.Request) ui.Node { return <auth.LoginPage request={r} /> }
 func Orders(me *auth.Identity, store *Store) Result[[]Order] { return store.For(me.ID) }
 
 @auth.Requires("orders.delete")
-func (b *Board) Clear(ctx context.Context) error { … }  // a live event: refused to anyone else
+func (b *Board) Clear(ctx context.Context) error { … }  // a live event: refused to anyone else, however reached
 
 func main() {
 	web.New(auth.Module(auth.Config{Endpoints: "/auth"})).Run("")
@@ -1061,7 +1086,10 @@ SameSite=Lax, Secure under HTTPS), opaque bearer tokens for APIs
 (`POST /auth/token`), JWTs issued elsewhere, Argon2id hashes (bcrypt ones
 upgraded at login), one error for an unknown login and a wrong password,
 throttled failures, "remember me" (`RememberMe`), `auth.RevokeUser` closing the user's live pages, and
-`authtest` for tests. Its sessions and tokens are kept in memory unless the
+`authtest` for tests. A live event's gate is checked before its handler
+runs, and again by each gated method it reaches — given the page's context,
+on any goroutine; `StrictGates` refuses a gated call no identity accounts for
+(crons mark themselves with `auth.System(ctx)`). Its sessions and tokens are kept in memory unless the
 app gives it stores. See the [auth guide](https://vuka-lang.github.io/vuka/web/auth)
 and [`examples/auth`](examples/auth).
 
@@ -1080,7 +1108,10 @@ never add one. Live connections check their origin themselves.
 | `web.ParamFrom(f)` | parameters of `f`'s result type bind with `f(r)` |
 | `web.Implementation[I](app)` | the provided value implementing interface `I` |
 | `web.LiveCheck(f)` | `f(ctx)` before each message of a live connection; an error closes it (4001) and the page reloads |
+| `web.GuardLiveEvents(f)` | `f(ctx, web.LiveHandler)` before each live event's handler runs, with the page's context: the handler's name, its component's type, its receiver type and method, its declaration's attributes (Vuka's registry: `vuka.FuncOf`), whether it is a function literal; an error refuses the event as a handler's error would |
 | `web.CurrentLiveEvent()` | the live event the goroutine handles: its context, its handler's name, `Handling()` (its handler, or what the handler calls, runs; not the render after it), and `Refuse(err)` — for a decorator of a handler without a `context.Context` |
+| `web.LiveOrigin()` | on a goroutine a live connection's goroutine started (one a handler starts), that page's context; nil elsewhere |
+| `web.IsLiveJoin(ctx)` | whether the route runs again for a live page's join |
 | `web.NoteRequest(ctx, note)` | a row in the toolbar's Request panel |
 | `app.WriteError(w, r, err, html)` | answer as a handler's error is answered |
 

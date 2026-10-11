@@ -1,0 +1,108 @@
+package gatetest
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
+	"net/url"
+	"reflect"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/web/auth/authtest"
+)
+
+func TestRegistry(t *testing.T) {
+	var g auth.Gate
+	if !vuka.TypeAttrs(reflect.TypeFor[Locked]()).Attr(&g) || g.String() != "Requires admin" {
+		t.Errorf("Locked's gate: %v", vuka.TypeAttrs(reflect.TypeFor[Locked]()))
+	}
+	p := &Page{}
+	for _, fn := range []any{p.Clear, p.ClearCtx} {
+		ref, err := vuka.FuncOf(fn)
+		if err != nil || ref.Recv != reflect.TypeFor[Page]() || !ref.Attrs.Attr(&g) {
+			t.Errorf("FuncOf: %+v %v", ref, err)
+		}
+	}
+}
+
+func TestEventGates(t *testing.T) {
+	users := authtest.NewUsers().
+		Add("ada@example.com", "pw-ada-1234", auth.Identity{ID: "1", Perms: []string{"admin"}}).
+		Add("bob@example.com", "pw-bob-1234", auth.Identity{ID: "2"})
+	app := web.New(web.Only("none"), web.NoDotEnv(), auth.Module(auth.Config{Users: users, Passwords: authtest.Cheap, Endpoints: "/auth"}))
+	app.Get("/login", func() string { return "login" }, web.Attrs(auth.Public()))
+	app.Live("/page", &Page{})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+
+	for _, who := range []string{"bob", "ada"} {
+		jar, _ := cookiejar.New(nil)
+		c := &http.Client{Jar: jar}
+		req, _ := http.NewRequest("POST", srv.URL+"/auth/login", strings.NewReader(url.Values{"login": {who + "@example.com"}, "password": {"pw-" + who + "-1234"}}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", srv.URL)
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		res, err = c.Get(srv.URL + "/page")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		tok := regexp.MustCompile(`data-vk-token="([^"]+)"`).FindStringSubmatch(string(body))
+		if tok == nil {
+			t.Fatalf("%s: no live page: %s", who, body)
+		}
+		u, _ := url.Parse(srv.URL)
+		h := http.Header{"Origin": {srv.URL}}
+		for _, k := range jar.Cookies(u) {
+			h.Add("Cookie", k.Name+"="+k.Value)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/_vuka/live?t="+tok[1], &websocket.DialOptions{HTTPHeader: h})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ws.CloseNow()
+		send := func(m string) map[string]any {
+			ws.Write(ctx, websocket.MessageText, []byte(m))
+			_, b, err := ws.Read(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out map[string]any
+			json.Unmarshal(b, &out)
+			return out
+		}
+		join := send(`{"type":"join","ref":1,"v":1}`)
+		targets := regexp.MustCompile(`data-vk-on-click="(c\d+:\d+)"`).FindAllStringSubmatch(join["html"].(string), -1)
+		if len(targets) != 5 {
+			t.Fatalf("%s: %d handlers in %v", who, len(targets), join["html"])
+		}
+		for i, tg := range targets {
+			before := Runs.Load()
+			r := send(`{"type":"event","ref":` + string(rune('2'+i)) + `,"target":"` + tg[1] + `","event":"click"}`)
+			ran := Runs.Load() > before
+			if who == "ada" && !ran {
+				t.Errorf("ada, handler %d: refused: %v", i, r["error"])
+			}
+			if who == "bob" && (ran || i != 3 && r["error"] != "forbidden") {
+				t.Errorf("bob, handler %d: ran %v, reply %v", i, ran, r)
+			}
+		}
+	}
+}

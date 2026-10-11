@@ -42,6 +42,7 @@ type App struct {
 	wraps      []routeWrap
 	binders    map[reflect.Type]func(*http.Request) (reflect.Value, error)
 	liveChecks []func(context.Context) error
+	liveGuards []func(context.Context, LiveHandler) error
 	csrf       *http.CrossOriginProtection
 
 	envFiles []string // nil: the defaults

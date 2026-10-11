@@ -180,6 +180,16 @@ type Config struct {
 
 	// TrustedOrigins may send cross-origin POSTs and the like (web.CSRF).
 	TrustedOrigins []string
+
+	// StrictGates refuses a gated method's call that nothing attributes to
+	// an identity: no request's or live page's context, no live event
+	// running it, no auth.WithIdentity — instead of running it as the app's
+	// own work. Code outside requests (crons, jobs, main) then marks itself
+	// with auth.System(ctx), and gated methods take a context.Context to be
+	// given one; a gated method without one is let through only while a live
+	// event's handler runs it. It holds for the whole process once an app
+	// with it is built.
+	StrictGates bool
 }
 
 // Auth is an app's authentication: Module provides it, for code without a
@@ -217,6 +227,7 @@ func Module(cfg Config) web.Option {
 			return Identity{}, web.Unauthorized
 		}),
 		web.LiveCheck(a.liveCheck),
+		web.GuardLiveEvents(a.guardEvent),
 		web.OptionFunc(func(app *web.App) {
 			a.app = app
 			if _, ok := cfg.Users.(Users); !ok && cfg.Users != nil {
@@ -278,6 +289,9 @@ func cmpStore[T comparable](v, def T) T {
 
 // check finds Users when Build runs, and checks the configuration.
 func (a *Auth) check(app *web.App) error {
+	if a.cfg.StrictGates {
+		strictGates.Store(true)
+	}
 	errs := a.problems
 	if u, ok := a.cfg.Users.(Users); ok {
 		a.users = u

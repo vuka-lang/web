@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
 )
 
@@ -159,6 +160,67 @@ func LiveCheck(f func(ctx context.Context) error) Option {
 	})
 }
 
+// LiveHandler describes the handler a live event targets, for a guard
+// (GuardLiveEvents): what Vuka's registry knows of its declaration and of
+// the component it belongs to.
+type LiveHandler struct {
+	Name string // "Board.Clear"; "Board.Render.func1" for a function literal
+	// Component is the struct type of the component whose event it is; nil
+	// for a handler of a page that is no component.
+	Component reflect.Type
+	// Recv and Method are a method handler's receiver type (Board for
+	// *Board) and name; Recv is nil for a type Vuka registered nothing for.
+	Recv   reflect.Type
+	Method string
+	// Attrs are the handler's typed attributes, written on its declaration
+	// (vuka.FuncOf); none for a function literal or a function without.
+	// The types' own are vuka.TypeAttrs(Component) and
+	// vuka.TypeAttrs(Recv).
+	Attrs []any
+	// Literal says the handler is a function literal (onClick={func() { … }}):
+	// it has no attributes, and the methods it calls are checked by their
+	// own decorators when it runs.
+	Literal bool
+}
+
+// GuardLiveEvents has f decide each live event before its handler runs,
+// given the page's context (the identity it joined with) and the handler:
+// an error refuses the event — the handler doesn't run, and the page
+// receives the error as a handler's (vk:error). A library gating events
+// reads the handler's attributes and its component's type's here, where
+// web dispatches, rather than only inside the handler's call.
+func GuardLiveEvents(f func(ctx context.Context, h LiveHandler) error) Option {
+	return OptionFunc(func(a *App) {
+		a.mutable("GuardLiveEvents")
+		a.liveGuards = append(a.liveGuards, f)
+	})
+}
+
+// liveHandler describes fn, the handler target names, for the guards.
+func (c *conn) liveHandler(target string, fn any, name string) LiveHandler {
+	h := LiveHandler{Name: name}
+	if s, ok := c.s.(interface{ Component(string) ui.Stateful }); ok {
+		if comp := s.Component(target); comp != nil {
+			h.Component = reflect.TypeOf(comp)
+			if h.Component.Kind() == reflect.Pointer {
+				h.Component = h.Component.Elem()
+			}
+		}
+	}
+	if _, method, _ := strings.Cut(target, ":"); method != "" && (method[0] < '0' || method[0] > '9') {
+		// A push by name ("c1:Inc"): the component's method, a value made
+		// by reflection, which names no declaration of its own.
+		h.Recv, h.Method, h.Attrs = h.Component, method, vuka.MethodAttrs(h.Component, method)
+		return h
+	}
+	ref, err := vuka.FuncOf(fn)
+	if err != nil {
+		return h
+	}
+	h.Recv, h.Method, h.Attrs, h.Literal = ref.Recv, ref.Method, ref.Attrs, ref.Literal
+	return h
+}
+
 // LiveEvent is the live event a goroutine is handling: CurrentLiveEvent
 // returns it to the event's handler and to its decorators, which, unlike
 // the handler, may have no context.Context to read.
@@ -196,44 +258,76 @@ func (e *LiveEvent) Refuse(err error) {
 }
 
 var (
-	liveEvents  sync.Map // goroutine id → *LiveEvent
-	liveEventsN atomic.Int64
+	liveGoroutines sync.Map     // goroutine id → *conn, while the connection serves on it
+	liveConnsN     atomic.Int64 // how many: none, and CurrentLiveEvent costs a load
 )
 
 // CurrentLiveEvent is the live event the calling goroutine handles, nil
 // outside one: web's connections handle an event's handler, and every
-// decorator around it, on one goroutine.
+// decorator around it, on the connection's goroutine.
 func CurrentLiveEvent() *LiveEvent {
-	if liveEventsN.Load() == 0 {
+	if liveConnsN.Load() == 0 {
 		return nil
 	}
-	e, _ := liveEvents.Load(goid())
-	ev, _ := e.(*LiveEvent)
-	return ev
+	c, _ := liveGoroutines.Load(goid())
+	if c, ok := c.(*conn); ok {
+		return c.ev
+	}
+	return nil
 }
 
-// bindLiveEvent makes e the goroutine's live event until unbind, which
-// restores the one bound before, as bindGoroutine does the toolbar's sink.
-//
-// The binding is by goroutine because the gate needing it is a call
-// decorator of the handler: a method the handler's attributes reach only
-// from inside the call (Vuka registers no method's attributes for web to
-// read where it dispatches, and a component type's only when a type
-// decorator takes it), which may have no context.Context, and which the live
-// session calls with the page's context, the same for an event as for Render
-// or a call from Go. Production pays one runtime.Stack per event.
-func bindLiveEvent(e *LiveEvent) (unbind func()) {
-	id := goid()
-	prev, had := liveEvents.Swap(id, e)
-	liveEventsN.Add(1)
-	return func() {
-		if had {
-			liveEvents.Store(id, prev)
-		} else {
-			liveEvents.Delete(id)
-		}
-		liveEventsN.Add(-1)
+// LiveOrigin is the context of the live page whose connection started the
+// calling goroutine — the page's route's, carrying its identity — when a
+// goroutine the connection's own goroutine started calls it: a goroutine an
+// event's handler starts (go b.Clear()), or one a decorator runs a call on.
+// It is nil on any other goroutine: one started further down (by such a
+// goroutine), a pool's worker, a request's, a cron's; and once the page's
+// connection has closed. It reads the goroutine's stack (a few
+// microseconds): a check that has a context.Context asks it instead.
+func LiveOrigin() context.Context {
+	if liveConnsN.Load() == 0 {
+		return nil
 	}
+	id := parentGoid()
+	if id == 0 {
+		return nil
+	}
+	if c, ok := liveGoroutines.Load(id); ok {
+		return c.(*conn).pageCtx()
+	}
+	return nil
+}
+
+// bindConn makes c the connection served on the calling goroutine until
+// unbind. The binding is per connection, not per event: the goroutine's id
+// costs a stack read, paid once for the connection.
+func bindConn(c *conn) (unbind func()) {
+	id := goid()
+	liveGoroutines.Store(id, c)
+	liveConnsN.Add(1)
+	return func() {
+		liveGoroutines.Delete(id)
+		liveConnsN.Add(-1)
+	}
+}
+
+// IsLiveJoin reports whether ctx is a live page's route running again for
+// its connection's join: the page was served already (its GET), and the
+// connection rebuilds it — on the first join, and on each reconnect. A
+// handler with side effects — sending mail, counting a visit — skips them
+// then, so they happen once per visit:
+//
+//	if !web.IsLiveJoin(ctx) {
+//		mailer.Send(ctx, welcome)
+//	}
+//
+// It is false for the GET itself, for a navigation over the connection (a
+// visit of its own, replacing an HTTP load), and for the page's events and
+// renders after the join, though their context descends from the join's. A
+// client can't make it true: web marks its own run, not a header.
+func IsLiveJoin(ctx context.Context) bool {
+	j, ok := ctx.Value(joinKey{}).(*join)
+	return ok && j.why == "join" && !j.done.Load()
 }
 
 // RequestNote is a row of the development toolbar's Request panel.
