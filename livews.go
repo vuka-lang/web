@@ -252,8 +252,16 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-c.wake:
+			if c.s != nil && !c.check() { // a broadcast never reaches a page whose sign-in ended
+				c.ws.Close(closeReload, "live: the page must load again")
+				return
+			}
 			c.drain(ctx)
 		case <-ping.C:
+			if c.s != nil && !c.check() { // nor does a quiet page stay open
+				c.ws.Close(closeReload, "live: the page must load again")
+				return
+			}
 			go func() {
 				pctx, done := context.WithTimeout(ctx, writeTimeout)
 				defer done()
