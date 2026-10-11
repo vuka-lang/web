@@ -61,6 +61,7 @@ go get github.com/vuka-lang/web
 | `@web.Service` | a struct becomes a dependency |
 | `@web.Controller(prefix)` | a struct becomes a dependency whose route methods are served under `prefix` |
 | `@web.Live(path, opts…)` | a stateful component becomes a live page (below) |
+| `@web.Cron(spec)` | the function runs on a schedule (below) |
 
 Paths use `{name}` for a segment and `{name...}` for the rest of the path, and
 match exactly (`/pets` doesn't match `/pets/`). Under a controller, `"/"` is
@@ -91,6 +92,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.LiveLayout(f)`, `LiveKey(k)`, `LiveOrigins(p…)`, `LiveTokenTTL(d)`, `WithRelay(r)` | live pages (below) |
 | `web.NoTailwind()`, `web.Tailwind(path)` | no stylesheet; or the project's Tailwind stylesheet at another path (below) |
 | `web.NoToolbar()` | no development toolbar (below) |
+| `web.NoCrons()`, `web.CronClock(c)` | don't schedule the crons; run them by another clock (below) |
 
 `app.Build()` resolves everything — every parameter of every route, every
 result and view, the whole dependency graph — and returns all problems at
@@ -718,6 +720,124 @@ app := web.New(
 )
 ```
 
+## Crons
+
+A function runs on a schedule with `@web.Cron`. It takes a
+`context.Context` and dependencies, like a handler, and returns nothing or
+an error:
+
+```vuka
+@web.Cron("@every 10m")
+func forgetUnconfirmed(ctx context.Context, owners *Owners) error { … }
+
+@web.Cron("CRON_TZ=Africa/Dar_es_Salaam 0 7 * * 1-5")
+func (r *Reports) Morning(ctx context.Context) error { … }   // a method of a service
+
+app.Cron("digest", "0 8 * * *", sendDigest)                  // from Go
+```
+
+| spec | |
+|---|---|
+| `*/15 * * * *` | five fields: minute, hour, day of the month, month, day of the week; `*`, `a-b`, `a,b`, `/step`, `JAN`, `MON`; Sunday is 0 or 7 |
+| `@hourly`, `@daily` (`@midnight`), `@weekly`, `@monthly`, `@yearly` | the usual shorthands |
+| `@every 30s` | at each multiple of the duration — :00 and :30 here, on every replica and after a restart |
+| `CRON_TZ=Europe/Paris 0 9 * * *` | the fields read in that zone; else the process's local time |
+
+When both day fields are restricted a day matching either runs. Across
+daylight-saving changes a time the clock skips runs at the jump, and a
+time it passes twice runs once — unless the hour field is `*`, when the
+job keeps its rhythm by the clock. Package `web/cron` parses specs and
+computes the next run on its own.
+
+`app.Start` schedules the crons after building everything they need; `Stop`
+stops scheduling, waits for the runs in progress until its context is done,
+then cancels their context. A run never overlaps the previous one: a tick
+that finds it still running is skipped and logged. Missed ticks (the
+machine slept) aren't run late. A panic is recovered and logged with its
+stack, and errors go to `slog` with the cron's name. An invalid spec, a
+parameter that isn't provided or a cron declared twice is a Build error:
+
+```
+web: @web.Cron("61 * * * *") on main.cleanUp at jobs.vuka:12: cron: "61 * * * *": minute: 61 is out of range 0-59
+```
+
+A cron's name is its function's (`forgetUnconfirmed`; `jobs.cleanUp` from
+another package; `Reports.Morning`). `app.RunCron(ctx, name)` runs one now
+and returns its error, for tests and commands; `web.NoCrons()` serves
+without scheduling them.
+
+**Several replicas.** Each process schedules its crons, so every replica
+runs every tick. Provide a `web.CronLock` and only the replica that claims a
+tick runs it:
+
+```go
+type CronLock interface {
+	Claim(ctx context.Context, name string, tick time.Time) (bool, error)
+}
+```
+
+Every replica asks for the same name and tick, so a lock is a unique key —
+an `INSERT` of `(name, tick)` into a table with a unique index (`false` on a
+conflict), or Redis's `SET cron:name:tick 1 NX EX 3600`. Without one the app
+uses `web.NewMemoryCronLock()`, which claims each tick once in its process.
+
+**Testing.** `crontest.Run(app, name)` runs a cron with its dependencies.
+`crontest.NewClock(t)` is a virtual clock (`web.CronClock(clock)`): nothing
+fires until the test moves it.
+
+```go
+clock := crontest.NewClock(time.Date(2026, 1, 5, 6, 59, 0, 0, time.UTC))
+app := web.New(web.CronClock(clock), web.Provide(NewReports))
+app.Start(ctx)
+clock.WaitTimers(1)          // the scheduler waits for 07:00
+clock.Advance(time.Minute)   // the cron runs
+crontest.Wait(app)           // and has finished
+```
+
+## Mail
+
+`web/mail` sends email. Provide a `*mail.Mailer` and inject it:
+
+```vuka
+app := web.New(mail.Provide())   // configured from the environment
+
+@web.Post("/signup")
+func SignUp(ctx context.Context, in Signup, m *mail.Mailer) error {
+	return m.Send(ctx, mail.Message{
+		To:      []string{in.Email},
+		Subject: "Welcome to Pets",
+		HTML:    <WelcomeEmail name={in.Name} />,   // JSX or templ; the text part is made from it
+	})
+}
+```
+
+| variable | |
+|---|---|
+| `MAIL_DRIVER` | `log` (the default: log the message, send nothing) or `smtp` |
+| `MAIL_HOST`, `MAIL_PORT` | the SMTP server; the port defaults to 587, 465 with `tls`, 25 with `none` |
+| `MAIL_USERNAME`, `MAIL_PASSWORD` | PLAIN authentication, when set |
+| `MAIL_ENCRYPTION` | `starttls` (the default; fails when the server can't), `tls` (from the start), `none` (local catchers) |
+| `MAIL_FROM`, `MAIL_FROM_NAME` | the sender when a message names none |
+
+`mail.Provide(mail.Config{…})` configures it in code instead (also a
+`Transport` of your own, a TLS config, timeouts). A `Message` has `From`,
+`To`, `Cc`, `Bcc`, `ReplyTo`, `Subject`, `Text`, `HTML` (a `ui.Node`;
+`ui.Safe(s)` for a string), `Headers` and `Attachments`. Text and HTML go
+as `multipart/alternative`, attachments in `multipart/mixed`, non-ASCII
+headers and file names encoded. Addresses are parsed, and a line break in
+any header value is refused before anything is sent (`*mail.InvalidError`).
+SMTP is `net/smtp` with a dial timeout and a deadline; no other dependency.
+
+`m.SendLater(ctx, msg)` checks and renders the message now and sends it in
+the background, retrying a temporary failure (a 4xx answer, a failed
+connection) 3 times, waiting 2s, 4s, 8s; the last failure is logged. The
+app's `Stop` waits for the queue within its context.
+
+**Testing.** The log driver keeps what it was given: `m.Sent()` (each with
+its rendered `HTML`, `Text`, `Recipients` and `Raw` MIME). `mailtest.New()`
+is a quiet one to provide; `mailtest.Last(t, m)`, `mailtest.To(t, m, addr)`
+read it, waiting for `SendLater` first.
+
 ## Router
 
 The default router is `net/http`'s `ServeMux` with Go 1.22 patterns. Any
@@ -807,6 +927,12 @@ drawer of panels for that request.
   with its time, statements, reply size and what it ran. A message that
   failed is red, and so are failures only the browser saw (a push timing
   out, a dropped connection).
+- **Crons**: the app's crons, their next and last runs, and a **Run now**
+  button. Each run is a record of its own, listed under *Cron runs*:
+  its statements, timeline, logs and error, like a request's.
+- **Mail**: with `web/mail`, the messages the request (or cron run) sent
+  or queued — headers, attachments, state — and the HTML in a sandboxed
+  preview.
 
 The list at the top holds the page and each `fetch` and XHR call it made
 since it loaded: every response of a development app carries its record's
@@ -872,6 +998,8 @@ From Go, `vuka.File("…")` reads from disk relative to the working directory.
 go test ./...                     # the package
 vuka test ./...                   # also examples/ and internal/vukatest, written in Vuka
 ```
+
+For an app's crons and mail, see `crontest` and `mailtest` above.
 
 The browser tests (`examples/live`, `TestBrowserReconnect`, `TestBrowserJS…`)
 drive a headless Chrome over the DevTools protocol (`internal/chrome`) and

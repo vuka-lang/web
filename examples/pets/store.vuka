@@ -12,16 +12,16 @@ import (
 	"github.com/vuka-lang/web/examples/pets/model"
 )
 
-
 // DB is a stand-in database; Start and Stop run with the app.
 type DB struct {
-	mu   sync.Mutex
-	pets map[int]model.Pet
-	next int
+	mu     sync.Mutex
+	pets   map[int]model.Pet
+	next   int
+	owners map[string]Owner // by their confirmation token
 }
 
 func OpenDB() *DB {
-	return &DB{pets: map[int]model.Pet{1: {1, "Rex", "dog"}, 2: {2, "Tom", "cat"}}, next: 3}
+	return &DB{pets: map[int]model.Pet{1: {1, "Rex", "dog"}, 2: {2, "Tom", "cat"}}, next: 3, owners: map[string]Owner{}}
 }
 
 func (db *DB) Start(context.Context) error { log.Print("db: open"); return nil }

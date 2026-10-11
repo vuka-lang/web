@@ -6,8 +6,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/crontest"
+	"github.com/vuka-lang/web/mail/mailtest"
 )
 
 func get(t *testing.T, srv *httptest.Server, method, path, body string, header ...string) (int, string) {
@@ -27,7 +30,7 @@ func get(t *testing.T, srv *httptest.Server, method, path, body string, header .
 }
 
 func TestPets(t *testing.T) {
-	app := web.New(web.Provide(OpenDB))
+	app := web.New(web.Provide(OpenDB, mailtest.New()))
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 	for _, c := range []struct {
@@ -55,5 +58,43 @@ func TestPets(t *testing.T) {
 		if code != c.code || !strings.Contains(body, c.want) {
 			t.Errorf("%s %s: %d %q; want %d containing %q", c.method, c.path, code, body, c.code, c.want)
 		}
+	}
+}
+
+func TestSignup(t *testing.T) {
+	m := mailtest.New()
+	app := web.New(web.Provide(OpenDB, m))
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	form := []string{"Content-Type", "application/x-www-form-urlencoded"}
+	if code, body := get(t, srv, "POST", "/signup", "name=Ada&email=ada@example.com", form...); code != 303 || body != "/signup/sent" {
+		t.Fatalf("sign up: %d %q", code, body)
+	}
+	msg := mailtest.Last(t, m)
+	if msg.Recipients[0] != "ada@example.com" || msg.Subject != "Welcome to Pets" || !strings.Contains(msg.HTML, "<h1>Welcome, Ada</h1>") ||
+		!strings.Contains(msg.Text, "Welcome, Ada\n\nThanks for signing up") {
+		t.Fatalf("the welcome email: %+v", msg)
+	}
+	_, link, _ := strings.Cut(msg.Text, "Confirm my address (")
+	link, _, _ = strings.Cut(link, ")")
+	if code, body := get(t, srv, "GET", strings.TrimPrefix(link, srv.URL), ""); code != 200 || !strings.Contains(body, "Thanks, Ada: your address is confirmed.") {
+		t.Errorf("confirm %s: %d %s", link, code, body)
+	}
+	if code, body := get(t, srv, "POST", "/signup", "name=Bo&email=not-an-address", form...); code != 400 || !strings.Contains(body, "an email address") {
+		t.Errorf("a bad address: %d %s", code, body)
+	}
+
+	// The cron forgets sign-ups nobody confirmed within a day.
+	owners, _ := web.Resolve[*Owners](app)
+	old := owners.Add("Cy", "cy@example.com")
+	owners.db.owners[old.Token] = Owner{Name: "Cy", Token: old.Token, Joined: time.Now().Add(-25 * time.Hour)}
+	if err := crontest.Run(app, "forgetUnconfirmed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := owners.Confirm(old.Token); ok {
+		t.Error("an old sign-up survived the cron")
+	}
+	if code, _ := get(t, srv, "GET", "/signup/confirm?token="+old.Token, ""); code != 404 {
+		t.Errorf("an expired link: %d", code)
 	}
 }

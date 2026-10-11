@@ -7,13 +7,14 @@ import (
 	"log"
 
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/mail"
 )
 
 //go:embed static
 var static embed.FS
 
 func main() {
-	app := web.New() // reads .env files first: see .env.example
+	app := web.New(mail.Provide()) // reads .env files first: see .env.example
 	app.Provide(OpenDB)
 	assets, _ := fs.Sub(static, "static")
 	app.Static("/assets", assets)
