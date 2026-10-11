@@ -368,3 +368,48 @@ func (s *syncBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
+
+// blockingTransport holds every message until released.
+type blockingTransport struct{ release chan struct{} }
+
+func (b blockingTransport) Send(ctx context.Context, from string, to []string, msg []byte) error {
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return nil
+}
+
+// SendLater holds at most Config.Queue messages: past it, it refuses.
+func TestSendLaterQueueBound(t *testing.T) {
+	tr := blockingTransport{release: make(chan struct{})}
+	m, err := New(Config{Transport: tr, From: "app@example.com", Queue: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := Message{To: []string{"ada@example.com"}, Subject: "Later"}
+	accepted, refused := 0, 0
+	for range 50 {
+		switch err := m.SendLater(context.Background(), msg); {
+		case err == nil:
+			accepted++
+		case errors.Is(err, ErrQueueFull):
+			refused++
+		default:
+			t.Fatal(err)
+		}
+	}
+	if accepted != 10 || refused != 40 {
+		t.Errorf("accepted %d, refused %d; want 10 and 40", accepted, refused)
+	}
+	close(tr.release)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := m.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SendLater(context.Background(), msg); err != nil {
+		t.Errorf("after the queue drained: %v", err)
+	}
+	m.Flush(ctx)
+}
