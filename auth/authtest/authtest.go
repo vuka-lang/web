@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"testing"
 
 	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/web/auth"
@@ -18,8 +19,12 @@ import (
 //
 //	app := web.New(auth.Module(cfg), authtest.As(&auth.Identity{ID: "7", Perms: []string{"orders.*"}}))
 //
-// A nil id makes every request anonymous.
+// A nil id makes every request anonymous. Outside a test binary it panics:
+// an app shipped with it would let everyone in.
 func As(id *auth.Identity) web.Option {
+	if !testing.Testing() {
+		panic("authtest: As outside a test binary")
+	}
 	return web.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(w, Request(r, id))

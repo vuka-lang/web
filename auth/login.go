@@ -73,7 +73,7 @@ func (a *Auth) Verify(ctx context.Context, r *http.Request, login, password stri
 			return nil, err
 		}
 	}
-	if id == nil || encoded == "" {
+	if id == nil || id.ID == "" || encoded == "" {
 		dummy, err := a.dummy()
 		if err != nil {
 			return nil, err

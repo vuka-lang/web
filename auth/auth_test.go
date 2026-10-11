@@ -80,6 +80,31 @@ func (b *board) Render() ui.Node {
 		ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(b.Remove)}}, ui.Text("remove")))
 }
 
+// advised is what Vuka generates for @auth.Requires("admin") on a
+// component's type: the gate advises every method — Render, and the event
+// handler Inc.
+type advised struct {
+	ui.Live
+	n int
+}
+
+var (
+	advisedInc    = vuka.Func{Name: "advised.Inc", ErrIndex: -1, CtxIndex: -1, Zero: func() []any { return nil }}
+	advisedRender = vuka.Func{Name: "advised.Render", ErrIndex: -1, CtxIndex: -1, Zero: func() []any { return []any{nil} }}
+)
+
+func (a *advised) Inc() {
+	vuka.NewCall(&advisedInc, adminOnly.Calls(), a, []any{}, func(*vuka.Call) []any { a.n++; return nil }).Run()
+}
+
+func (a *advised) Render() ui.Node {
+	c := vuka.NewCall(&advisedRender, adminOnly.Calls(), a, []any{}, func(*vuka.Call) []any {
+		return []any{ui.El("p", nil, ui.Text(fmt.Sprint("n=", a.n)), ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(a.Inc)}}))}
+	})
+	c.Run()
+	return c.Results[0].(ui.Node)
+}
+
 // whoami is a live page showing who it mounted for.
 type whoami struct {
 	ui.Live
@@ -123,6 +148,7 @@ func newApp(t *testing.T, u *authtest.Users, edit func(*auth.Config), opts ...we
 		return auth.Check(ctx, "orders.delete", &order{Owner: owner})
 	}, web.Params("ctx", "owner"), open)
 	app.Live("/board", &board{})
+	app.Live("/advised", &advised{})
 	app.Live("/staff", &whoami{}, web.Attrs(auth.Requires("admin")))
 	app.Live("/who", &whoami{}, web.Attrs(auth.Public()))
 	return app
@@ -758,6 +784,21 @@ func TestLiveEventGates(t *testing.T) {
 	b.Delete()
 	if b.deleted != 1 {
 		t.Error("a direct call was refused")
+	}
+}
+
+func TestLiveTypeGate(t *testing.T) {
+	c := serve(t, newApp(t, users(), nil))
+	c.login("bob@example.com", "hunter22", "")
+	ws, m := c.socket("/advised", c.srv.URL)
+	if r := click(t, ws, handler(t, m.HTML, 0), 2); r.Error != "forbidden" {
+		t.Errorf("a type's gate on its event, without the perm: %+v", r)
+	}
+	c = serve(t, newApp(t, users(), nil))
+	c.login("ada@example.com", "correct horse", "")
+	ws, m = c.socket("/advised", c.srv.URL)
+	if r := click(t, ws, handler(t, m.HTML, 0), 2); r.Error != "" || !strings.Contains(patched(r), "n=1") {
+		t.Errorf("a type's gate on its event, with the perm: %+v", r)
 	}
 }
 
