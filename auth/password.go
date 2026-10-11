@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"golang.org/x/crypto/argon2"
@@ -37,25 +38,93 @@ var errUnknownEncoding = errors.New("auth: unknown password encoding")
 // A Hasher checks passwords stored in an encoding auth doesn't read:
 // another system's, so its users sign in with the passwords they had
 // there (Config.Hashers).
+//
+// A Hasher may also have a Dummy() string method returning a value in its
+// encoding, of the cost its stored values have: an unknown login is checked
+// against it when the logins found last were in this encoding, so the two
+// take the same time. Without one, Config.FailedLoginTime alone evens them
+// out.
 type Hasher interface {
 	// Check reports whether password is the one encoded; known is false
 	// when encoded isn't in this hasher's encoding.
 	Check(encoded, password string) (ok, known bool)
 }
 
+type hasherDummy interface{ Dummy() string }
+
 // checkPassword is CheckPassword, then, for an encoding it doesn't read,
-// the first of Config.Hashers that does: a match there is stale.
-func (a *Auth) checkPassword(encoded, password string) (ok, stale bool, err error) {
+// the first of Config.Hashers that does: a match there is stale. kind
+// names the encoding and its cost, for the dummy of unknown logins; "" when
+// no one knows it.
+func (a *Auth) checkPassword(encoded, password string) (ok, stale bool, kind string, err error) {
+	kind = builtinKind(encoded)
 	ok, stale, err = CheckPassword(encoded, password, a.cfg.Passwords)
 	if !errors.Is(err, errUnknownEncoding) {
-		return ok, stale, err
+		return ok, stale, kind, err
 	}
-	for _, h := range a.cfg.Hashers {
+	for i, h := range a.cfg.Hashers {
 		if ok, known := h.Check(encoded, password); known {
-			return ok, ok, nil
+			return ok, ok, "hasher:" + strconv.Itoa(i), nil
 		}
 	}
-	return false, false, err
+	return false, false, "", err
+}
+
+// builtinKind names an Argon2id or bcrypt encoding with its cost:
+// "argon2id$m=19456,t=2,p=1", "bcrypt$12"; "" for another.
+func builtinKind(encoded string) string {
+	switch {
+	case strings.HasPrefix(encoded, "$argon2id$"):
+		if p, _, _, err := parseArgon2(encoded); err == nil {
+			return fmt.Sprintf("argon2id$m=%d,t=%d,p=%d", p.Memory, p.Time, p.Threads)
+		}
+	case strings.HasPrefix(encoded, "$2a$"), strings.HasPrefix(encoded, "$2b$"), strings.HasPrefix(encoded, "$2y$"):
+		if c, err := bcrypt.Cost([]byte(encoded)); err == nil && c <= 16 {
+			return "bcrypt$" + strconv.Itoa(c)
+		}
+	}
+	return ""
+}
+
+// defaultKind is the kind of the hashes auth makes.
+func (a *Auth) defaultKind() string {
+	p := a.cfg.Passwords
+	return fmt.Sprintf("argon2id$m=%d,t=%d,p=%d", p.Memory, p.Time, p.Threads)
+}
+
+// dummyPassword is what dummies encode: no one's password.
+const dummyPassword = "not anyone's password"
+
+// dummyFor is a value of the encoding kind names, to check an unknown
+// login's password against; "" when there is none.
+func (a *Auth) dummyFor(kind string) string {
+	if v, ok := a.dummies.Load(kind); ok {
+		return v.(string)
+	}
+	if def := a.defaultKind(); kind != def && a.dummyN.Add(1) > 32 { // costs without end: a database gone wrong
+		return a.dummyFor(def)
+	}
+	var d string
+	switch {
+	case strings.HasPrefix(kind, "argon2id$"):
+		var p Argon2
+		if _, err := fmt.Sscanf(kind, "argon2id$m=%d,t=%d,p=%d", &p.Memory, &p.Time, &p.Threads); err == nil {
+			d, _ = p.Hash(dummyPassword)
+		}
+	case strings.HasPrefix(kind, "bcrypt$"):
+		if c, err := strconv.Atoi(kind[len("bcrypt$"):]); err == nil {
+			b, _ := bcrypt.GenerateFromPassword([]byte(dummyPassword), c)
+			d = string(b)
+		}
+	case strings.HasPrefix(kind, "hasher:"):
+		if i, err := strconv.Atoi(kind[len("hasher:"):]); err == nil && i < len(a.cfg.Hashers) {
+			if h, ok := a.cfg.Hashers[i].(hasherDummy); ok {
+				d = h.Dummy()
+			}
+		}
+	}
+	a.dummies.Store(kind, d)
+	return d
 }
 
 // HashPassword encodes a password for storage with Argon2id and the default
@@ -95,6 +164,7 @@ func CheckPassword(encoded, password string, cost Argon2) (ok, stale bool, err e
 		return ok, ok && (p.Memory < cost.Memory || p.Time < cost.Time || p.Threads < cost.Threads), nil
 	case strings.HasPrefix(encoded, "$2a$"), strings.HasPrefix(encoded, "$2b$"), strings.HasPrefix(encoded, "$2y$"):
 		if len(password) > 72 { // bcrypt reads 72 bytes; never let the rest pass unchecked
+			bcrypt.CompareHashAndPassword([]byte(encoded), []byte(password[:72])) // the same work all the same
 			return false, false, nil
 		}
 		err := bcrypt.CompareHashAndPassword([]byte(encoded), []byte(password))

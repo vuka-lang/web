@@ -100,8 +100,8 @@ type shape struct {
 	name  string
 	i     int
 	async bool // the handler returns before the gated call: wait for it
-	// deeper: no live page attributes the call — run by default, refused
-	// under StrictGates (the documented limit).
+	// deeper: no live page attributes the call — refused by default
+	// (strict gates), run under LaxGates (the documented limit).
 	deeper bool
 	// elsewhere: refused on another goroutine, the event's reply carries no
 	// error (the call's caller gets it).
@@ -123,8 +123,8 @@ var shapes = []shape{
 func TestGateShapes(t *testing.T) {
 	for _, strict := range []bool{false, true} {
 		t.Run(fmt.Sprint("strict=", strict), func(t *testing.T) {
-			defer auth.SetStrictGates(false)
-			app := newApp(t, users(), func(c *auth.Config) { c.StrictGates = strict })
+			defer auth.SetStrictGates(true)
+			app := newApp(t, users(), func(c *auth.Config) { c.LaxGates = !strict })
 			app.Live("/vault", &vault{})
 			for _, who := range []struct{ login, pw string }{{"bob@example.com", "hunter22"}, {"ada@example.com", "correct horse"}} {
 				admin := who.login == "ada@example.com"
@@ -165,10 +165,10 @@ func TestGateShapes(t *testing.T) {
 	}
 }
 
-// Outside any request, a gated call is the app's own work — unless
-// StrictGates, when it needs an identity or auth.System.
+// Outside any request, a gated call needs an identity or auth.System —
+// unless LaxGates, when it is the app's own work.
 func TestGatesOutsideEvents(t *testing.T) {
-	defer auth.SetStrictGates(false)
+	defer auth.SetStrictGates(true)
 	v := &vault{}
 	ctx := context.Background()
 	run := func(name string, f func() error, want bool, wantErr error) {
@@ -190,19 +190,20 @@ func TestGatesOutsideEvents(t *testing.T) {
 	bobCtx := auth.WithIdentity(ctx, &bob)
 	adaCtx := auth.WithIdentity(ctx, &auth.Identity{ID: "1", Perms: []string{"admin"}})
 
-	run("a plain call", plain, true, nil)
-	run("a call on a goroutine", inGoroutine, true, nil)
-	run("a call with a background context", withCtx(ctx), true, nil)
-	run("a call as bob", withCtx(bobCtx), false, web.Forbidden)
-	run("a call as an admin", withCtx(adaCtx), true, nil)
+	auth.SetStrictGates(false)
+	run("lax: a plain call", plain, true, nil)
+	run("lax: a call on a goroutine", inGoroutine, true, nil)
+	run("lax: a call with a background context", withCtx(ctx), true, nil)
+	run("lax: a call as bob", withCtx(bobCtx), false, web.Forbidden)
+	run("lax: a call as an admin", withCtx(adaCtx), true, nil)
 
 	auth.SetStrictGates(true)
-	run("strict: a plain call", plain, false, nil)
-	run("strict: a call on a goroutine", inGoroutine, false, nil)
-	run("strict: a background context", withCtx(ctx), false, web.Unauthorized)
-	run("strict: auth.System", withCtx(auth.System(ctx)), true, nil)
-	run("strict: as bob", withCtx(bobCtx), false, web.Forbidden)
-	run("strict: as an admin", withCtx(adaCtx), true, nil)
+	run("a plain call", plain, false, nil)
+	run("a call on a goroutine", inGoroutine, false, nil)
+	run("a background context", withCtx(ctx), false, web.Unauthorized)
+	run("auth.System", withCtx(auth.System(ctx)), true, nil)
+	run("as bob", withCtx(bobCtx), false, web.Forbidden)
+	run("as an admin", withCtx(adaCtx), true, nil)
 }
 
 // A gated method given a request's context checks its identity, whatever

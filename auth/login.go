@@ -55,39 +55,57 @@ func Login(ctx context.Context, login, password string) (*Identity, error) {
 // Verify checks a login and password, as Login does, without signing in:
 // the token endpoint's first step. r, when not nil, is the request the
 // attempt came with, whose address throttling counts.
-func (a *Auth) Verify(ctx context.Context, r *http.Request, login, password string) (*Identity, error) {
+//
+// A failure takes as long as any other: an unknown login is checked
+// against a hash like the ones logins found lately have, and no failure
+// returns before Config.FailedLoginTime.
+func (a *Auth) Verify(ctx context.Context, r *http.Request, login, password string) (id *Identity, err error) {
+	start := time.Now()
+	defer func() {
+		if err != nil {
+			a.pad(ctx, start)
+		}
+	}()
 	users, err := a.usersOf()
 	if err != nil {
 		return nil, err
 	}
-	ip, now := "", time.Now()
+	ip, now := "", start
 	if r != nil {
 		ip = a.cfg.ClientIP(r)
 	}
 	if d := a.throttle.wait(login, ip, now); d > 0 {
 		return nil, &ThrottledError{RetryAfter: d}
 	}
-	id, encoded, err := (*Identity)(nil), "", error(nil)
+	encoded := ""
 	if login != "" && len(login) <= 256 {
 		if id, encoded, err = users.FindLogin(ctx, login); err != nil {
 			return nil, err
 		}
 	}
 	if id == nil || id.ID == "" || encoded == "" {
-		dummy, err := a.dummy()
-		if err != nil {
-			return nil, err
+		kind, _ := a.lastKind.Load().(string)
+		if kind == "" {
+			kind = a.defaultKind()
 		}
-		CheckPassword(dummy, password, a.cfg.Passwords) // the same work as a real check
-		a.throttle.fail(login, ip, now)
+		if dummy := a.dummyFor(kind); dummy != "" {
+			a.checkPassword(dummy, password) // the same work as a real check
+		}
+		a.throttle.fail(login, ip, "", now)
 		return nil, ErrInvalidLogin
 	}
-	ok, stale, err := a.checkPassword(encoded, password)
+	if d := a.throttle.waitUser(id.ID, now); d > 0 {
+		return nil, &ThrottledError{RetryAfter: d} // the account's own count: another spelling of its login is no way round
+	}
+	ok, stale, kind, err := a.checkPassword(encoded, password)
 	if err != nil {
 		log.Printf("auth: the stored password of user %s: %v", id.ID, err)
 	}
+	if kind != "" {
+		a.lastKind.Store(kind)
+	}
 	if !ok {
-		a.throttle.fail(login, ip, now)
+		a.throttle.fail(login, ip, id.ID, now)
 		return nil, ErrInvalidLogin
 	}
 	if c, ok := users.(loginChecker); ok {
@@ -99,7 +117,7 @@ func (a *Auth) Verify(ctx context.Context, r *http.Request, login, password stri
 			return nil, ErrInvalidLogin
 		}
 	}
-	a.throttle.succeed(login)
+	a.throttle.succeed(login, id.ID)
 	if s, ok := users.(passwordSetter); ok && stale {
 		if fresh, err := a.cfg.Passwords.Hash(password); err == nil {
 			if err := s.SetPassword(ctx, id.ID, fresh); err != nil {
@@ -108,6 +126,20 @@ func (a *Auth) Verify(ctx context.Context, r *http.Request, login, password stri
 		}
 	}
 	return a.expand(id), nil
+}
+
+// pad makes a failed login last Config.FailedLoginTime from start.
+func (a *Auth) pad(ctx context.Context, start time.Time) {
+	d := a.cfg.FailedLoginTime - time.Since(start)
+	if d <= 0 {
+		return
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+	case <-ctx.Done():
+	}
 }
 
 // SetPassword hashes password and stores it for user uid with

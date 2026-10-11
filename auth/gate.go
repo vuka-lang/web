@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -155,8 +156,15 @@ func (a *Auth) wrapRoute(info web.RouteInfo) web.Middleware {
 		a.problems = append(a.problems, fmt.Errorf("auth: GET %s (%s) is the login page, and needs a sign-in (%s): mark it @auth.Public", info.Path, info.Where, describe(gs)))
 	}
 	what := describe(gs)
+	var page *livePage
+	if info.LiveType != nil {
+		page = &livePage{typ: info.LiveType, attrs: info.Attrs}
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if page != nil {
+				r = r.WithContext(context.WithValue(r.Context(), livePageKey{}, *page))
+			}
 			var id *Identity
 			if st := stateOf(r.Context()); st != nil {
 				id = st.id
@@ -247,36 +255,49 @@ func Next(r *http.Request, home string) string {
 // errNoAuthEvent refuses a gated live event of an app without auth.
 var errNoAuthEvent = errors.New("auth: this event is gated, and the app has no auth.Module")
 
-// strictGates is Config.StrictGates of an app built with it: a gated call
-// outside any request has no app to ask, so it holds for the process.
-var strictGates atomic.Bool
+// laxGates is Config.LaxGates of an app built with it, and pinStrict an
+// app's StrictGates: a gated call outside any request has no app to ask,
+// so they hold for the process. Strict unless an app asked for lax and
+// none for strict.
+var laxGates, pinStrict atomic.Bool
 
-// errNoIdentity refuses, under StrictGates, a gated call nothing says
-// whose it is.
-var errNoIdentity = fmt.Errorf("auth: a gated call with no identity (Config.StrictGates): pass it a request's context, or one from auth.WithIdentity or auth.System: %w", web.Unauthorized)
+func strict() bool { return pinStrict.Load() || !laxGates.Load() }
+
+// errNoIdentity refuses a gated call nothing says whose it is.
+var errNoIdentity = fmt.Errorf("auth: a gated call with no identity: pass it a request's context, or one from auth.WithIdentity or auth.System: %w", web.Unauthorized)
 
 type systemKey struct{}
 
-// System is ctx marked as the app's own work — a cron, a job, a migration,
-// main — which gated methods given it let through, whoever ctx's identity
-// is. Under Config.StrictGates a gated call is refused without an identity
-// or this mark; without it, a call outside any request runs anyway, and
-// the mark only says so.
+// System is ctx marked as the app's own work — a job, a migration, main;
+// web's crons run with it — which gated methods given it, and auth.Check,
+// let through, whoever ctx's identity is. A gated call is refused without
+// an identity or this mark (unless Config.LaxGates). Never mark a context a
+// request's work goes on with.
 func System(ctx context.Context) context.Context { return context.WithValue(ctx, systemKey{}, true) }
 
 func isSystem(ctx context.Context) bool { v, _ := ctx.Value(systemKey{}).(bool); return v }
 
 // guardEvent decides a live event before its handler runs (web's
-// GuardLiveEvents): the gates of the component's type, of the handler's
-// receiver type, then of the handler — an @auth.Public on the handler
-// opening it — checked against the identity the page joined with.
+// GuardLiveEvents): the gates of the live page's route when the event is
+// the page's own, of the component's type, of the handler's receiver type,
+// then of the handler — an @auth.Public on the handler opening it —
+// checked against the identity the page joined with. An event none of them
+// marks needs a sign-in, as a route does (unless Config.PublicByDefault):
+// a component on a public page doesn't take the page's @auth.Public.
 func (a *Auth) guardEvent(ctx context.Context, h web.LiveHandler) error {
-	attrs := append([]any(nil), vuka.TypeAttrs(h.Component)...)
+	var attrs []any
+	if pg, ok := ctx.Value(livePageKey{}).(livePage); ok && (h.Component == nil || h.Component == pg.typ) {
+		attrs = append(attrs, pg.attrs...)
+	}
+	attrs = append(attrs, vuka.TypeAttrs(h.Component)...)
 	if h.Recv != nil && h.Recv != h.Component {
 		attrs = append(attrs, vuka.TypeAttrs(h.Recv)...)
 	}
 	attrs = append(attrs, h.Attrs...)
-	gs, _ := gatesOf(attrs)
+	gs, marked := gatesOf(attrs)
+	if !marked && !a.cfg.PublicByDefault {
+		gs = []Gate{{kind: required}}
+	}
 	if len(gs) == 0 {
 		return nil
 	}
@@ -293,6 +314,16 @@ func (a *Auth) guardEvent(ctx context.Context, h web.LiveHandler) error {
 	return nil
 }
 
+// livePage is a live page's route as its events see it: its component type
+// and the attributes given to the route (web.Attrs from Go, beside the
+// type's own).
+type livePage struct {
+	typ   reflect.Type
+	attrs []any
+}
+
+type livePageKey struct{}
+
 // call is a gate's call decorator. The identity it checks is, in order:
 //
 //   - the one the call's context.Context carries — a request's, a live
@@ -303,10 +334,12 @@ func (a *Auth) guardEvent(ctx context.Context, h web.LiveHandler) error {
 //     function literal's calls included) — not the render after it, which
 //     isn't an action;
 //   - on a goroutine a live connection's goroutine started (go b.Clear()
-//     in a handler, a decorator moving the call), that page's.
+//     in a handler, a decorator moving the call), that page's;
+//   - on a goroutine serving an HTTP request, the request's: none (refused)
+//     outside its route.
 //
-// A call none of these attributes runs — the app's own code: a cron, a job,
-// main — unless Config.StrictGates, which refuses it. A gate on a type
+// A call none of these attributes is refused — unless Config.LaxGates,
+// which runs it as the app's own code (a job, main). A gate on a type
 // advises its methods but leaves alone those a live component's session
 // calls itself (Render, Mount, Update) and those marked @auth.Public.
 func (g Gate) call(c *vuka.Call) {
@@ -335,8 +368,9 @@ func (g Gate) call(c *vuka.Call) {
 	refuse(c, err)
 }
 
-// decide is nil when the caller ctx (or the live page the call comes from)
-// names may pass g; where is the context the identity came from.
+// decide is nil when the caller ctx (or the request or live page the call
+// comes from) names may pass g; where is the context the identity came
+// from.
 func (g Gate) decide(ctx context.Context) (err error, where context.Context) {
 	if isSystem(ctx) {
 		return nil, ctx
@@ -344,21 +378,43 @@ func (g Gate) decide(ctx context.Context) (err error, where context.Context) {
 	if st := stateOf(ctx); st != nil {
 		return g.allow(st.id), ctx
 	}
-	if ev := web.CurrentLiveEvent(); ev != nil {
-		if ev.Handling() {
-			st := stateOf(ev.Context())
-			if st == nil {
-				return errNoAuthEvent, ev.Context()
-			}
-			return g.allow(st.id), ev.Context()
+	ev := web.CurrentLiveEvent()
+	if ev != nil && ev.Handling() {
+		st := stateOf(ev.Context())
+		if st == nil {
+			return errNoAuthEvent, ev.Context()
 		}
-	} else if o := web.LiveOrigin(); o != nil {
-		if st := stateOf(o); st != nil {
-			return g.allow(st.id), o
-		}
-		return errNoAuthEvent, o
+		return g.allow(st.id), ev.Context()
 	}
-	if strictGates.Load() {
+	rc, serving := web.CurrentRequest()
+	if rc != nil {
+		// On a request's goroutine without its context, inside its route:
+		// the request's identity.
+		if st := stateOf(rc); st != nil {
+			return g.allow(st.id), rc
+		}
+		return errNoIdentity, rc
+	}
+	if p := web.LivePage(); p != nil {
+		// On a live connection's goroutine, outside an event (a render, a
+		// broadcast): the page's identity.
+		if st := stateOf(p); st != nil {
+			return g.allow(st.id), p
+		}
+		return errNoAuthEvent, p
+	}
+	if ev == nil && !serving {
+		if o := web.LiveOrigin(); o != nil {
+			if st := stateOf(o); st != nil {
+				return g.allow(st.id), o
+			}
+			return errNoAuthEvent, o
+		}
+	}
+	if serving || web.Request(ctx) != nil {
+		return errNoIdentity, nil // a request's work without its identity: never the app's own
+	}
+	if strict() {
 		return errNoIdentity, nil
 	}
 	return nil, nil
