@@ -9,3 +9,5 @@ require (
 )
 
 require github.com/vuka-lang/ui v0.6.1
+
+replace github.com/vuka-lang/ui => ../vuka-ui-wt-assets
