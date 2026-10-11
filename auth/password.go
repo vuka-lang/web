@@ -30,6 +30,34 @@ const maxPassword = 1024
 
 var errPasswordLength = errors.New("auth: a password is 1 to 1024 bytes")
 
+// errUnknownEncoding is CheckPassword's error for an encoding it doesn't
+// read, which Config.Hashers may.
+var errUnknownEncoding = errors.New("auth: unknown password encoding")
+
+// A Hasher checks passwords stored in an encoding auth doesn't read:
+// another system's, so its users sign in with the passwords they had
+// there (Config.Hashers).
+type Hasher interface {
+	// Check reports whether password is the one encoded; known is false
+	// when encoded isn't in this hasher's encoding.
+	Check(encoded, password string) (ok, known bool)
+}
+
+// checkPassword is CheckPassword, then, for an encoding it doesn't read,
+// the first of Config.Hashers that does: a match there is stale.
+func (a *Auth) checkPassword(encoded, password string) (ok, stale bool, err error) {
+	ok, stale, err = CheckPassword(encoded, password, a.cfg.Passwords)
+	if !errors.Is(err, errUnknownEncoding) {
+		return ok, stale, err
+	}
+	for _, h := range a.cfg.Hashers {
+		if ok, known := h.Check(encoded, password); known {
+			return ok, ok, nil
+		}
+	}
+	return false, false, err
+}
+
 // HashPassword encodes a password for storage with Argon2id and the default
 // cost: "$argon2id$v=19$m=19456,t=2,p=1$<salt>$<hash>".
 func HashPassword(password string) (string, error) { return Argon2Defaults.Hash(password) }
@@ -78,7 +106,7 @@ func CheckPassword(encoded, password string, cost Argon2) (ok, stale bool, err e
 		}
 		return false, false, err
 	}
-	return false, false, errors.New("auth: unknown password encoding")
+	return false, false, errUnknownEncoding
 }
 
 func parseArgon2(s string) (p Argon2, salt, sum []byte, err error) {

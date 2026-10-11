@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -578,6 +579,39 @@ func TestHashUpgrade(t *testing.T) {
 	}
 	if _, _, err := auth.CheckPassword("$argon2id$v=19$m=99999999,t=1,p=1$AAAA$AAAAAAAAAAAAAAAAAAAAAA", "x", auth.Argon2Defaults); err == nil {
 		t.Error("a hash asking for 95 GiB")
+	}
+}
+
+// reversed is a Hasher reading "rev:" followed by the password backwards.
+type reversed struct{}
+
+func (reversed) Check(encoded, password string) (ok, known bool) {
+	rest, known := strings.CutPrefix(encoded, "rev:")
+	r := []rune(password)
+	slices.Reverse(r)
+	return known && rest == string(r), known
+}
+
+func TestHashers(t *testing.T) {
+	app := func() (*authtest.Users, *client) {
+		u := users().AddEncoded("erin@example.com", "rev:terces", auth.Identity{ID: "5"}).
+			AddEncoded("fay@example.com", "md5:whatever", auth.Identity{ID: "6"})
+		return u, serve(t, newApp(t, u, func(c *auth.Config) { c.Hashers = []auth.Hasher{reversed{}} }))
+	}
+	u, c := app()
+	if r := c.login("erin@example.com", "secret", ""); r.header.Get("Location") != "/" {
+		t.Fatalf("a hasher's encoding: %d %s", r.status, r.header.Get("Location"))
+	}
+	if enc := u.Encoded("5"); !strings.HasPrefix(enc, "$argon2id$") {
+		t.Errorf("a hasher's match wasn't upgraded: %s", enc)
+	}
+	if r := c.login("ada@example.com", "correct horse", ""); r.header.Get("Location") != "/" {
+		t.Errorf("auth's own encoding beside hashers: %s", r.header.Get("Location"))
+	}
+	for _, l := range []struct{ login, pw string }{{"erin@example.com", "secrets"}, {"fay@example.com", "whatever"}} {
+		if _, c := app(); c.login(l.login, l.pw, "").header.Get("Location") != "/login?error=invalid" {
+			t.Errorf("%s with %q signed in", l.login, l.pw)
+		}
 	}
 }
 

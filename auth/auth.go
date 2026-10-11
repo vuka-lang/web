@@ -165,6 +165,11 @@ type Config struct {
 	// Passwords are the hashing parameters of new hashes; Argon2id's
 	// defaults (Argon2Defaults) when zero.
 	Passwords Argon2
+	// Hashers read password encodings auth doesn't (another system's,
+	// FindLogin's encoded password as it stored it): a login checks the
+	// first that knows the encoding. A match is stale, so the login
+	// stores a fresh hash when Users has SetPassword.
+	Hashers []Hasher
 	// Throttle limits failed logins; ThrottleDefaults when zero.
 	Throttle Throttle
 	// ClientIP is the address throttling counts a request against;

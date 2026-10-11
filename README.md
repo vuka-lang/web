@@ -1084,7 +1084,7 @@ func main() {
 Cookie sessions for pages and live pages (rotated on sign-in, HttpOnly,
 SameSite=Lax, Secure under HTTPS), opaque bearer tokens for APIs
 (`POST /auth/token`), JWTs issued elsewhere, Argon2id hashes (bcrypt ones
-upgraded at login), one error for an unknown login and a wrong password,
+upgraded at login; another system's encodings read by `Config.Hashers`), one error for an unknown login and a wrong password,
 throttled failures, "remember me" (`RememberMe`), `auth.RevokeUser` closing the user's live pages, and
 `authtest` for tests. A live event's gate is checked before its handler
 runs, and again by each gated method it reaches — given the page's context,

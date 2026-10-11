@@ -82,7 +82,7 @@ func (a *Auth) Verify(ctx context.Context, r *http.Request, login, password stri
 		a.throttle.fail(login, ip, now)
 		return nil, ErrInvalidLogin
 	}
-	ok, stale, err := CheckPassword(encoded, password, a.cfg.Passwords)
+	ok, stale, err := a.checkPassword(encoded, password)
 	if err != nil {
 		log.Printf("auth: the stored password of user %s: %v", id.ID, err)
 	}
