@@ -38,6 +38,11 @@ type App struct {
 	eager   []*provider
 	checks  []func(*App) error
 
+	wraps      []routeWrap
+	binders    map[reflect.Type]func(*http.Request) (reflect.Value, error)
+	liveChecks []func(context.Context) error
+	csrf       *http.CrossOriginProtection
+
 	envFiles []string // nil: the defaults
 	env      *envLoad
 	required []string
@@ -233,6 +238,7 @@ func (a *App) take(pkg string) bool { return a.only == nil || a.only[pkg] }
 
 func (a *App) build() (http.Handler, error) {
 	prefixes := map[reflect.Type]string{}
+	typeAttrs := map[reflect.Type][]any{}
 	for _, t := range a.reg.services {
 		if a.take(t.Reflect.PkgPath()) {
 			a.c.provide(t.New, "service "+t.Name)
@@ -242,6 +248,7 @@ func (a *App) build() (http.Handler, error) {
 		if a.take(c.typ.Reflect.PkgPath()) {
 			a.c.provide(c.typ.New, "controller "+c.typ.Name)
 			prefixes[reflect.PointerTo(c.typ.Reflect)] = c.prefix
+			typeAttrs[reflect.PointerTo(c.typ.Reflect)] = flattenAttrs(c.typ.Attrs)
 		}
 	}
 	var specs []*routeSpec
@@ -258,7 +265,9 @@ func (a *App) build() (http.Handler, error) {
 				t = reflect.PointerTo(t)
 			}
 			s.path = joinPath(prefixes[t], r.path)
+			s.attrs = append(s.attrs, typeAttrs[t]...)
 		}
+		s.attrs = append(s.attrs, flattenAttrs(d.Attrs)...)
 		if v, ok := a.reg.views[declKey(d)]; ok {
 			s.view = &v
 		}
@@ -266,7 +275,7 @@ func (a *App) build() (http.Handler, error) {
 	}
 	for _, ls := range a.reg.lives {
 		if a.take(ls.pkg) {
-			specs = append(specs, &routeSpec{method: http.MethodGet, path: ls.path, where: "live page " + ls.name, live: ls, mw: ls.mw})
+			specs = append(specs, ls.route())
 		}
 	}
 	specs = append(specs, a.specs...)
@@ -286,6 +295,11 @@ func (a *App) build() (http.Handler, error) {
 		}
 		for i := len(s.mw) - 1; i >= 0; i-- {
 			h = a.layer(s.mw[i], h)
+		}
+		h, err = a.wrapRoute(s, h)
+		if err != nil {
+			errs = append(errs, err)
+			continue
 		}
 		a.router.Handle(s.method, s.path, h)
 	}
@@ -320,11 +334,36 @@ func (a *App) build() (http.Handler, error) {
 		a.relay.Subscribe(a.hub.deliver)
 	}
 	var h http.Handler = a.router
+	if a.csrf != nil {
+		h = a.csrfProtect(h)
+	}
 	for i := len(a.mw) - 1; i >= 0; i-- {
 		h = a.layer(a.mw[i], h)
 	}
 	if a.tb != nil {
 		h = a.tb.wrap(h)
+	}
+	return h, nil
+}
+
+// wrapRoute wraps a compiled route in the middleware WrapRoutes functions
+// give it, after checking every RouteAttr it carries has its function.
+func (a *App) wrapRoute(s *routeSpec, h http.Handler) (http.Handler, error) {
+	for _, x := range s.attrs {
+		ra, ok := x.(RouteAttr)
+		if !ok {
+			continue
+		}
+		name := ra.RouteWrapper()
+		if !slices.ContainsFunc(a.wraps, func(w routeWrap) bool { return w.name == name }) {
+			return nil, fmt.Errorf("web: %s %s (%s): its attribute %T needs %s, which the app doesn't have", s.method, s.path, s.where, x, name)
+		}
+	}
+	info := RouteInfo{Method: s.method, Path: s.path, Where: s.where, Attrs: slices.Clip(s.attrs), Live: s.live != nil, HTML: s.html || s.live != nil}
+	for i := len(a.wraps) - 1; i >= 0; i-- {
+		if mw := a.wraps[i].f(info); mw != nil {
+			h = a.layer(mw, h)
+		}
 	}
 	return h, nil
 }

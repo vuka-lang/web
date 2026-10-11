@@ -153,10 +153,11 @@ type conn struct {
 	r      *http.Request // the upgrade request
 	uri    string        // the page, from its token
 	s      liveproto.Session
-	topics []string    // guarded by the hub's mutex
-	tb     *tbSink     // the development toolbar's record of the page, its messages under it
-	wire   *wireMirror // with tb, what the browser holds, to decode the frames sent
-	frames []tbFrame   // with tb, the frames the message being recorded sent
+	page   context.Context // the context the page's route ran with: the join's, else the latest navigation's
+	topics []string        // guarded by the hub's mutex
+	tb     *tbSink         // the development toolbar's record of the page, its messages under it
+	wire   *wireMirror     // with tb, what the browser holds, to decode the frames sent
+	frames []tbFrame       // with tb, the frames the message being recorded sent
 
 	mu    sync.Mutex
 	inbox []delivery
@@ -303,6 +304,9 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		}
 	case c.s == nil:
 		c.write(ctx, live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: "live: join first"})
+	case !c.check():
+		c.ws.Close(closeReload, "live: the page must load again")
+		return false
 	case m.Type == live.Navigate:
 		reply := c.navigate(ctx, m.ClientMessage)
 		if _, moved := reply.(withToken); moved && c.tb != nil {
@@ -311,10 +315,65 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		}
 		c.write(ctx, reply)
 	default:
-		c.write(ctx, c.s.Event(m.ClientMessage))
+		c.write(ctx, c.event(m.ClientMessage))
 	}
 	c.syncTopics()
 	return true
+}
+
+// check runs the app's LiveChecks with the page's context.
+func (c *conn) check() bool {
+	for _, f := range c.app.liveChecks {
+		if f(c.page) != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// event runs an event's handler on this goroutine, bound as the
+// CurrentLiveEvent; an event a decorator refused replies with its error.
+func (c *conn) event(m live.ClientMessage) any {
+	ev := &LiveEvent{ctx: c.page}
+	if h, ok := c.s.(interface{ Handler(string) any }); ok {
+		ev.handler = handlerName(h.Handler(m.Target))
+	}
+	unbind := bindLiveEvent(ev)
+	reply := c.s.Event(m)
+	unbind()
+	if ev.refused != nil {
+		return withError{reply, ev.refused.Error()}
+	}
+	return reply
+}
+
+// withError is an event's reply carrying err, unless it carries an error
+// already.
+type withError struct {
+	msg any
+	err string
+}
+
+func (w withError) MarshalJSON() ([]byte, error) {
+	b, err := json.Marshal(w.msg)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(b, &m) != nil {
+		return b, nil
+	}
+	if e, ok := m["error"]; ok && string(e) != `""` {
+		return b, nil
+	}
+	m["error"], _ = json.Marshal(w.err)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(m); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // join rebuilds the page: the route its token names runs again, as a GET
@@ -337,7 +396,7 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
-	c.s = liveproto.New(j.ctx, func(context.Context) ui.Node { return j.page }, min(v, c.app.liveMax))
+	c.s, c.page = liveproto.New(j.ctx, func(context.Context) ui.Node { return j.page }, min(v, c.app.liveMax)), j.ctx
 	return c.s.Join(ref), 0
 }
 
@@ -366,7 +425,7 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) any {
 	if !ok {
 		return reply
 	}
-	c.uri = uri
+	c.uri, c.page = uri, j.ctx
 	return withToken{reply, c.app.signToken(uri)}
 }
 

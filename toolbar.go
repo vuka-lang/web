@@ -132,6 +132,7 @@ type tbRecord struct {
 	Spans   []tbSpan
 	Logs    []tbLog
 	Notes   []tbNote
+	Facts   []RequestNote // NoteRequest's rows
 	Live    []*tbEntry
 	Ref     int    // a socket message's ref
 	Bytes   int    // its reply's size
@@ -266,6 +267,7 @@ func (e *tbEntry) snapshot() tbRecord {
 	r := e.tbRecord
 	r.Params, r.Queries, r.Spans = slices.Clone(r.Params), slices.Clone(r.Queries), slices.Clone(r.Spans)
 	r.Logs, r.Notes, r.Live = slices.Clone(r.Logs), slices.Clone(r.Notes), slices.Clone(r.Live)
+	r.Facts = slices.Clone(r.Facts)
 	r.Frames = slices.Clone(r.Frames)
 	if !r.Done {
 		r.Dur = time.Since(r.Start)
@@ -486,7 +488,7 @@ func showParams(shown []tbParam, args []reflect.Value) []tbParam {
 		if p.From == "dependency" {
 			p.Value = args[i].Type().String()
 		} else {
-			p.Value = fmt.Sprintf("%+v", args[i].Interface())
+			p.Value = showValue(args[i])
 			if len(p.Value) > 500 {
 				p.Value = p.Value[:500] + "…"
 			}
@@ -494,6 +496,44 @@ func showParams(shown []tbParam, args []reflect.Value) []tbParam {
 		out = append(out, p)
 	}
 	return out
+}
+
+// showValue is an argument as the toolbar shows it: a struct's fields
+// named like a password, token or secret hidden.
+func showValue(v reflect.Value) string {
+	s := v
+	for s.Kind() == reflect.Pointer && !s.IsNil() {
+		s = s.Elem()
+	}
+	if s.Kind() != reflect.Struct {
+		return fmt.Sprintf("%+v", v.Interface())
+	}
+	if _, ok := v.Interface().(fmt.Stringer); ok {
+		return fmt.Sprintf("%+v", v.Interface())
+	}
+	var b strings.Builder
+	b.WriteByte('{')
+	for _, f := range reflect.VisibleFields(s.Type()) {
+		if f.Anonymous {
+			continue
+		}
+		if b.Len() > 1 {
+			b.WriteByte(' ')
+		}
+		b.WriteString(f.Name + ":")
+		switch {
+		case secretName.MatchString(f.Name) || secretName.MatchString(string(f.Tag)):
+			b.WriteString("(hidden)")
+		case !f.IsExported():
+			b.WriteString("…")
+		default:
+			if fv, err := s.FieldByIndexErr(f.Index); err == nil {
+				fmt.Fprintf(&b, "%+v", fv.Interface())
+			}
+		}
+	}
+	b.WriteByte('}')
+	return b.String()
 }
 
 func noop() {}

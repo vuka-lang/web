@@ -30,6 +30,8 @@ type routeSpec struct {
 	view         *declView
 	mw           []Middleware
 	live         *liveSpec // a Live page
+	attrs        []any     // typed attributes, for WrapRoutes
+	html         bool      // answers with a page; set by compile
 }
 
 type request struct {
@@ -124,6 +126,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		return nil, fail("%v", err)
 	}
 	htmlPage := s.view != nil || (out.data != nil && out.data.Implements(nodeType))
+	s.html = htmlPage
 	var v *view
 	if s.view != nil {
 		if out.data != nil && out.data.Implements(nodeType) {
@@ -283,6 +286,9 @@ func isResult(t reflect.Type) bool {
 
 func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) (binder, error) {
 	t := p.Type
+	if f, ok := a.binders[t]; ok {
+		return func(rq *request) (reflect.Value, error) { return f(rq.r.WithContext(rq.ctx)) }, nil
+	}
 	switch {
 	case t == requestType:
 		return func(rq *request) (reflect.Value, error) { return reflect.ValueOf(rq.r), nil }, nil

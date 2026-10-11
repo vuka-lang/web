@@ -117,11 +117,26 @@ type requestView struct {
 	tbRecord
 	Ms, Func, Pos string
 	Header, Sent  [][2]string
+	Sections      []factSection
+}
+
+// factSection is NoteRequest's rows under one heading.
+type factSection struct {
+	Name string
+	Rows []RequestNote
 }
 
 func requestOf(r tbRecord) requestView {
 	v := requestView{tbRecord: r, Ms: ms(r.Dur), Header: headerRows(r.Req), Sent: headerRows(r.Resp)}
 	v.Func, v.Pos, _ = strings.Cut(r.Handler, " at ")
+	for _, f := range r.Facts {
+		i := slices.IndexFunc(v.Sections, func(s factSection) bool { return s.Name == f.Section })
+		if i < 0 {
+			v.Sections = append(v.Sections, factSection{Name: f.Section})
+			i = len(v.Sections) - 1
+		}
+		v.Sections[i].Rows = append(v.Sections[i].Rows, f)
+	}
 	return v
 }
 
