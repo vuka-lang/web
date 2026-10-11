@@ -29,6 +29,9 @@ type RouteInfo struct {
 	// or those given with web.Attrs from Go.
 	Attrs []any
 	Live  bool // a Live page
+	// LiveType is a Live page's component type (the struct, not a
+	// pointer); nil for other routes.
+	LiveType reflect.Type
 	// HTML says the route answers with a page (a ui.Node, a view or a Live
 	// page): its errors are pages, and a browser may be sent elsewhere.
 	HTML bool
@@ -149,11 +152,11 @@ func (a *App) WriteError(w http.ResponseWriter, r *http.Request, err error, html
 }
 
 // LiveCheck has every message of a live connection after its join checked
-// with f, given the context the page's route ran with, and each broadcast
-// before the page takes it, and every LiveCheckEvery: an error closes the
-// connection with code 4001 and the page reloads, its route running again
-// for the browser. A library that ends sessions closes their pages this
-// way.
+// with f, given the context the page's route ran with, and each batch of
+// broadcasts before the page takes it, and every LiveCheckEvery (30
+// seconds by default) of a joined page: an error closes the connection
+// with code 4001 and the page reloads, its route running again for the
+// browser. A library that ends sessions closes their pages this way.
 func LiveCheck(f func(ctx context.Context) error) Option {
 	return OptionFunc(func(a *App) {
 		a.mutable("LiveCheck")
@@ -273,6 +276,20 @@ func CurrentLiveEvent() *LiveEvent {
 	c, _ := liveGoroutines.Load(goid())
 	if c, ok := c.(*conn); ok {
 		return c.ev
+	}
+	return nil
+}
+
+// LivePage is the context of the live page whose connection the calling
+// goroutine serves — the page's route's, carrying its identity — whatever
+// it is doing: handling an event, rendering, delivering a broadcast. It is
+// nil on any other goroutine, and before the connection's first join.
+func LivePage() context.Context {
+	if liveConnsN.Load() == 0 {
+		return nil
+	}
+	if c, ok := liveGoroutines.Load(goid()); ok {
+		return c.(*conn).pageCtx()
 	}
 	return nil
 }

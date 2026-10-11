@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vuka-lang/web"
@@ -172,9 +173,14 @@ type Config struct {
 	Hashers []Hasher
 	// Throttle limits failed logins; ThrottleDefaults when zero.
 	Throttle Throttle
+	// FailedLoginTime is the least time a failed login takes, so that an
+	// unknown login, a wrong password, a stored hash of another cost or
+	// encoding and a refused attempt look alike; 300ms by default,
+	// negative for none.
+	FailedLoginTime time.Duration
 	// ClientIP is the address throttling counts a request against;
-	// r.RemoteAddr's host by default. Behind a proxy, read the header it
-	// sets (and only from it).
+	// web.ClientIP by default: the connection's peer, or, behind the app's
+	// web.TrustedProxies, the address they pass on.
 	ClientIP func(r *http.Request) string
 
 	// JWT verifies bearer JWTs issued elsewhere; nil: none accepted.
@@ -186,15 +192,29 @@ type Config struct {
 	// TrustedOrigins may send cross-origin POSTs and the like (web.CSRF).
 	TrustedOrigins []string
 
-	// StrictGates refuses a gated method's call that nothing attributes to
-	// an identity: no request's or live page's context, no live event
-	// running it, no auth.WithIdentity — instead of running it as the app's
-	// own work. Code outside requests (crons, jobs, main) then marks itself
-	// with auth.System(ctx), and gated methods take a context.Context to be
-	// given one; a gated method without one is let through only while a live
-	// event's handler runs it. It holds for the whole process once an app
-	// with it is built.
+	// LaxGates lets a gated method's call that nothing attributes to an
+	// identity run, as the app's own work: no request's or live page's
+	// context, no live event running it, no auth.WithIdentity or
+	// auth.System. By default (StrictGates) such a call is refused: code
+	// outside requests (main, a job; crons are marked by themselves) marks
+	// its context with auth.System(ctx), and gated methods take a
+	// context.Context to be given one. Whatever the setting, a call on a
+	// goroutine serving a request is checked against the request's
+	// identity, never run as the app's own. It holds for the whole process
+	// once an app with it is built.
+	LaxGates bool
+	// StrictGates is the default; set it to keep an app strict whatever
+	// another app of the process says (LaxGates).
 	StrictGates bool
+
+	// LiveRecheck is how often a live page loads its identity again
+	// (Users.Load) to see that the user is still there with the same perms
+	// and roles; a page whose identity changed reloads, signed in afresh
+	// or sent to the login page. 60 seconds by default; negative for never.
+	// The sign-in itself (session, token, JWT) is checked at every message,
+	// before every broadcast reaches the page and every web.LiveCheckEvery
+	// (30 seconds by default).
+	LiveRecheck time.Duration
 }
 
 // Auth is an app's authentication: Module provides it, for code without a
@@ -209,8 +229,10 @@ type Auth struct {
 	throttle *throttler
 	policies map[reflect.Type]Policy
 	jwtEpoch epochs
-	dummy    func() (string, error) // a hash to check unknown logins against
-	problems []error                // found while wrapping routes, reported by check
+	dummies  sync.Map     // encoding kind → a hash to check unknown logins against
+	dummyN   atomic.Int32 // kinds stored
+	lastKind atomic.Value // the encoding kind of the last login found
+	problems []error      // found while wrapping routes, reported by check
 }
 
 // Module installs auth in an app: it reads each request's credentials,
@@ -233,6 +255,8 @@ func Module(cfg Config) web.Option {
 		}),
 		web.LiveCheck(a.liveCheck),
 		web.GuardLiveEvents(a.guardEvent),
+		web.TrackRequests(),
+		web.CronContext(System),
 		web.OptionFunc(func(app *web.App) {
 			a.app = app
 			if _, ok := cfg.Users.(Users); !ok && cfg.Users != nil {
@@ -271,7 +295,13 @@ func (a *Auth) defaults() {
 		c.Throttle = ThrottleDefaults
 	}
 	if c.ClientIP == nil {
-		c.ClientIP = remoteIP
+		c.ClientIP = web.ClientIP
+	}
+	if c.LiveRecheck == 0 {
+		c.LiveRecheck = time.Minute
+	}
+	if c.FailedLoginTime == 0 {
+		c.FailedLoginTime = 300 * time.Millisecond
 	}
 	a.sessions = cmpStore(c.Sessions, SessionStore(NewMemorySessions()))
 	a.tokens = cmpStore(c.Tokens, TokenStore(NewMemoryTokens()))
@@ -279,9 +309,9 @@ func (a *Auth) defaults() {
 	a.policies = map[reflect.Type]Policy{}
 	for _, p := range c.Policies {
 		a.policies[p.typ] = p
+		policyTypes.add(p.typ)
 	}
 	a.jwtEpoch = epochs{m: map[string]time.Time{}}
-	a.dummy = sync.OnceValues(func() (string, error) { return c.Passwords.Hash("not anyone's password") })
 }
 
 func cmpStore[T comparable](v, def T) T {
@@ -294,8 +324,11 @@ func cmpStore[T comparable](v, def T) T {
 
 // check finds Users when Build runs, and checks the configuration.
 func (a *Auth) check(app *web.App) error {
-	if a.cfg.StrictGates {
-		strictGates.Store(true)
+	switch {
+	case a.cfg.StrictGates:
+		pinStrict.Store(true)
+	case a.cfg.LaxGates:
+		laxGates.Store(true)
 	}
 	errs := a.problems
 	if u, ok := a.cfg.Users.(Users); ok {
@@ -368,8 +401,12 @@ type state struct {
 	// remember field unchecked).
 	brief bool
 	iat   time.Time // a JWT's issue time
-	w     http.ResponseWriter
-	r     *http.Request
+	// checked is when the identity was loaded (unix nanoseconds, read and
+	// written atomically): a live page loads it again after
+	// Config.LiveRecheck.
+	checked int64
+	w       http.ResponseWriter
+	r       *http.Request
 }
 
 type stateKey struct{}
@@ -428,7 +465,7 @@ func (a *Auth) middleware(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		st := &state{auth: a, w: w, r: r}
+		st := &state{auth: a, w: w, r: r, checked: time.Now().UnixNano()}
 		if err := a.authenticate(r.Context(), st, r); err != nil {
 			if !errors.Is(err, errBadCredentials) {
 				log.Printf("auth: %s %s: %v", r.Method, r.URL.Path, err)
@@ -493,7 +530,44 @@ func (a *Auth) liveCheck(ctx context.Context) error {
 	if !ok {
 		return errors.New("auth: the sign-in ended")
 	}
+	return a.recheck(ctx, st)
+}
+
+// recheck loads a live page's identity again once Config.LiveRecheck has
+// passed since it was: an error when the user is gone or their perms or
+// roles changed, so the page reloads with what they are now.
+func (a *Auth) recheck(ctx context.Context, st *state) error {
+	if st.via == viaContext || a.cfg.LiveRecheck < 0 {
+		return nil
+	}
+	now := time.Now().UnixNano()
+	last := atomic.LoadInt64(&st.checked)
+	if now-last < int64(a.cfg.LiveRecheck) {
+		return nil
+	}
+	fresh, err := a.load(ctx, st.id.ID)
+	if err != nil {
+		log.Printf("auth: loading user %s again for a live page: %v", st.id.ID, err)
+		return nil // the next message tries again; a database down doesn't reload every page
+	}
+	if fresh == nil {
+		return errors.New("auth: the user is gone")
+	}
+	if !sameSet(fresh.Perms, st.id.Perms) || !sameSet(fresh.Roles, st.id.Roles) {
+		return errors.New("auth: the user's perms changed")
+	}
+	atomic.StoreInt64(&st.checked, now)
 	return nil
+}
+
+func sameSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	a, b = slices.Clone(a), slices.Clone(b)
+	slices.Sort(a)
+	slices.Sort(b)
+	return slices.Equal(a, b)
 }
 
 func (a *Auth) stillValid(ctx context.Context, st *state) (bool, error) {

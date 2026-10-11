@@ -160,7 +160,7 @@ type order struct{ Owner string }
 
 func newApp(t *testing.T, u *authtest.Users, edit func(*auth.Config), opts ...web.Option) *web.App {
 	t.Helper()
-	cfg := auth.Config{Users: u, Passwords: authtest.Cheap, Endpoints: "/auth", Roles: map[string][]string{"admin": {"admin"}},
+	cfg := auth.Config{Users: u, Passwords: authtest.Cheap, FailedLoginTime: -1, Endpoints: "/auth", Roles: map[string][]string{"admin": {"admin"}},
 		Policies: []auth.Policy{auth.PolicyFor(func(_ context.Context, id *auth.Identity, perm string, o *order) bool {
 			return o.Owner == id.ID || id.Can(perm)
 		})}}
@@ -894,11 +894,18 @@ func TestLiveEventGates(t *testing.T) {
 		t.Errorf("a gated event returning an error, with the perm: %+v", r)
 	}
 
-	// Outside a live event the gate isn't the decorator's business: Go calls it.
+	// Outside any request, a gated call without an identity is refused
+	// (strict gates, the default); with LaxGates it runs as the app's own.
 	b := &board{}
 	b.Delete()
+	if b.deleted != 0 {
+		t.Error("a direct call without an identity ran")
+	}
+	auth.SetStrictGates(false)
+	defer auth.SetStrictGates(true)
+	b.Delete()
 	if b.deleted != 1 {
-		t.Error("a direct call was refused")
+		t.Error("a direct call under LaxGates was refused")
 	}
 }
 

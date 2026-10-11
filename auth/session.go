@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
-	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -268,12 +267,4 @@ func (a *Auth) setCookie(st *state, value string, ttl time.Duration) {
 
 func https(r *http.Request) bool {
 	return r != nil && (r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https")
-}
-
-func remoteIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

@@ -102,6 +102,9 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.WrapRoutes`, `ParamFrom`, `LiveCheck`, `GuardLiveEvents` | hooks for libraries guarding routes and live events (below) |
 | `web.Frontend(fsys, root, opts…)` | a single-page app built by Vite (or anything else) served from the binary (below) |
 | `web.ExactPaths()` | no trailing-slash redirect (above) |
+| `web.Headers(h)`, `web.NoSecurityHeaders()` | the security headers every response carries (below) |
+| `web.TrustedProxies(cidrs…)` | the proxies whose `X-Forwarded-For`/`Forwarded`/`X-Forwarded-Proto` count (below) |
+| `web.MaxRequestBody(n)` | the largest request body, 32 MiB by default; a route's own with `@web.MaxBody(n)` (below) |
 
 `app.Build()` resolves everything — every parameter of every route, every
 result and view, the whole dependency graph — and returns all problems at
@@ -159,12 +162,16 @@ or `web.Env`. By `VUKA_ENV`, the first file listed winning:
 The real environment wins over every file: a key is set only when the
 process doesn't have it yet. `.env.local` files hold one machine's settings
 and are skipped in tests, so test runs don't depend on the developer's box.
-`VUKA_ENV` picks the files, so it comes from the real environment; set in a
-file, it still turns on `web.Dev()` behaviour.
+Keys starting with `VUKA_` (`VUKA_ENV`, `VUKA_DEV_DIR`, `VUKA_DEV_LIVE_KEY`…)
+come from the real environment only: an env file setting one is ignored
+(and logged), so a file next to a deployed binary never switches it into
+development. `web.IsDev()` says whether the process runs in development.
 
 Files are read from the working directory or, when it has none of them, from
 the nearest parent up to the module root (the directory with `go.mod`), so
-`go test ./pkg/...` finds the project's `.env`. Missing files are fine.
+`go test ./pkg/...` finds the project's `.env`. Without a `go.mod` in the
+working directory or above it — a deployed binary — only the working
+directory is read. Missing files are fine.
 `web.DotEnv("a.env", "b.env")` replaces the list (first wins), `web.NoDotEnv()`
 reads none, and `web.LoadEnv(files…)` loads them earlier — for options built
 from the environment; New reading the same files afterwards changes nothing.
@@ -231,6 +238,12 @@ Each parameter binds by its type and name:
 Struct fields bind by their `form` tag, else `json` tag, else name, matched
 case-insensitively; `validate:"required"` rejects a zero value. A malformed
 value answers 400 with a message (`id: "x" is not an integer`).
+
+A request body is at most 32 MiB (`web.MaxRequestBody(n)`; negative for
+none), uploads included — a multipart form spills to temporary files past
+10 MiB, and never past the limit. A longer body answers 413, whoever reads
+it: the binding, or a handler reading `r.Body`. One route sets its own:
+`@web.MaxBody(512 << 20)`, or `web.Attrs(web.MaxBody(n))` from Go.
 
 A call decorator reaches the request through the handler's `context.Context`
 argument: `web.Request(c.Context())`, `web.ResponseWriter(c.Context())`.
@@ -493,7 +506,7 @@ once if the page is in view, else when it is shown. At most
 client address and `LiveMaxConnsPerPage` (4) with one page token; a socket
 beyond a cap is refused (503, 429) and the runtime retries. `LiveCheck`s run
 on every message, before every broadcast a page takes, and every
-`LiveCheckEvery` (5m): one failing closes the page with 4001, and it reloads.
+`LiveCheckEvery` (30s): one failing closes the page with 4001, and it reloads.
 Each is an option; 0 lifts it.
 
 **Security.** The token is the page's URI and an expiry (`LiveTokenTTL`,
@@ -915,7 +928,9 @@ SMTP is `net/smtp` with a dial timeout and a deadline; no other dependency.
 `m.SendLater(ctx, msg)` checks and renders the message now and sends it in
 the background, retrying a temporary failure (a 4xx answer, a failed
 connection) 3 times, waiting 2s, 4s, 8s; the last failure is logged. The
-app's `Stop` waits for the queue within its context.
+app's `Stop` waits for the queue within its context. The queue holds at
+most `Config.Queue` messages (1000 by default); past it, `SendLater`
+returns `mail.ErrQueueFull`.
 
 **Testing.** The log driver keeps what it was given: `m.Sent()` (each with
 its rendered `HTML`, `Text`, `Recipients` and `Raw` MIME). `mailtest.New()`
@@ -1147,8 +1162,13 @@ upgraded at login; another system's encodings read by `Config.Hashers`), one err
 throttled failures, "remember me" (`RememberMe`), `auth.RevokeUser` closing the user's live pages, and
 `authtest` for tests. A live event's gate is checked before its handler
 runs, and again by each gated method it reaches — given the page's context,
-on any goroutine; `StrictGates` refuses a gated call no identity accounts for
-(crons mark themselves with `auth.System(ctx)`). Its sessions and tokens are kept in memory unless the
+on any goroutine. A gated call no identity accounts for is refused
+(`LaxGates` lets one outside any request run); `main` and jobs mark their
+context with `auth.System(ctx)`, and crons are marked by themselves. A
+failed login takes at least `FailedLoginTime` (300ms), whatever failed, and
+throttling counts the account a login finds, not only its spelling. A live
+page's sign-in is checked at every message and broadcast, and its identity
+loaded again every `LiveRecheck` (60s). Its sessions and tokens are kept in memory unless the
 app gives it stores. An app's own login handler re-renders its page on a
 failure (see Forms that fail) with `auth.LoginMessage(err)`;
 `auth.LoginPage` keeps the posted login and `next`. See the [auth guide](https://vuka-lang.github.io/vuka/web/auth)
@@ -1164,15 +1184,18 @@ never add one. Live connections check their origin themselves.
 
 | | |
 |---|---|
-| `web.WrapRoutes(name, f)` | `f(web.RouteInfo)` returns middleware for each route (its method, path, attributes, whether it is a page or a Live page); an attribute implementing `RouteWrapper() string` fails Build when no `WrapRoutes` of that name is installed |
+| `web.WrapRoutes(name, f)` | `f(web.RouteInfo)` returns middleware for each route (its method, path, attributes, whether it is a page or a Live page, and a Live page's type); an attribute implementing `RouteWrapper() string` fails Build when no `WrapRoutes` of that name is installed |
 | `web.Attrs(attrs…)` | typed attributes for a route or `App.Live` page added in code |
 | `web.ParamFrom(f)` | parameters of `f`'s result type bind with `f(r)` |
 | `web.Implementation[I](app)` | the provided value implementing interface `I` |
-| `web.LiveCheck(f)` | `f(ctx)` before each message of a live connection; an error closes it (4001) and the page reloads |
+| `web.LiveCheck(f)` | `f(ctx)` before each message of a live connection, before broadcasts reach it and every `LiveCheckEvery` (30s); an error closes it (4001) and the page reloads |
 | `web.GuardLiveEvents(f)` | `f(ctx, web.LiveHandler)` before each live event's handler runs, with the page's context: the handler's name, its component's type, its receiver type and method, its declaration's attributes (Vuka's registry: `vuka.FuncOf`), whether it is a function literal; an error refuses the event as a handler's error would |
 | `web.CurrentLiveEvent()` | the live event the goroutine handles: its context, its handler's name, `Handling()` (its handler, or what the handler calls, runs; not the render after it), and `Refuse(err)` — for a decorator of a handler without a `context.Context` |
 | `web.LiveOrigin()` | on a goroutine a live connection's goroutine started (one a handler starts), that page's context; nil elsewhere |
 | `web.IsLiveJoin(ctx)` | whether the route runs again for a live page's join |
+| `web.TrackRequests()`, `web.CurrentRequest()` | whether the calling goroutine serves a request (a live connection's included), and the context of the route it runs |
+| `web.CronContext(f)` | every cron runs with its context passed through `f` |
+| `web.ClientIP(r)`, `web.IsHTTPS(r)` | the client's address and scheme, through `web.TrustedProxies` only |
 | `web.NoteRequest(ctx, note)` | a row in the toolbar's Request panel |
 | `app.WriteError(w, r, err, html)` | answer as a handler's error is answered |
 
@@ -1225,7 +1248,32 @@ stylesheet isn't. An example is in [`examples/spa`](examples/spa).
 ## Static files
 
 `app.Static("/assets", fsys)` serves an `fs.FS` (an `embed.FS` sub-tree,
-`os.DirFS(…)`).
+`os.DirFS(…)`). A directory is its `index.html`, else 404 — never a
+listing — and dotfiles and dot directories (`.env`, `.git/`) are never
+served, but `.well-known/`. `web.Frontend` serves the same way.
+
+## Security headers
+
+Every response carries, unless its handler sets them itself:
+
+| header | default |
+|---|---|
+| `X-Content-Type-Options` | `nosniff` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `X-Frame-Options` | `DENY` |
+| `Content-Security-Policy` | `frame-ancestors 'none'` (`'self'` with `SAMEORIGIN`) |
+| `Strict-Transport-Security` | `max-age=31536000`, on HTTPS requests only |
+
+`web.Headers(web.SecurityHeaders{FrameOptions: "SAMEORIGIN", HSTS: -1})`
+changes them (`"-"` leaves one out; a negative `HSTS` too), and
+`web.NoSecurityHeaders()` turns them off.
+
+**Behind a proxy**, `web.TrustedProxies("10.0.0.0/8")` names it: from those
+addresses only, `web.ClientIP(r)` reads the client's address from
+`X-Forwarded-For` (else `Forwarded`) — the nearest one that isn't a trusted
+proxy — and `X-Forwarded-Proto: https` counts as HTTPS. Without it,
+`web.ClientIP(r)` is the connection's peer and those headers are ignored.
+Login throttling counts by it.
 
 ## Plain Go
 

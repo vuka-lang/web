@@ -25,7 +25,7 @@ func slashApp(opts ...Option) *App {
 	a.Get("/both/", func() string { return "both/" })
 	a.Get("/files/{path...}", func(path string) string { return "file " + path }, Params("path"))
 	a.Get("/files", func() string { return "files" })
-	a.Static("/static", fstest.MapFS{"a.txt": {Data: []byte("a")}})
+	a.Static("/static", fstest.MapFS{"a.txt": {Data: []byte("a")}, "index.html": {Data: []byte("static index")}})
 	a.Get("/static", func() string { return "static route" })
 	a.Get("/a:b", func() string { return "colon" })
 	return a
@@ -48,8 +48,8 @@ func TestTrailingSlashRedirect(t *testing.T) {
 		{"GET", "/ajira", 200, "", "ajira"},
 		{"GET", "/both", 200, "", "both"}, // both forms declared: each its own
 		{"GET", "/both/", 200, "", "both/"},
-		{"GET", "/files/", 200, "", "file "},  // {path...} answers /files/ itself
-		{"GET", "/static/", 200, "", "a.txt"}, // so does a static tree
+		{"GET", "/files/", 200, "", "file "},         // {path...} answers /files/ itself
+		{"GET", "/static/", 200, "", "static index"}, // so does a static tree
 		{"GET", "/_vuka/live.js/", 404, "", ""},
 		{"DELETE", "/ajira/", 404, "", ""}, // no DELETE /ajira to go to
 		{"GET", "/nothing/", 404, "", ""},

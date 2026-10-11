@@ -63,6 +63,10 @@ type Config struct {
 	// failures are retried: a 4xx answer, a connection that fails.
 	Retries int
 	Backoff time.Duration
+	// Queue bounds the messages SendLater holds at once, sending or
+	// waiting (default 1000): past it, SendLater refuses with ErrQueueFull
+	// rather than hold more in memory.
+	Queue int
 
 	Logger *slog.Logger // the log driver's and SendLater's; slog's default
 }
@@ -253,10 +257,22 @@ func (m *Mailer) Reset() {
 	m.mu.Unlock()
 }
 
+// ErrQueueFull is SendLater's error when Config.Queue messages are waiting
+// already.
+var ErrQueueFull = errors.New("mail: the queue is full")
+
+func (m *Mailer) queue() int {
+	if m.cfg.Queue > 0 {
+		return m.cfg.Queue
+	}
+	return 1000
+}
+
 // SendLater builds the message now — so it is refused now when invalid,
 // and its HTML renders with ctx — and sends it in the background, retrying
 // temporary failures (Config.Retries, Config.Backoff). A failure after the
-// last attempt is logged. Stop waits for the messages still queued.
+// last attempt is logged. Stop waits for the messages still queued. Past
+// Config.Queue messages held at once, it refuses with ErrQueueFull.
 func (m *Mailer) SendLater(ctx context.Context, msg Message) error {
 	b, err := m.build(ctx, msg)
 	if err != nil {
@@ -267,6 +283,11 @@ func (m *Mailer) SendLater(ctx context.Context, msg Message) error {
 	if m.stopped {
 		m.mu.Unlock()
 		return errors.New("mail: the mailer has stopped")
+	}
+	if m.pending >= m.queue() {
+		m.mu.Unlock()
+		noteFailed(ctx, m.driver, msg, ErrQueueFull)
+		return ErrQueueFull
 	}
 	m.pending++
 	m.later.Add(1)

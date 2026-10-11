@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -81,7 +80,7 @@ const (
 	defaultLiveMaxConns       = 10000
 	defaultLiveMaxConnsPerIP  = 100
 	defaultLiveMaxConnsPerTok = 4
-	defaultLiveCheckEvery     = 5 * time.Minute
+	defaultLiveCheckEvery     = 30 * time.Second
 )
 
 // LiveJoinTimeout is how long a live connection may stay open without
@@ -119,7 +118,7 @@ func LiveMaxConnsPerPage(n int) Option { return OptionFunc(func(a *App) { a.hub.
 
 // LiveCheckEvery runs the app's LiveChecks on each joined page this often,
 // as well as on every message from the browser and before each broadcast
-// it takes: 5 minutes by default; 0 runs them only on messages and
+// it takes: 30 seconds by default; 0 runs them only on messages and
 // broadcasts. A page some check fails closes with code 4001 and reloads,
 // so an ended session or a revoked permission reaches pages that sit
 // open.
@@ -172,17 +171,6 @@ func (h *hub) admit(ip, tok string) (int, func()) {
 			delete(h.perToken, tok)
 		}
 	}
-}
-
-// liveClientIP is the address a live socket comes from, for its cap: the
-// connection's peer.
-// TODO(merge): use web.ClientIP(r), which knows the app's trusted proxies.
-func liveClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 func (h *hub) add(c *conn) bool {
@@ -307,7 +295,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	if terr != nil {
 		tok = "" // a bad token's socket closes at once; it counts as the client's only
 	}
-	status, release := a.hub.admit(liveClientIP(r), tok)
+	status, release := a.hub.admit(ClientIP(r), tok)
 	if status != 0 {
 		w.Header().Set("Retry-After", "10")
 		http.Error(w, http.StatusText(status), status)

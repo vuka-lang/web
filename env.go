@@ -55,11 +55,25 @@ func defaultEnvFiles(env string) []string {
 	return []string{".env." + env + ".local", ".env.local", ".env." + env, ".env"}
 }
 
-// envDir is where relative env files are read: the working directory, or the
-// nearest of its parents up to the main module's root (the directory holding
-// go.mod) that has one of them.
+// envDir is where relative env files are read: the working directory, or
+// the nearest of its parents, up to the main module's root (the directory
+// holding go.mod), that has one of them. Without a go.mod in the working
+// directory or above it, only the working directory: a deployed binary
+// never reads an env file of a directory above its own.
 func envDir(cwd string, files []string) string {
+	root := cwd
 	for dir := cwd; ; {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			root = dir
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	for dir := cwd; ; dir = filepath.Dir(dir) {
 		for _, f := range files {
 			if !filepath.IsAbs(f) {
 				if _, err := os.Stat(filepath.Join(dir, f)); err == nil {
@@ -67,12 +81,25 @@ func envDir(cwd string, files []string) string {
 				}
 			}
 		}
-		parent := filepath.Dir(dir)
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil || parent == dir {
+		if dir == root || filepath.Dir(dir) == dir {
 			return cwd
 		}
-		dir = parent
 	}
+}
+
+// reservedEnv reports whether key is web's own (VUKA_ENV, VUKA_DEV_DIR,
+// VUKA_DEV_LIVE_KEY…): those switch an app into development, so only the
+// real environment sets them, never an env file.
+func reservedEnv(key string) bool { return strings.HasPrefix(key, "VUKA_") }
+
+// IsDev reports whether the process runs in development: VUKA_ENV is
+// "development", or vuka run names its session directory (VUKA_DEV_DIR).
+// Both come from the real environment only — an env file can't set them —
+// so a deployed binary is never switched into development by a file next to
+// it. (An app made with the Dev option is in development whatever IsDev
+// says.)
+func IsDev() bool {
+	return os.Getenv("VUKA_ENV") == "development" || os.Getenv(DevDirEnv) != ""
 }
 
 // LoadEnv reads env files into the process environment, as New does: for
@@ -125,6 +152,10 @@ func loadEnv(files []string) *envLoad {
 			continue
 		}
 		for _, p := range pairs {
+			if reservedEnv(p.key) {
+				log.Printf("web: %s sets %s, which only the real environment may set: ignored", name, p.key)
+				continue
+			}
 			vars[p.key] = p.value
 		}
 		l.loaded = append([]string{name}, l.loaded...)
