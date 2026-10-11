@@ -503,7 +503,7 @@ the browser sends nothing for `LiveIdleTimeout` (30m; broadcasts don't count)
 closes with code 4002, dropping its session, and the runtime joins again at
 once if the page is in view, else when it is shown. At most
 `LiveMaxConns` (10,000) sockets are open, `LiveMaxConnsPerIP` (100) from one
-client address and `LiveMaxConnsPerPage` (4) with one page token; a socket
+client address (`web.ClientIP`, so through `TrustedProxies`) and `LiveMaxConnsPerPage` (4) with one page token; a socket
 beyond a cap is refused (503, 429) and the runtime retries. `LiveCheck`s run
 on every message, before every broadcast a page takes, and every
 `LiveCheckEvery` (30s): one failing closes the page with 4001, and it reloads.
@@ -1167,7 +1167,8 @@ on any goroutine. A gated call no identity accounts for is refused
 context with `auth.System(ctx)`, and crons are marked by themselves. A
 failed login takes at least `FailedLoginTime` (300ms), whatever failed, and
 throttling counts the account a login finds, not only its spelling. A live
-page's sign-in is checked at every message and broadcast, and its identity
+page's sign-in is checked at every message and broadcast and every
+`web.LiveCheckEvery` (30s), and its identity
 loaded again every `LiveRecheck` (60s). Its sessions and tokens are kept in memory unless the
 app gives it stores. An app's own login handler re-renders its page on a
 failure (see Forms that fail) with `auth.LoginMessage(err)`;
@@ -1273,7 +1274,7 @@ addresses only, `web.ClientIP(r)` reads the client's address from
 `X-Forwarded-For` (else `Forwarded`) — the nearest one that isn't a trusted
 proxy — and `X-Forwarded-Proto: https` counts as HTTPS. Without it,
 `web.ClientIP(r)` is the connection's peer and those headers are ignored.
-Login throttling counts by it.
+Login throttling and the per-address live connection cap count by it.
 
 ## Plain Go
 
