@@ -19,6 +19,7 @@ class Event {
   }
   preventDefault() { this.defaultPrevented = true; }
   stopPropagation() { this.stopped = true; }
+  stopImmediatePropagation() { this.stopped = this.immediate = true; }
 }
 class CustomEvent extends Event {
   constructor(type, init = {}) { super(type, init); this.detail = init.detail === undefined ? null : init.detail; }
@@ -100,7 +101,7 @@ class Node {
     for (let n = this.parentNode; n; n = n.parentNode) path.push(n);
     const call = (n, capture) => {
       e.currentTarget = n;
-      for (const l of [...(n.listeners[e.type] || [])]) if (capture === null || l.capture === capture) l.fn.call(n, e);
+      for (const l of [...(n.listeners[e.type] || [])]) if (!e.immediate && (capture === null || l.capture === capture)) l.fn.call(n, e);
     };
     for (let i = path.length - 1; i >= 0 && !e.stopped; i--) call(path[i], true);
     if (!e.stopped) call(this, null);
@@ -135,6 +136,11 @@ class Element extends Node {
         get: () => value !== null ? value : this.tagName === "TEXTAREA" ? this.textContent : this.getAttribute("value") || "",
         set: (v) => { value = String(v); },
       });
+      let selected = null;
+      Object.defineProperty(this, "selected", {
+        get: () => selected !== null ? selected : this.hasAttribute("selected"),
+        set: (v) => { selected = !!v; },
+      });
       Object.defineProperty(this, "checked", {
         get: () => checked !== null ? checked : this.hasAttribute("checked"),
         set: (v) => { checked = !!v; },
@@ -142,6 +148,7 @@ class Element extends Node {
     }
   }
   get id() { return this.getAttribute("id") || ""; }
+  get options() { return this.tagName === "SELECT" ? this.querySelectorAll("option") : undefined; }
   get className() { return this.getAttribute("class") || ""; }
   get type() { return (this.getAttribute("type") || (this.tagName === "BUTTON" ? "submit" : "text")).toLowerCase(); }
   get form() { return this.parentElement && this.parentElement.closest("form"); }
@@ -189,6 +196,7 @@ class Element extends Node {
   focus() { this.ownerDocument.activeElement = this; this.ownerDocument.focused.push(this); }
   blur() { if (this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = this.ownerDocument.body; }
   select() {}
+  reset() {}
   scrollIntoView(opt) { this.ownerDocument.scrolled.push([this, opt]); }
 }
 
@@ -263,7 +271,10 @@ function parseSelector(sel) {
     const parts = [];
     let comb = " ", buf = "", depth = 0, quote = "";
     const flush = () => { if (buf) { parts.push({ comb, c: compound(buf) }); buf = ""; comb = " "; } };
+    let escaped = false;
     for (const ch of s.trim()) {
+      if (escaped) { buf += ch; escaped = false; continue; }
+      if (ch === "\\") { buf += ch; escaped = true; continue; }
       if (quote) { buf += ch; if (ch === quote) quote = ""; continue; }
       if (ch === '"' || ch === "'") quote = ch;
       if (ch === "(" || ch === "[") depth++;
@@ -279,8 +290,10 @@ function parseSelector(sel) {
 }
 function split(s, sep) {
   const out = [];
-  let buf = "", depth = 0, quote = "";
+  let buf = "", depth = 0, quote = "", escaped = false;
   for (const ch of s) {
+    if (escaped) { buf += ch; escaped = false; continue; }
+    if (ch === "\\") { buf += ch; escaped = true; continue; }
     if (quote) { buf += ch; if (ch === quote) quote = ""; continue; }
     if (ch === '"' || ch === "'") quote = ch;
     if (ch === "(" || ch === "[") depth++;
@@ -293,18 +306,23 @@ function split(s, sep) {
 }
 function compound(s) {
   const tests = [];
-  const re = /^(\*|[a-zA-Z][\w-]*)|#([\w-]+)|\.([\w-]+)|\[\s*([\w-]+)\s*(?:=\s*(?:"([^"]*)"|'([^']*)'|([^\]\s]+)))?\s*\]|:not\(((?:[^()]|\([^()]*\))*)\)/g;
+  const re = /^(\*|[a-zA-Z][\w-]*)|#([\w-]+)|\.([\w-]+)|\[\s*((?:[\w-]|\\.)+)\s*(?:([~^$*|]?)=\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|([^\]\s]+)))?\s*\]|:not\(((?:[^()]|\([^()]*\))*)\)/g;
   let m, at = 0;
   while ((m = re.exec(s))) {
     if (m.index !== at) throw new SyntaxError("selector " + s);
     at = re.lastIndex;
-    const [, tag, id, cls, attr, v1, v2, v3, not] = m;
+    const [, tag, id, cls, rawAttr, op, v1, v2, v3, not] = m;
+    const attr = rawAttr && unescape(rawAttr);
     if (tag) { const t = tag.toUpperCase(); if (t !== "*") tests.push((el) => el.tagName === t); }
     else if (id) tests.push((el) => el.id === id);
     else if (cls) tests.push((el) => el.classList.contains(cls));
     else if (attr) {
-      const v = v1 ?? v2 ?? v3;
-      tests.push((el) => v === undefined ? el.hasAttribute(attr) : el.getAttribute(attr) === v);
+      const v = v1 ?? v2 ?? v3, want = v === undefined ? undefined : unescape(v);
+      const test = {
+        "": (h) => h === want, "^": (h) => want !== "" && h.startsWith(want), "$": (h) => want !== "" && h.endsWith(want),
+        "*": (h) => want !== "" && h.includes(want), "~": (h) => h.split(/\s+/).includes(want), "|": (h) => h === want || h.startsWith(want + "-"),
+      }[op || ""];
+      tests.push((el) => el.hasAttribute(attr) && (want === undefined || test(el.getAttribute(attr))));
     } else if (not !== undefined) {
       const inner = parseSelector(not);
       tests.push((el) => !inner.some((c) => matchComplex(el, c)));
@@ -313,6 +331,9 @@ function compound(s) {
   if (at !== s.length) throw new SyntaxError("selector " + s);
   return (el) => tests.every((t) => t(el));
 }
+// unescape decodes a selector's CSS escapes: \ and up to six hex digits
+// (and one space after them), or \ and any other character.
+const unescape = (s) => s.replace(/\\(?:([\da-fA-F]{1,6})\s?|([\s\S]))/g, (_, hex, ch) => hex ? String.fromCodePoint(parseInt(hex, 16)) : ch);
 function matchComplex(el, parts, i = parts.length - 1) {
   if (!parts[i].c(el)) return false;
   if (i === 0) return true;
