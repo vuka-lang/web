@@ -1,0 +1,65 @@
+package main
+
+import (
+	"io"
+	"io/fs"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/vuka-lang/web"
+)
+
+func get(t *testing.T, srv *httptest.Server, path string) (int, string) {
+	t.Helper()
+	res, err := http.Get(srv.URL + path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	b, _ := io.ReadAll(res.Body)
+	return res.StatusCode, string(b)
+}
+
+// The frontend is built by vite build (vuka build runs it); the tests pass
+// with or without a build, so they run without Node.
+func built() bool {
+	_, err := fs.Stat(dist, "frontend/dist/index.html")
+	return err == nil
+}
+
+func TestSPA(t *testing.T) {
+	srv := httptest.NewServer(web.New(web.Dev(), web.Frontend(dist, "frontend/dist")).Handler())
+	defer srv.Close()
+	page := "The frontend isn't built yet"
+	if built() {
+		page = `<div id="root"></div>`
+	}
+	for _, c := range []struct {
+		path string
+		code int
+		want string
+	}{
+		{"/api/pets", 200, `{"id":2,"name":"Tom","kind":"cat"}`},
+		{"/api/pets/3", 200, `"name":"Polly"`},
+		{"/api/pets/9", 404, "no pet 9"},
+		{"/", 200, page},
+		{"/pets/2", 200, page}, // a client-side route
+	} {
+		code, body := get(t, srv, c.path)
+		if code != c.code || !strings.Contains(body, c.want) {
+			t.Errorf("GET %s: %d %q; want %d containing %q", c.path, code, body, c.code, c.want)
+		}
+	}
+}
+
+func TestUnbuiltFails(t *testing.T) {
+	if built() {
+		t.Skip("the frontend is built")
+	}
+	err := web.New(web.Frontend(dist, "frontend/dist")).Build()
+	if err == nil || !strings.Contains(err.Error(), "build it first") {
+		t.Errorf("Build: %v", err)
+	}
+}

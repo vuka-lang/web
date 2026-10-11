@@ -226,8 +226,8 @@ func (b *Browser) Visit(url string) *Page {
 	return b.open(url, `document.readyState === "complete" && window.vuka`)
 }
 
-// Load opens url in a new tab and waits for it to load: a page without the
-// live runtime (a login form).
+// Load opens url in a new tab and waits for it to load: a page without
+// Vuka's runtime (a login form, a single-page app).
 func (b *Browser) Load(url string) *Page {
 	b.t.Helper()
 	return b.open(url, `document.readyState === "complete"`)

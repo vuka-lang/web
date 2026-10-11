@@ -2,6 +2,7 @@ package web
 
 import (
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -42,6 +43,9 @@ func pathParams(pattern string) []string {
 	}
 	return names
 }
+
+// wildcards are a pattern's {name} and {name...} segments.
+var wildcards = regexp.MustCompile(`\{[^}]*\}`)
 
 func joinPath(prefix, path string) string {
 	prefix = strings.TrimSuffix(prefix, "/")
