@@ -147,6 +147,14 @@ type Config struct {
 	// default. SessionIdle, when set, ends a session not used for that
 	// long. TokenTTL is how long a bearer token lasts; 30 days by default.
 	SessionTTL, SessionIdle, TokenTTL time.Duration
+	// RememberMe makes staying signed in the user's choice at the login
+	// endpoint: a sign-in whose form has the remember field checked (or
+	// whose JSON has "remember": true) keeps its session for SessionTTL in
+	// a cookie that outlives the browser; any other gets a cookie that
+	// ends with the browser session, and a session of a day at most.
+	// LoginForm's Remember shows the checkbox. Off, every sign-in is
+	// remembered.
+	RememberMe bool
 	// Cookie names the session cookie; "vk_session" by default.
 	Cookie string
 	// SecureCookie sets the cookie's Secure flag on every response, not
@@ -337,9 +345,12 @@ type state struct {
 	via  string    // one of the via constants; "" for anonymous
 	key  string    // the session's or token's store key (a hash)
 	exp  time.Time // a JWT's expiry
-	iat  time.Time // a JWT's issue time
-	w    http.ResponseWriter
-	r    *http.Request
+	// brief makes a sign-in last the browser session (RememberMe, the
+	// remember field unchecked).
+	brief bool
+	iat   time.Time // a JWT's issue time
+	w     http.ResponseWriter
+	r     *http.Request
 }
 
 type stateKey struct{}

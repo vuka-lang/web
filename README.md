@@ -1060,7 +1060,7 @@ Cookie sessions for pages and live pages (rotated on sign-in, HttpOnly,
 SameSite=Lax, Secure under HTTPS), opaque bearer tokens for APIs
 (`POST /auth/token`), JWTs issued elsewhere, Argon2id hashes (bcrypt ones
 upgraded at login), one error for an unknown login and a wrong password,
-throttled failures, `auth.RevokeUser` closing the user's live pages, and
+throttled failures, "remember me" (`RememberMe`), `auth.RevokeUser` closing the user's live pages, and
 `authtest` for tests. Its sessions and tokens are kept in memory unless the
 app gives it stores. See the [auth guide](https://vuka-lang.github.io/vuka/web/auth)
 and [`examples/auth`](examples/auth).

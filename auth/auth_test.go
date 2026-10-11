@@ -444,6 +444,53 @@ func TestSessionExpiry(t *testing.T) {
 	}
 }
 
+func TestRememberMe(t *testing.T) {
+	// Off (the default), every sign-in keeps a persistent cookie.
+	c := serve(t, newApp(t, users(), nil))
+	if set := c.login("bob@example.com", "hunter22", "").header.Get("Set-Cookie"); !strings.Contains(set, "Max-Age=1209600") {
+		t.Errorf("without RememberMe: %s", set)
+	}
+	c = serve(t, newApp(t, users(), func(c *auth.Config) { c.RememberMe = true }))
+	login := func(remember string) string {
+		f := url.Values{"login": {"bob@example.com"}, "password": {"hunter22"}}
+		if remember != "" {
+			f.Set("remember", remember)
+		}
+		r := c.do("POST", "/auth/login", f.Encode(), "Content-Type", "application/x-www-form-urlencoded", "Accept", html, "Origin", c.srv.URL)
+		if r.status != 303 {
+			t.Fatalf("login: %d", r.status)
+		}
+		return r.header.Get("Set-Cookie")
+	}
+	// Unchecked: a cookie for the browser session, and still signed in.
+	if set := login(""); strings.Contains(set, "Max-Age") || strings.Contains(set, "Expires") || !strings.Contains(set, "HttpOnly") {
+		t.Errorf("not remembered: %s", set)
+	}
+	if r := c.do("GET", "/api/private", ""); r.status != 200 {
+		t.Errorf("signed in for the browser session: %d", r.status)
+	}
+	for _, v := range []string{"on", "1", "true"} {
+		if set := login(v); !strings.Contains(set, "Max-Age=1209600") {
+			t.Errorf("remember=%s: %s", v, set)
+		}
+	}
+	// JSON says it with a bool.
+	r := c.do("POST", "/auth/login", `{"login":"bob@example.com","password":"hunter22","remember":true}`, "Content-Type", "application/json")
+	if set := r.header.Get("Set-Cookie"); r.status != 200 || !strings.Contains(set, "Max-Age=") {
+		t.Errorf("JSON remember: %d %s", r.status, set)
+	}
+	r = c.do("POST", "/auth/login", `{"login":"bob@example.com","password":"hunter22"}`, "Content-Type", "application/json")
+	if set := r.header.Get("Set-Cookie"); strings.Contains(set, "Max-Age=") {
+		t.Errorf("JSON without remember: %s", set)
+	}
+	// The form offers the checkbox.
+	var b strings.Builder
+	auth.LoginForm(auth.LoginFormProps{Remember: true}).Render(context.Background(), &b)
+	if !strings.Contains(b.String(), `type="checkbox" name="remember" value="1"`) {
+		t.Errorf("LoginForm with Remember: %s", b.String())
+	}
+}
+
 func TestUniformLoginErrors(t *testing.T) {
 	c := serve(t, newApp(t, users(), nil))
 	login := func(l, p string) answer {

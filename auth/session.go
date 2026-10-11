@@ -202,10 +202,14 @@ func (a *Auth) signIn(ctx context.Context, st *state, uid string) error {
 	}
 	secret, now := newSecret(), time.Now()
 	key := storeKey(secret)
-	if err := a.sessions.Save(ctx, key, Session{UserID: uid, Created: now, Seen: now, Expires: now.Add(a.cfg.SessionTTL)}); err != nil {
+	ttl, cookieTTL := a.cfg.SessionTTL, a.cfg.SessionTTL
+	if st.brief {
+		ttl, cookieTTL = min(ttl, briefSession), 0
+	}
+	if err := a.sessions.Save(ctx, key, Session{UserID: uid, Created: now, Seen: now, Expires: now.Add(ttl)}); err != nil {
 		return err
 	}
-	a.setCookie(st, secret, a.cfg.SessionTTL)
+	a.setCookie(st, secret, cookieTTL)
 	st.id, st.via, st.key = id, viaSession, key
 	return nil
 }
@@ -237,6 +241,12 @@ func SignOut(ctx context.Context) error {
 // has no response to set a cookie on.
 func isLive(r *http.Request) bool { return r != nil && r.Header.Get("X-Vuka-Live") != "" }
 
+// briefSession is how long a sign-in not remembered (RememberMe) lasts at
+// most, even in a browser that keeps its session cookies.
+const briefSession = 24 * time.Hour
+
+// setCookie sets the session cookie for ttl: a negative ttl expires it,
+// zero makes it last the browser session.
 func (a *Auth) setCookie(st *state, value string, ttl time.Duration) {
 	c := &http.Cookie{
 		Name:     a.cfg.Cookie,
@@ -246,9 +256,10 @@ func (a *Auth) setCookie(st *state, value string, ttl time.Duration) {
 		SameSite: http.SameSiteLaxMode,
 		Secure:   a.cfg.SecureCookie || https(st.r),
 	}
-	if ttl < 0 {
+	switch {
+	case ttl < 0:
 		c.MaxAge, c.Expires = -1, time.Unix(1, 0)
-	} else {
+	case ttl > 0:
 		c.MaxAge = int(ttl / time.Second)
 	}
 	st.w.Header().Add("Set-Cookie", c.String())

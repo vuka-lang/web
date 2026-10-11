@@ -30,6 +30,7 @@ type credentials struct {
 	Password string `json:"password"`
 	Next     string `json:"next"`
 	Name     string `json:"name"` // a token's
+	Remember bool   `json:"remember"`
 }
 
 // readCredentials reads a JSON body, else a form.
@@ -48,6 +49,10 @@ func readCredentials(w http.ResponseWriter, r *http.Request) (credentials, bool,
 		return c, false, web.BadRequest("invalid form")
 	}
 	c.Login, c.Password, c.Next, c.Name = r.PostFormValue("login"), r.PostFormValue("password"), r.PostFormValue("next"), r.PostFormValue("name")
+	switch strings.ToLower(r.PostFormValue("remember")) {
+	case "on", "1", "true", "yes":
+		c.Remember = true
+	}
 	return c, false, nil
 }
 
@@ -67,6 +72,9 @@ func (a *Auth) fail(w http.ResponseWriter, r *http.Request, err error) {
 // error.
 func (a *Auth) handleLogin(w http.ResponseWriter, r *http.Request) {
 	c, isJSON, err := readCredentials(w, r)
+	if st := stateOf(r.Context()); st != nil && a.cfg.RememberMe && !c.Remember {
+		st.brief = true
+	}
 	if err == nil {
 		_, err = Login(r.Context(), c.Login, c.Password)
 	}
@@ -197,7 +205,10 @@ type LoginFormProps struct {
 	Action string // where it posts; "/auth/login" by default
 	Next   string // where to go once signed in (SafeNext), else Config.Home
 	Error  string // a message to show above the fields
-	Class  string
+	// Remember adds a "Remember me" checkbox, the remember field
+	// Config.RememberMe reads.
+	Remember bool
+	Class    string
 }
 
 // LoginForm is a sign-in form posting login and password to the login
@@ -216,6 +227,12 @@ func LoginForm(p LoginFormProps) ui.Node {
 	if p.Error != "" {
 		msg = ui.El("p", []ui.Attr{{Name: "role", Value: "alert"}, {Name: "class", Value: "vk-login-error"}}, ui.Text(p.Error))
 	}
+	var remember ui.Node
+	if p.Remember {
+		remember = ui.El("label", []ui.Attr{{Name: "class", Value: "vk-login-remember"}},
+			ui.El("input", []ui.Attr{{Name: "type", Value: "checkbox"}, {Name: "name", Value: "remember"}, {Name: "value", Value: "1"}}),
+			ui.Text(" Remember me"))
+	}
 	var next ui.Node
 	if SafeNext(p.Next) {
 		next = ui.El("input", []ui.Attr{{Name: "type", Value: "hidden"}, {Name: "name", Value: "next"}, {Name: "value", Value: p.Next}})
@@ -226,6 +243,7 @@ func LoginForm(p LoginFormProps) ui.Node {
 			ui.El("input", []ui.Attr{{Name: "name", Value: "login"}, {Name: "autocomplete", Value: "username"}, {Name: "required", Value: true}, {Name: "autofocus", Value: true}})),
 		ui.El("label", nil, ui.Text("Password"),
 			ui.El("input", []ui.Attr{{Name: "name", Value: "password"}, {Name: "type", Value: "password"}, {Name: "autocomplete", Value: "current-password"}, {Name: "required", Value: true}})),
+		remember,
 		next,
 		ui.El("button", []ui.Attr{{Name: "type", Value: "submit"}}, ui.Text("Sign in")),
 	)
@@ -236,6 +254,8 @@ type LoginPageProps struct {
 	Request *http.Request // its ?next= and ?error= fill the form
 	Title   string        // "Sign in" by default
 	Action  string        // LoginForm's
+	// Remember is LoginForm's: a "Remember me" checkbox.
+	Remember bool
 }
 
 // LoginPage is a whole sign-in page around a LoginForm, for an app's
@@ -261,7 +281,7 @@ func LoginPage(p LoginPageProps) ui.Node {
 			ui.El("style", nil, ui.Text(loginCSS))),
 		ui.El("body", nil, ui.El("main", nil,
 			ui.El("h1", nil, ui.Text(title)),
-			LoginForm(LoginFormProps{Action: p.Action, Next: next, Error: msg}))))
+			LoginForm(LoginFormProps{Action: p.Action, Next: next, Error: msg, Remember: p.Remember}))))
 }
 
 const loginCSS = `body{font:16px/1.5 system-ui,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f7f9;color:#111}
@@ -269,5 +289,5 @@ main{width:min(22rem,100% - 2rem);background:#fff;padding:2rem;border-radius:.75
 h1{margin:0 0 1rem;font-size:1.4rem}.vk-login{display:grid;gap:.9rem}.vk-login label{display:grid;gap:.25rem;font-size:.9rem}
 .vk-login input{font:inherit;padding:.5rem .6rem;border:1px solid #ccd;border-radius:.4rem}
 .vk-login button{font:inherit;padding:.55rem;border:0;border-radius:.4rem;background:#111;color:#fff;cursor:pointer}
-.vk-login-error{margin:0;color:#b00020}
+.vk-login-error{margin:0;color:#b00020}.vk-login .vk-login-remember{display:flex;gap:.4rem;align-items:center}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}main{background:#1c1c1f}.vk-login input{background:#111;color:#eee;border-color:#444}.vk-login button{background:#eee;color:#111}.vk-login-error{color:#ff6b81}}`
