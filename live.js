@@ -43,6 +43,7 @@
       replies.forEach((w) => w.reject(new Error("live: the connection closed")));
       replies.clear();
       if (e.code === 4001) return reload(e.reason);
+      if (e.code === 4002) return idle();
       if (e.code === 4004 || e.code === 1000) return state("closed");
       state("disconnected");
       timer = setTimeout(connect, Math.min(10000, 250 * 2 ** attempt++) * (0.5 + Math.random()));
@@ -52,6 +53,16 @@
   // join asks for the page in protocol v2 (render trees); a server that
   // doesn't speak it answers in v1 (HTML).
   const join = () => ws.send(JSON.stringify({ type: "join", ref: ++ref, v: 2 }));
+
+  // idle follows the server closing a page that sat idle (dropping its
+  // session): it connects again at once when the page is in view, else
+  // when it is shown again.
+  let sleeping = false;
+  function idle() {
+    state("idle");
+    if (document.visibilityState !== "hidden") return void connect();
+    sleeping = true;
+  }
 
   // reload fetches the page again for a fresh token, at most once in 10s.
   function reload(reason) {
@@ -1009,13 +1020,27 @@
   }
 
   const each = (fn) => (el, a, e) => targets(el, a.to).forEach((t) => fn(t, a, e));
+  // The attribute commands change no event handler attribute (on…) or
+  // srcdoc, and set a URL attribute to no javascript:, data: or vbscript:
+  // URL: what would run script in the page. The server's commands are
+  // checked when built; these come from anywhere (an attribute's, Exec).
+  const urlAttrs = new Set(["href", "src", "action", "formaction", "xlink:href", "poster", "data"]);
+  const scriptURL = (v) => /^(javascript|data|vbscript):/i.test(String(v).replace(/[\u0000-\u0020\u007f]/g, ""));
+  function attrOK(name, ...values) {
+    const n = String(name).toLowerCase();
+    if (n.startsWith("on") || n === "srcdoc" || urlAttrs.has(n) && values.some((v) => v != null && scriptURL(v))) {
+      warn("refused to change attribute " + name);
+      return false;
+    }
+    return true;
+  }
   const jsOps = {
     add_class: classes("add"),
     remove_class: classes("remove"),
     toggle_class: classes("toggle"),
-    set_attr: each((t, a) => touch(t, a.name, () => t.setAttribute(a.name, a.value))),
-    remove_attr: each((t, a) => touch(t, a.name, () => t.removeAttribute(a.name))),
-    toggle_attr: each((t, a) => touch(t, a.name, () => {
+    set_attr: each((t, a) => attrOK(a.name, a.value) && touch(t, a.name, () => t.setAttribute(a.name, a.value))),
+    remove_attr: each((t, a) => attrOK(a.name) && touch(t, a.name, () => t.removeAttribute(a.name))),
+    toggle_attr: each((t, a) => attrOK(a.name, ...(a.values || [])) && touch(t, a.name, () => {
       const [on, off] = a.values || [];
       if (off === undefined) t.hasAttribute(a.name) ? t.removeAttribute(a.name) : t.setAttribute(a.name, on == null ? "" : on);
       else t.setAttribute(a.name, t.getAttribute(a.name) === on ? off : on);
@@ -1084,17 +1109,32 @@
   // follow. What can't go that way — no connection, another origin, a URL
   // that isn't a page, a failure — is an ordinary page load. A patch stays
   // on the page (its history entries share the page's id); a navigate
-  // makes a new one.
+  // makes a new one. Only http and https URLs are followed or loaded,
+  // whoever names them (a link, a command, a redirect from the server): a
+  // javascript:, data: or other URL is refused, as it would run in the
+  // page or leave the browser.
   let nav = null, here = location.pathname + location.search, saving = 0;
   const newPage = () => Math.random().toString(36).slice(2);
   let pageID = newPage();
-  const load = (href, pop) => pop ? location.replace(href) : location.assign(href);
+  // httpURL is href resolved against the page, when it is http or https.
+  function httpURL(href) {
+    let u;
+    try { u = new URL(String(href), location.href); } catch (_) { return null; }
+    return u.protocol === "http:" || u.protocol === "https:" ? u : null;
+  }
+  function load(href, pop) {
+    const u = httpURL(href);
+    if (!u) return fail("live: refused to load a URL that isn't http or https");
+    pop ? location.replace(u.href) : location.assign(u.href);
+  }
   const save = () => history.replaceState({ ...history.state, x: scrollX, y: scrollY }, "");
 
   // go moves the page to href; pop is the history state back or forward
   // brought, the address being href already.
   function go(href, patch, pop) {
-    const u = new URL(href, location.href), at = u.pathname + u.search;
+    const u = httpURL(href);
+    if (!u) return fail("live: refused to load a URL that isn't http or https");
+    const at = u.pathname + u.search;
     if (!pop && at === here && u.hash) return void (location.hash = u.hash);
     if (!live || !joined || u.origin !== location.origin) return load(u.href, pop);
     if (!pop) save();
@@ -1185,5 +1225,8 @@
   });
   window.addEventListener("scroll", () => { clearTimeout(saving); saving = setTimeout(save, 200); }, { passive: true });
   window.addEventListener("online", () => { if (!ws) { attempt = 0; connect(); } });
+  document.addEventListener("visibilitychange", () => {
+    if (sleeping && document.visibilityState !== "hidden" && !ws) { sleeping = false; attempt = 0; connect(); }
+  });
   connect();
 })();

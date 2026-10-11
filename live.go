@@ -292,9 +292,15 @@ func (a *App) bindProps(v reflect.Value, props []prop, pathNames []string, r *ht
 //
 // Its fields bind from the new URL as the component's props do (path
 // segment, else query parameter, of their name); the component's props are
-// bound again too. Update runs before the patch renders, and an error it
-// returns is the patch's, shown as a handler's. Mount, not Update, sees the
-// first URL.
+// bound again too. Update runs before the patch renders. Mount, not Update,
+// sees the first URL.
+//
+// Only a page with such an Update stays mounted across a patch, whatever
+// the browser asks: any other mounts again, Mount seeing the new URL. So
+// Update must make every check Mount makes of what the URL names — that
+// the visitor may see order {id}, say. An error it returns fails the
+// patch: nothing of the page stays mounted, and the browser loads the URL,
+// the route answering as for any request.
 type URLParams struct{}
 
 var urlParamsType = typeOf[URLParams]()

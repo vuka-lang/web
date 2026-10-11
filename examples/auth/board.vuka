@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -77,7 +76,7 @@ func (b *Board) Update(changed) { b.list = b.Notices.All() }
 func (b *Board) Post(ctx context.Context, f NoticeForm) error {
 	text := strings.TrimSpace(f.Text)
 	if text == "" {
-		return errors.New("write something")
+		return web.BadRequest("write something")
 	}
 	b.Notices.Add(name(b.me), text)
 	return web.Broadcast(ctx, "notices", changed{})

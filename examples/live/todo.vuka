@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,7 +31,7 @@ type Todo struct {
 func (t *Todo) Add(f NewItem) error {
 	text := strings.TrimSpace(f.Text)
 	if text == "" {
-		return errors.New("write something first")
+		return web.BadRequest("write something first")
 	}
 	t.next++
 	t.items = append(t.items, Item{ID: t.next, Text: text})

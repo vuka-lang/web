@@ -93,6 +93,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.DotEnv(files…)`, `web.NoDotEnv()`, `web.Require(keys…)` | env files and required variables (below) |
 | `web.OnError(f)` | replace the error page / JSON error body |
 | `web.LiveLayout(f)`, `LiveKey(k)`, `LiveOrigins(p…)`, `LiveTokenTTL(d)`, `WithRelay(r)` | live pages (below) |
+| `web.LiveJoinTimeout(d)`, `LiveIdleTimeout(d)`, `LiveMaxConns(n)`, `LiveMaxConnsPerIP(n)`, `LiveMaxConnsPerPage(n)`, `LiveCheckEvery(d)` | live connections' limits (below) |
 | `web.NoTailwind()`, `web.Tailwind(path)` | no stylesheet; or the project's Tailwind stylesheet at another path (below) |
 | `web.Style(paths…)`, `Script(paths…)`, `CSS(src)`, `JS(src)` | the app's own stylesheets and scripts, unscoped (below) |
 | `web.NoToolbar()` | no development toolbar (below) |
@@ -438,10 +439,17 @@ browser has it. A whole-document `c0` patch morphs the `<body>` and sets the
 title.
 
 **Browser hooks.** `<html data-vk-state>` is `connecting`, `connected`,
-`disconnected` or `closed` (style a banner on it). The document receives
+`disconnected`, `idle` or `closed` (style a banner on it). The document receives
 `vk:patched` (`detail.ids`) after each render or patch and `vk:error`
 (`detail.message`) for a handler's error or a failed message; errors are also
 logged to the console.
+
+**Errors.** What the browser reads of an error follows HTTP: a `*web.Error`'s
+message (`web.BadRequest("a name, please")`, `web.Status(409, …)`) as it is,
+and a field that doesn't parse; any other error — a handler's, `Mount`'s or
+`Update`'s, or a panic — is `Internal Server Error`, the error itself going
+to the log (`slog`, with the page and the handler). In development
+(`web.Dev()`, `VUKA_ENV=development`) the browser gets every error's text.
 
 **Broadcasts.** `web.Broadcast(ctx, topic, msg)` — from an event handler, an
 `Update`, or any request — delivers `msg` to every component subscribed to
@@ -477,6 +485,17 @@ The runtime reconnects with jittered exponential backoff (up to ~10s) and
 joins again — **the route runs again and the state starts over**; what was
 not saved elsewhere is lost.
 
+**Limits.** A socket must join within `LiveJoinTimeout` (10s); a joined page
+the browser sends nothing for `LiveIdleTimeout` (30m; broadcasts don't count)
+closes with code 4002, dropping its session, and the runtime joins again at
+once if the page is in view, else when it is shown. At most
+`LiveMaxConns` (10,000) sockets are open, `LiveMaxConnsPerIP` (100) from one
+client address and `LiveMaxConnsPerPage` (4) with one page token; a socket
+beyond a cap is refused (503, 429) and the runtime retries. `LiveCheck`s run
+on every message, before every broadcast a page takes, and every
+`LiveCheckEvery` (5m): one failing closes the page with 4001, and it reloads.
+Each is an option; 0 lifts it.
+
 **Security.** The token is the page's URI and an expiry (`LiveTokenTTL`,
 12h by default), HMAC-SHA256-signed with the app's key: a connection can only
 rebuild a page the app rendered, and it does so with the connecting
@@ -504,12 +523,17 @@ without JavaScript, on a page that isn't live, in a new tab (`target`, a
 modifier key, the middle button) and to another origin — the runtime leaves
 those clicks to the browser.
 
-- **Patch** moves to another URL of the same page. The components stay
-  mounted with their state; the route runs again for the new URL (its
-  middleware too), so a Live page's props are bound from it again, and
-  its `Update` overload taking a `web.URLParams` struct gets the new
-  params first — bound the same way, from the path segment or query
-  parameter of each field's name. Then the usual patch is sent.
+- **Patch** moves to another URL of the same page. The route runs again for
+  the new URL (its middleware too). A Live page whose type has an `Update`
+  overload taking a `web.URLParams` struct stays mounted with its state: its
+  props are bound from the URL again, and that `Update` gets the new params
+  first — bound the same way, from the path segment or query parameter of
+  each field's name. Then the usual patch is sent. **The server decides,
+  not the link**: a page without such an `Update` mounts again, `Mount`
+  seeing the new URL, as a navigate. So **`Update` must repeat every check
+  `Mount` makes** of what the URL names (that the visitor may see order
+  `{id}`): an error it returns fails the patch, nothing stays mounted, and
+  the browser loads the URL, the route answering as for any request.
 - **Navigate** moves to another page: its route runs as a page load does
   (middleware, gates, dependencies, layout), its components mount on the
   same connection, and the old ones unmount. Under protocol v2 the page
@@ -531,7 +555,10 @@ once the reply is applied; in a chain, `ui.JS.Patch(href)` and
 `ui.JS.Navigate(href)` do it from the browser. A URL whose route answers
 anything but a page — a redirect, an error, JSON, another origin — is
 loaded as usual, and so is any navigation while the page isn't connected,
-or one that fails.
+or one that fails. Only paths and http and https URLs are followed: the
+runtime refuses to load a `javascript:`, `data:` or other URL, wherever it
+comes from (a command, a fallback, the server), and the server sends no
+redirect to one (an app's open redirect to `javascript:` is an error).
 
 In the browser: the address changes with `pushState`, and back and forward
 patch or navigate to match (patch within one page's entries); a navigation
@@ -593,7 +620,13 @@ selector match or existence. Targets: the element itself, `ui.Ref(name)` (the
 it), `ui.Closest(sel)`, `ui.Inner(sel)`, or a selector. A submit's commands
 `preventDefault` it; a push also does what a handler would (links, a form's
 buttons). An element with both commands and a handler for one event runs the
-commands first, and a declined `Confirm` keeps the event from the server.
+commands first, and a declined `Confirm` keeps the event from the server. The
+attribute commands change no event handler attribute (`on…`) or `srcdoc`,
+and set no URL attribute (`href`, `src`, `action`, `formaction`,
+`xlink:href`, `poster`, `data`) to a `javascript:`, `data:` or `vbscript:`
+URL: `ui.JS.SetAttr` and its kin panic on such a name when the chain is
+built and sanitize such a value as an `href` in markup is, and the runtime
+refuses either in commands from elsewhere (an `Exec`'s attribute).
 
 **Pushed commands.** `c.PushJS(chain)` in a handler, an `Update` or `Mount`
 rides the reply (`"js":[{"id","ops"}]` on `render` and `patch`, both protocol
@@ -724,9 +757,11 @@ as is, plus:
 | `GET /_vuka/live?t=<token>` | the WebSocket; the token in the URL, so a bad one is refused before any message |
 | `GET /_vuka/live.js?v=<hash>` | the runtime, immutable for its hash (ETag otherwise) |
 | `join` | runs the route; a second `join` on the same connection starts over; its `v` picks the protocol (above) |
-| `redirect` | sent for a join the route redirects; the connection then closes normally (1000) |
-| `navigate` | runs the URL's route (`X-Vuka-Live: navigate`) and makes its page the session's; the `patch` reply carries `url` and `token`, the new page's join token; a route that doesn't answer with a page gets `redirect` (its `Location`, else the URL) |
-| close 4001 | invalid or expired token: reload |
+| `redirect` | sent for a join the route redirects; the connection then closes normally (1000); never to a URL that isn't http or https (an `error` instead) |
+| `navigate` | runs the URL's route (`X-Vuka-Live: navigate`) and makes its page the session's; the `patch` reply carries `url` and `token`, the new page's join token; a route that doesn't answer with a page gets `redirect` (its `Location`, else the URL); `patch: true` asks to keep the page mounted, which the server does only for an `Update` taking `web.URLParams`; a failed `Mount`, `Update` or render answers `error`, nothing staying mounted |
+| close 4001 | invalid or expired token, or a `LiveCheck` failed: reload |
+| close 4002 | the page sat idle (`LiveIdleTimeout`): reconnect once the page is in view |
+| close 1008 | no `join` within `LiveJoinTimeout` |
 | close 4004 | the route isn't a live page: the error message precedes it; no retry |
 | close 1001 | the server is stopping: reconnect |
 | request header `X-Vuka-Live: join` | on the route's run for a join (`navigate` for a navigation's) |

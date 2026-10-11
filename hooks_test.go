@@ -161,7 +161,7 @@ func (g *guarded) Inc() {
 		guardedSeen.inc = append(guardedSeen.inc, ev.Handling())
 		guardedSeen.Unlock()
 		if Request(ev.Context()).URL.Query().Get("ok") != "1" {
-			ev.Refuse(errors.New("not ok"))
+			ev.Refuse(Status(http.StatusForbidden, "not ok"))
 			c.Return()
 			return
 		}

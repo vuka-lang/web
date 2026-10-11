@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"slices"
@@ -24,8 +26,11 @@ import (
 // Close codes of a live connection the runtime doesn't retry: 4001 asks it to
 // reload the page (an expired or foreign token), 4004 says the page can't be
 // live (its route failed or isn't a page).
+// 4002 says the page sat idle (LiveIdleTimeout): the runtime connects
+// again once the page is shown.
 const (
 	closeReload  websocket.StatusCode = 4001
+	closeIdle    websocket.StatusCode = 4002
 	closeRefused websocket.StatusCode = 4004
 )
 
@@ -69,15 +74,116 @@ func (a *App) Broadcast(ctx context.Context, topic string, msg any) error {
 	return nil
 }
 
-// hub is the app's live connections, and the topics each subscribes to.
-type hub struct {
-	mu     sync.Mutex
-	conns  map[*conn]bool
-	topics map[string]map[*conn]bool
-	closed bool
+// The live connections' limits by default (see the options below).
+const (
+	defaultLiveJoinTimeout    = 10 * time.Second
+	defaultLiveIdleTimeout    = 30 * time.Minute
+	defaultLiveMaxConns       = 10000
+	defaultLiveMaxConnsPerIP  = 100
+	defaultLiveMaxConnsPerTok = 4
+	defaultLiveCheckEvery     = 5 * time.Minute
+)
+
+// LiveJoinTimeout is how long a live connection may stay open without
+// joining its page: 10 seconds by default. A socket that sends nothing,
+// or anything but its join, is closed when it runs out.
+func LiveJoinTimeout(d time.Duration) Option {
+	return OptionFunc(func(a *App) { a.hub.joinTimeout = d })
 }
 
-func newHub() *hub { return &hub{conns: map[*conn]bool{}, topics: map[string]map[*conn]bool{}} }
+// LiveIdleTimeout is how long a joined page may send nothing before its
+// connection closes and its session, with its components' state, is
+// dropped: 30 minutes by default; 0 never closes one. The runtime
+// connects again, rebuilding the page's session, at once when the page is
+// in view and otherwise when it is shown again; broadcasts don't keep a
+// page from being idle.
+func LiveIdleTimeout(d time.Duration) Option {
+	return OptionFunc(func(a *App) { a.hub.idleTimeout = d })
+}
+
+// LiveMaxConns caps the app's live connections: 10,000 by default. A
+// socket beyond it is refused with 503 Service Unavailable before it
+// opens, and the runtime tries again later; 0 sets no cap.
+func LiveMaxConns(n int) Option { return OptionFunc(func(a *App) { a.hub.maxConns = n }) }
+
+// LiveMaxConnsPerIP caps the live connections from one client address:
+// 100 by default (a building behind one address has many visitors). A
+// socket beyond it is refused with 429 Too Many Requests; 0 sets no cap.
+func LiveMaxConnsPerIP(n int) Option { return OptionFunc(func(a *App) { a.hub.maxPerIP = n }) }
+
+// LiveMaxConnsPerPage caps the live connections open with the same page
+// token, one rendered page's (or several renders of a URL in the same
+// second): 4 by default, room for a reconnect overlapping its old socket.
+// A socket beyond it is refused with 429; 0 sets no cap.
+func LiveMaxConnsPerPage(n int) Option { return OptionFunc(func(a *App) { a.hub.maxPerTok = n }) }
+
+// LiveCheckEvery runs the app's LiveChecks on each joined page this often,
+// as well as on every message from the browser and before each broadcast
+// it takes: 5 minutes by default; 0 runs them only on messages and
+// broadcasts. A page some check fails closes with code 4001 and reloads,
+// so an ended session or a revoked permission reaches pages that sit
+// open.
+func LiveCheckEvery(d time.Duration) Option {
+	return OptionFunc(func(a *App) { a.hub.checkEvery = d })
+}
+
+// hub is the app's live connections, and the topics each subscribes to.
+type hub struct {
+	mu       sync.Mutex
+	conns    map[*conn]bool
+	topics   map[string]map[*conn]bool
+	closed   bool
+	open     int            // the sockets admitted, open or opening
+	perIP    map[string]int // of them, by client address
+	perToken map[string]int // by page token
+
+	joinTimeout, idleTimeout, checkEvery time.Duration
+	maxConns, maxPerIP, maxPerTok        int
+}
+
+func newHub() *hub {
+	return &hub{conns: map[*conn]bool{}, topics: map[string]map[*conn]bool{}, perIP: map[string]int{}, perToken: map[string]int{},
+		joinTimeout: defaultLiveJoinTimeout, idleTimeout: defaultLiveIdleTimeout, checkEvery: defaultLiveCheckEvery,
+		maxConns: defaultLiveMaxConns, maxPerIP: defaultLiveMaxConnsPerIP, maxPerTok: defaultLiveMaxConnsPerTok}
+}
+
+// admit counts a socket from ip with the page token tok against the caps:
+// the status refusing it, else 0 and the function releasing its place.
+func (h *hub) admit(ip, tok string) (int, func()) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	switch {
+	case h.maxConns > 0 && h.open >= h.maxConns:
+		return http.StatusServiceUnavailable, nil
+	case h.maxPerIP > 0 && h.perIP[ip] >= h.maxPerIP, h.maxPerTok > 0 && h.perToken[tok] >= h.maxPerTok:
+		return http.StatusTooManyRequests, nil
+	}
+	h.open++
+	h.perIP[ip]++
+	h.perToken[tok]++
+	return 0, func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		h.open--
+		if h.perIP[ip]--; h.perIP[ip] <= 0 {
+			delete(h.perIP, ip)
+		}
+		if h.perToken[tok]--; h.perToken[tok] <= 0 {
+			delete(h.perToken, tok)
+		}
+	}
+}
+
+// liveClientIP is the address a live socket comes from, for its cap: the
+// connection's peer.
+// TODO(merge): use web.ClientIP(r), which knows the app's trusted proxies.
+func liveClientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
 
 func (h *hub) add(c *conn) bool {
 	h.mu.Lock()
@@ -160,6 +266,7 @@ type conn struct {
 	wire   *wireMirror                     // with tb, what the browser holds, to decode the frames sent
 	frames []tbFrame                       // with tb, the frames the message being recorded sent
 	ev     *LiveEvent                      // the event being handled, until its reply
+	doing  string                          // what the session runs, for its errors' log: a handler's name, "join", …
 	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
 	mu    sync.Mutex
@@ -195,7 +302,18 @@ type join struct {
 }
 
 func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
-	uri, terr := a.verifyToken(r.URL.Query().Get("t"))
+	tok := r.URL.Query().Get("t")
+	uri, terr := a.verifyToken(tok)
+	if terr != nil {
+		tok = "" // a bad token's socket closes at once; it counts as the client's only
+	}
+	status, release := a.hub.admit(liveClientIP(r), tok)
+	if status != 0 {
+		w.Header().Set("Retry-After", "10")
+		http.Error(w, http.StatusText(status), status)
+		return
+	}
+	defer release()
 	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: a.liveOrigins, CompressionMode: websocket.CompressionNoContextTakeover})
 	if err != nil {
 		return // Accept answered: 403 for another origin
@@ -242,6 +360,15 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	}()
 	ping := time.NewTicker(pingEvery)
 	defer ping.Stop()
+	// deadline: the join's, then the page's idle one
+	deadline := time.NewTimer(cmp.Or(a.hub.joinTimeout, defaultLiveJoinTimeout))
+	defer deadline.Stop()
+	var checks <-chan time.Time
+	if d := a.hub.checkEvery; d > 0 && len(a.liveChecks) > 0 {
+		t := time.NewTicker(d)
+		defer t.Stop()
+		checks = t.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -251,8 +378,33 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			if !c.handle(ctx, data) {
 				return
 			}
+			if c.s != nil {
+				if !deadline.Stop() {
+					select {
+					case <-deadline.C:
+					default:
+					}
+				}
+				if d := a.hub.idleTimeout; d > 0 {
+					deadline.Reset(d)
+				}
+			}
+		case <-deadline.C:
+			if c.s == nil {
+				ws.Close(websocket.StatusPolicyViolation, "live: no join in time")
+			} else {
+				ws.Close(closeIdle, "live: the page sat idle")
+			}
+			return
+		case <-checks:
+			if c.s != nil && !c.check() {
+				ws.Close(closeReload, "live: the page must load again")
+				return
+			}
 		case <-c.wake:
-			c.drain(ctx)
+			if !c.drain(ctx) {
+				return
+			}
 		case <-ping.C:
 			go func() {
 				pctx, done := context.WithTimeout(ctx, writeTimeout)
@@ -314,10 +466,10 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		c.ws.Close(closeReload, "live: the page must load again")
 		return false
 	case m.Type == live.Navigate:
-		reply := c.navigate(ctx, m.ClientMessage)
+		reply, patch := c.navigate(ctx, m.ClientMessage)
 		if _, moved := reply.(withToken); moved && c.tb != nil {
 			// before the reply: the toolbar asks for the page once it lands
-			c.tb.navigated(c.tb.cur.Load(), c.uri, m.Patch, c.r.Header)
+			c.tb.navigated(c.tb.cur.Load(), c.uri, patch, c.r.Header)
 		}
 		c.write(ctx, reply)
 	default:
@@ -361,11 +513,12 @@ func (c *conn) event(m live.ClientMessage) any {
 		fn = h.Handler(m.Target)
 		ev.handler = handlerName(fn)
 	}
+	c.doing = cmp.Or(ev.handler, m.Target)
 	if len(c.app.liveGuards) > 0 && fn != nil {
 		h := c.liveHandler(m.Target, fn, ev.handler)
 		for _, g := range c.app.liveGuards {
 			if err := g(c.page, h); err != nil {
-				return live.ServerMessage{Type: live.PatchMsg, Ref: m.Ref, Error: err.Error()}
+				return live.ServerMessage{Type: live.PatchMsg, Ref: m.Ref, Error: c.errorText(err)}
 			}
 		}
 	}
@@ -373,7 +526,7 @@ func (c *conn) event(m live.ClientMessage) any {
 	reply := c.s.Event(m)
 	c.ev = nil
 	if ev.refused != nil {
-		return withError{reply, ev.refused.Error()}
+		return withError{reply, c.errorText(ev.refused)}
 	}
 	return reply
 }
@@ -430,6 +583,9 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 	}
 	if j.page == nil {
 		if loc := rec.location(); loc != "" {
+			if !ui.LoadableURL(loc) {
+				return live.ServerMessage{Type: live.Error, Ref: ref, Error: errRedirectScheme.Error()}, closeRefused
+			}
 			return live.ServerMessage{Type: live.Redirect, Ref: ref, URL: loc}, websocket.StatusNormalClosure
 		}
 		status := cmp.Or(rec.status, http.StatusOK)
@@ -440,38 +596,91 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
 	c.s = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax))
+	if e, ok := c.s.(interface{ SetErrorText(func(error) string) }); ok {
+		e.SetErrorText(c.errorText)
+	}
 	c.setPage(j.ctx)
+	c.doing = "join"
 	return c.s.Join(ref), 0
+}
+
+// errRedirectScheme refuses a redirect the browser would run in the page.
+var errRedirectScheme = errors.New("live: refused to redirect to a URL that isn't http or https")
+
+// errorText is the text the browser gets for an error of the page's
+// handlers, Mount or Update methods, renders or guards (liveErrorText); an
+// error it hides is logged, with the page and what it was running.
+func (c *conn) errorText(err error) string {
+	text, public := c.app.liveErrorText(err)
+	if !public {
+		ctx := c.pageCtx()
+		if ctx == nil {
+			ctx = c.r.Context()
+		}
+		slog.ErrorContext(ctx, "web: live page", "page", c.uri, "handler", c.doing, "err", err)
+	}
+	return text
+}
+
+// liveErrorText is the text of a live page's error for the browser, and
+// whether it is the error's own message: in development the error's text,
+// as an HTTP error's; else a *web.Error's message, or another error the
+// browser may read (live.PublicError, such as a form field that doesn't
+// parse), and for any other "Internal Server Error", the error's text
+// going to the log instead.
+func (a *App) liveErrorText(err error) (string, bool) {
+	if m, ok := live.PublicMessage(err); ok {
+		return m, true
+	}
+	if a.dev {
+		return err.Error(), false
+	}
+	return http.StatusText(http.StatusInternalServerError), false
 }
 
 // navigate moves the page to m.URL over the connection: the URL's route runs
 // as for a join (X-Vuka-Live: navigate), and the page it renders becomes the
-// session's — a patch keeps the components it renders where the page did,
-// and its Live page's Update takes the URL's params. The reply carries a
-// token for the new page, which a reconnect joins. A URL whose route answers
-// anything but a page (a redirect, an error, JSON) is the browser's to load:
-// the reply is a redirect.
-func (c *conn) navigate(ctx context.Context, m live.ClientMessage) any {
+// session's. The server decides whether it is a patch, the client's patch
+// flag only asking for one: the page's component stays mounted only when
+// the URL's route is a Live page whose type has an Update taking
+// web.URLParams, and that Update takes the URL's params; otherwise every
+// component mounts afresh, Mount seeing the new URL, even on the same
+// route. The reply carries a token for the new page, which a reconnect
+// joins. A URL whose route answers anything but a page (a redirect, an
+// error, JSON) is the browser's to load: the reply is a redirect, refused
+// (an error, which the runtime loads the URL on) when it names a URL that
+// isn't http or https. A navigation whose Mount, Update or render fails
+// replies with the error and leaves nothing mounted; the runtime loads the
+// URL, getting the route's own answer.
+func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	uri, _, _ := strings.Cut(m.URL, "#")
 	load := live.ServerMessage{Type: live.Redirect, Ref: m.Ref, URL: m.URL}
-	if !strings.HasPrefix(uri, "/") || strings.HasPrefix(uri, "//") || strings.HasPrefix(uri, "/\\") {
+	redirect := func() live.ServerMessage {
+		if !ui.LoadableURL(load.URL) {
+			return live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: errRedirectScheme.Error()}
+		}
 		return load
+	}
+	if !strings.HasPrefix(uri, "/") || strings.HasPrefix(uri, "//") || strings.HasPrefix(uri, "/\\") {
+		return redirect(), false
 	}
 	j, rec, err := c.run(ctx, uri, "navigate")
 	if err != nil {
-		return load
+		return redirect(), false
 	}
 	if j.page == nil {
 		load.URL = cmp.Or(rec.location(), m.URL)
-		return load
+		return redirect(), false
 	}
-	reply, ok := c.s.Navigate(m.Ref, uri, live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates}, m.Patch)
+	patch := m.Patch && j.updates != nil
+	c.doing = "navigate " + uri
+	reply, ok := c.s.Navigate(m.Ref, uri, live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates}, patch)
 	if !ok {
-		return reply
+		return reply, patch
 	}
 	c.uri = uri
 	c.setPage(j.ctx)
-	return withToken{reply, c.app.signToken(uri)}
+	return withToken{reply, c.app.signToken(uri)}, patch
 }
 
 // run runs the route of uri on behalf of the connection: a GET carrying the
@@ -523,16 +732,23 @@ func (w withToken) MarshalJSON() ([]byte, error) {
 }
 
 // drain delivers the broadcasts waiting for the page; before a join there is
-// nothing to deliver them to, and the join renders the page fresh.
-func (c *conn) drain(ctx context.Context) {
+// nothing to deliver them to, and the join renders the page fresh. The
+// app's LiveChecks run first: false closes the connection, the page
+// reloading.
+func (c *conn) drain(ctx context.Context) bool {
 	c.mu.Lock()
 	batch := c.inbox
 	c.inbox = nil
 	c.mu.Unlock()
-	if c.s == nil {
-		return
+	if c.s == nil || len(batch) == 0 {
+		return true
+	}
+	if !c.check() {
+		c.ws.Close(closeReload, "live: the page must load again")
+		return false
 	}
 	for _, d := range batch {
+		c.doing = "broadcast " + cmp.Or(d.topic, `""`)
 		end := noop
 		if c.tb != nil {
 			end = c.recordInfo(d)
@@ -543,6 +759,7 @@ func (c *conn) drain(ctx context.Context) {
 		end()
 	}
 	c.syncTopics()
+	return true
 }
 
 func (c *conn) syncTopics() {

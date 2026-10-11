@@ -817,7 +817,7 @@ test("navigation: a failure, a redirect or a lost connection is a page load", ()
   p.server({ type: "error", ref: lastRef(p), error: "no" });
   p.fire("#book", "click");
   p.ws().onclose({ code: 1006 });
-  eq(p.loads, [["assign", "/report.pdf"], ["assign", "http://test/shelf?page=2"], ["assign", "http://test/books/7#notes"]], "loads");
+  eq(p.loads, [["assign", "http://test/report.pdf"], ["assign", "http://test/shelf?page=2"], ["assign", "http://test/books/7#notes"]], "loads");
   const q = joined(shelf(1), { url: "http://test/shelf?page=1" });
   q.fire("#next", "click");
   q.tick(10000);
@@ -844,6 +844,63 @@ test("navigation: back and forward patch within a page, navigate across pages, r
   eq([p.$("#at").textContent, p.entries.length], ["page 1", 2], "patched back");
   p.pop("/shelf?page=1#at", null);
   eq(navs(p).length, 4, "a #hash entry of the page shown: nothing");
+});
+
+// Only http and https URLs are loaded or navigated to: a redirect from the
+// server, a command, a fallback (an open redirect's javascript: URL).
+test("navigation: a URL that isn't http or https is refused", () => {
+  const bad = ["javascript:void(window.pwned=1)", " JavaScript:alert(1)", "java\tscript:alert(1)", "data:text/html,<script>alert(1)</script>", "vbscript:msgbox(1)"];
+  for (const href of bad) {
+    const p = joined(shelf(1), { url: "http://test/shelf?page=1" });
+    const errors = [];
+    p.doc.addEventListener("vk:error", (e) => errors.push(e.detail.message));
+    p.fire("#book", "click");
+    p.server({ type: "redirect", ref: lastRef(p), url: href });
+    p.server({ type: "redirect", url: href });
+    window_run(p, [["navigate", { href }], ["patch", { href }]]);
+    eq([p.loads, navs(p).length, errors.length], [[], 1, 4], href);
+    const off = open(`<button data-vk-js-click='${js([["navigate", { href }]])}'></button>`, { url: "http://test/" });
+    off.fire("button", "click");
+    eq(off.loads, [], href + " on a page that isn't live");
+  }
+});
+
+test("attributes: no event handlers, srcdoc or script URLs", () => {
+  const p = open(`<button data-vk-js-click='${js([
+    ["set_attr", { to: { sel: "#a" }, name: "onmouseover", value: "window.pwned=1" }],
+    ["set_attr", { to: { sel: "#a" }, name: "ONCLICK", value: "window.pwned=1" }],
+    ["toggle_attr", { to: { sel: "#a" }, name: "onfocus", values: ["a()", "b()"] }],
+    ["remove_attr", { to: { sel: "#a" }, name: "onblur" }],
+    ["set_attr", { to: { sel: "#f" }, name: "srcdoc", value: "<script>alert(1)</script>" }],
+    ["set_attr", { to: { sel: "#a" }, name: "href", value: "javascript:alert(1)" }],
+    ["set_attr", { to: { sel: "#a" }, name: "HREF", value: " java\nscript:alert(1)" }],
+    ["set_attr", { to: { sel: "#f" }, name: "src", value: "data:text/html,<script>alert(1)</script>" }],
+    ["set_attr", { to: { sel: "#b" }, name: "formaction", value: "vbscript:x" }],
+    ["set_attr", { to: { sel: "#u" }, name: "xlink:href", value: "javascript:alert(1)" }],
+    ["toggle_attr", { to: { sel: "#v" }, name: "poster", values: ["/ok.png", "javascript:x"] }],
+    ["set_attr", { to: { sel: "#a" }, name: "title", value: "javascript: is fine here" }],
+    ["set_attr", { to: { sel: "#b" }, name: "formaction", value: "/save" }],
+  ])}'></button><a id="a" onblur="keep()"></a><iframe id="f"></iframe><button id="b"></button><use id="u"></use><video id="v"></video>`);
+  p.fire("button", "click");
+  const a = p.$("#a");
+  eq([a.getAttribute("onmouseover"), a.getAttribute("onclick"), a.getAttribute("onfocus"), a.getAttribute("onblur"), a.getAttribute("href"),
+    p.$("#f").getAttribute("srcdoc"), p.$("#f").getAttribute("src"), p.$("#u").getAttribute("xlink:href"), p.$("#v").getAttribute("poster"),
+    a.getAttribute("title"), p.$("#b").getAttribute("formaction")],
+    [null, null, null, "keep()", null, null, null, null, null, "javascript: is fine here", "/save"]);
+});
+
+test("an idle page (4002) connects again once it is in view", () => {
+  const p = joined(`<p>x</p>`);
+  p.ws().onclose({ code: 4002 });
+  eq([p.sockets.length, p.doc.documentElement.getAttribute("data-vk-state")], [2, "connecting"], "in view: at once");
+  p.doc.visibilityState = "hidden";
+  p.ws().onclose({ code: 4002 });
+  eq([p.sockets.length, p.doc.documentElement.getAttribute("data-vk-state")], [2, "idle"], "hidden: waits");
+  p.tick(60000);
+  eq(p.sockets.length, 2, "no retry while hidden");
+  p.doc.visibilityState = "visible";
+  p.doc.dispatchEvent(new p.window.Event("visibilitychange"));
+  eq(p.sockets.length, 3, "shown");
 });
 
 function window_run(p, ops) { p.window.vuka.run(p.doc.body, ops); }
