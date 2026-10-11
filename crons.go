@@ -426,6 +426,9 @@ func (s *scheduler) run(ctx context.Context, j *cronJob, at time.Time, manual bo
 	}
 	defer j.running.Store(false)
 	start := time.Now()
+	for _, f := range s.app.cronCtx {
+		ctx = f(ctx)
+	}
 	ctx, finish := s.app.cronEntry(ctx, j)
 	if finish != nil {
 		id = entryOf(ctx).ID

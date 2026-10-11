@@ -137,6 +137,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		}
 	}
 	route, handler := s.method+" "+s.path, shortName(s.where)
+	limit := a.bodyLimit(s.attrs)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tw := &trackingWriter{ResponseWriter: w}
 		defer func() {
@@ -147,6 +148,9 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 				a.writeError(w, r, fmt.Errorf("panic: %v", p), htmlPage)
 			}
 		}()
+		if limit > 0 && r.Body != nil && r.Body != http.NoBody {
+			r.Body = http.MaxBytesReader(tw, r.Body, limit)
+		}
 		rq := a.newRequest(tw, r)
 		if a.tb != nil {
 			noteRoute(rq.ctx, route, s.where)
@@ -464,15 +468,15 @@ func structBinder(t reflect.Type, pathNames []string, router Router) binder {
 		ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 		if ct == "application/json" || strings.HasSuffix(ct, "+json") {
 			if err := json.NewDecoder(http.MaxBytesReader(rq.w, r.Body, maxBody)).Decode(ptr.Interface()); err != nil {
-				return v, BadRequest("invalid JSON: " + err.Error())
+				return v, bodyError(err, "invalid JSON: ")
 			}
 		} else {
 			if ct == "multipart/form-data" {
 				if err := r.ParseMultipartForm(maxBody); err != nil {
-					return v, BadRequest("invalid form: " + err.Error())
+					return v, bodyError(err, "invalid form: ")
 				}
 			} else if err := r.ParseForm(); err != nil {
-				return v, BadRequest("invalid form: " + err.Error())
+				return v, bodyError(err, "invalid form: ")
 			}
 			for _, f := range fields {
 				if !f.settable {

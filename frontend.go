@@ -266,7 +266,7 @@ func (f *frontend) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimPrefix(path.Clean("/"+rel), "/")
-	if name == ".vite" || strings.HasPrefix(name, ".vite/") {
+	if hiddenPath(name) { // .vite (the manifest), .env, .git: never served; .well-known is
 		http.NotFound(w, r)
 		return
 	}

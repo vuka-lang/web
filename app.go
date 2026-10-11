@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"reflect"
@@ -74,6 +75,13 @@ type App struct {
 	frontends  []*frontend
 	exactPaths bool // no trailing-slash redirect
 
+	headers       *SecurityHeaders // nil: the defaults
+	noHeaders     bool
+	proxies       []netip.Prefix // TrustedProxies
+	maxBody       int64          // MaxRequestBody; 0: the default
+	trackRequests bool
+	cronCtx       []func(context.Context) context.Context
+
 	once    sync.Once
 	handler http.Handler
 	err     error
@@ -91,7 +99,7 @@ func New(opts ...Option) *App {
 	if a.env = loadEnv(a.envFiles); a.env.err != nil {
 		a.c.errs = append(a.c.errs, a.env.err)
 	}
-	a.dev = a.dev || os.Getenv("VUKA_ENV") == "development"
+	a.dev = a.dev || os.Getenv("VUKA_ENV") == "development" // never an env file's: loadEnv skips VUKA_ keys
 	if a.liveKey == nil {
 		a.liveKey = devLiveKey(a.dev)
 	}
@@ -228,13 +236,15 @@ func (a *App) Delete(path string, fn any, opts ...RouteOption) *App {
 	return a.Handle(http.MethodDelete, path, fn, opts...)
 }
 
-// Static serves the files of fsys under prefix.
+// Static serves the files of fsys under prefix: a directory as its
+// index.html, never as a listing, and no dotfile or dot directory but
+// .well-known.
 func (a *App) Static(prefix string, fsys fs.FS) *App {
 	a.mutable("Static")
 	prefix = "/" + strings.Trim(prefix, "/")
 	a.statics = append(a.statics, func() {
 		a.router.Handle(http.MethodGet, joinPath(prefix, "/{path...}"),
-			http.StripPrefix(strings.TrimSuffix(prefix, "/"), http.FileServerFS(fsys)))
+			http.StripPrefix(strings.TrimSuffix(prefix, "/"), staticFS(fsys)))
 	})
 	return a
 }
@@ -395,7 +405,7 @@ func (a *App) build() (http.Handler, error) {
 	if a.tb != nil {
 		h = a.tb.wrap(h)
 	}
-	return h, nil
+	return a.edge(h), nil
 }
 
 // wrapRoute wraps a compiled route in the middleware WrapRoutes functions
@@ -411,7 +421,17 @@ func (a *App) wrapRoute(s *routeSpec, h http.Handler) (http.Handler, error) {
 			return nil, fmt.Errorf("web: %s %s (%s): its attribute %T needs %s, which the app doesn't have", s.method, s.path, s.where, x, name)
 		}
 	}
+	if a.trackRequests {
+		inner := h
+		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer enterRoute(r, r.Context())()
+			inner.ServeHTTP(w, r)
+		})
+	}
 	info := RouteInfo{Method: s.method, Path: s.path, Where: s.where, Attrs: slices.Clip(s.attrs), Live: s.live != nil, HTML: s.html || s.live != nil}
+	if s.live != nil {
+		info.LiveType = s.live.typ
+	}
 	for i := len(a.wraps) - 1; i >= 0; i-- {
 		if mw := a.wraps[i].f(info); mw != nil {
 			h = a.layer(mw, h)
