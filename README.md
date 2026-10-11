@@ -64,8 +64,11 @@ go get github.com/vuka-lang/web
 | `@web.Cron(spec)` | the function runs on a schedule (below) |
 
 Paths use `{name}` for a segment and `{name...}` for the rest of the path, and
-match exactly (`/pets` doesn't match `/pets/`). Under a controller, `"/"` is
-the prefix itself.
+match exactly (`/pets` doesn't match `/pets/`); a request whose path differs
+from a route's only by a trailing slash is redirected to it (308, method and
+query kept), unless something else the app serves answers that path
+(`web.ExactPaths()` turns this off). Under a controller, `"/"` is the prefix
+itself.
 
 Route decorators are Vuka *declarers* (`func(*vuka.Decl)`): they run once at
 init and record the function with its parameter names. Other decorators on
@@ -97,6 +100,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.CSRF(trusted…)` | refuse cross-origin form posts and the like (below) |
 | `web.WrapRoutes`, `ParamFrom`, `LiveCheck`, `GuardLiveEvents` | hooks for libraries guarding routes and live events (below) |
 | `web.Frontend(fsys, root, opts…)` | a single-page app built by Vite (or anything else) served from the binary (below) |
+| `web.ExactPaths()` | no trailing-slash redirect (above) |
 
 `app.Build()` resolves everything — every parameter of every route, every
 result and view, the whole dependency graph — and returns all problems at

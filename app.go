@@ -71,7 +71,8 @@ type App struct {
 	css       *stylesheet // nil: pages link no stylesheet
 	assets    *assetSet   // nil: no compiled styles or scripts
 
-	frontends []*frontend
+	frontends  []*frontend
+	exactPaths bool // no trailing-slash redirect
 
 	once    sync.Once
 	handler http.Handler
@@ -292,6 +293,9 @@ func (a *App) build() (http.Handler, error) {
 	}
 	specs = append(specs, a.specs...)
 	errs := slices.Clone(a.c.errs)
+	rec := &recordingRouter{Router: a.router}
+	a.router = rec
+	defer func() { a.router = rec.Router }()
 	seen := map[string]string{}
 	for _, s := range specs {
 		key := s.method + " " + s.path
@@ -365,15 +369,23 @@ func (a *App) build() (http.Handler, error) {
 		a.routeToolbar()
 		a.tb.install()
 	}
+	served := rec.patterns
 	for _, f := range a.frontends {
 		for _, p := range f.routes() {
-			a.router.Handle(http.MethodGet, p, f)
+			rec.Router.Handle(http.MethodGet, p, f) // a fallback: the trailing-slash redirect goes past it
 		}
 	}
 	if a.relay != nil {
 		a.relay.Subscribe(a.hub.deliver)
 	}
-	var h http.Handler = a.router
+	var h http.Handler = rec.Router
+	if !a.exactPaths {
+		var targets [][2]string
+		for _, s := range specs {
+			targets = append(targets, [2]string{s.method, s.path})
+		}
+		h = newSlashes(h, served, targets)
+	}
 	if a.csrf != nil {
 		h = a.csrfProtect(h)
 	}

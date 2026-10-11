@@ -380,7 +380,9 @@ func TestServicesAndControllers(t *testing.T) {
 	expect(t, h, "GET", "/admin/pets/3", "", 200, `"pet 3"`)
 	expect(t, h, "GET", "/admin/pets/value", "", 200, `"value pg"`)
 	expect(t, h, "GET", "/svc", "", 200, `"pg"`)
-	expect(t, h, "GET", "/admin/pets/", "", 404, "")
+	if code, _, hdr := do(t, h, "GET", "/admin/pets/", ""); code != 308 || hdr.Get("Location") != "../pets" {
+		t.Errorf("GET /admin/pets/: %d %q; want a redirect to the controller's prefix", code, hdr.Get("Location"))
+	}
 
 	err := New(Only(p)).Build()
 	if err == nil || !strings.Contains(err.Error(), "no provider for *web.DB, needed by service web.PetService, needed by controller web.Admin, needed by Admin.Index at t.vuka:") {
