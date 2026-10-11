@@ -1,0 +1,24 @@
+package main
+
+import "github.com/vuka-lang/web"
+
+type Pet struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+var pets = []Pet{{1, "Rex", "dog"}, {2, "Tom", "cat"}, {3, "Polly", "parrot"}}
+
+@web.Get("/api/pets")
+func ListPets() []Pet { return pets }
+
+@web.Get("/api/pets/{id}")
+func ShowPet(id int) Result[Pet] {
+	for _, p := range pets {
+		if p.ID == id {
+			return Ok(p)
+		}
+	}
+	return Err(web.Status(404, "no pet %d", id))
+}

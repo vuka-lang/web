@@ -226,6 +226,13 @@ func (b *Browser) Visit(url string) *Page {
 	return b.open(url, `document.readyState === "complete" && window.vuka`)
 }
 
+// Load opens url in a new tab and waits for it to load: a page without
+// Vuka's runtime.
+func (b *Browser) Load(url string) *Page {
+	b.t.Helper()
+	return b.open(url, `document.readyState === "complete"`)
+}
+
 func (b *Browser) open(url, ready string) *Page {
 	b.t.Helper()
 	var target struct {

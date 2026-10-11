@@ -57,6 +57,8 @@ type App struct {
 	cssSource string      // web.Tailwind's path, for the vuka command
 	css       *stylesheet // nil: pages link no stylesheet
 
+	frontends []*frontend
+
 	once    sync.Once
 	handler http.Handler
 	err     error
@@ -289,6 +291,27 @@ func (a *App) build() (http.Handler, error) {
 		}
 		a.router.Handle(s.method, s.path, h)
 	}
+	if len(a.frontends) > 0 {
+		gets := map[string]string{} // GET patterns, wildcards unnamed: what the router can't tell apart
+		for _, s := range specs {
+			if s.method == http.MethodGet {
+				gets[wildcards.ReplaceAllString(s.path, "{}")] = s.method + " " + s.path + " (" + s.where + ")"
+			}
+		}
+		for _, f := range a.frontends {
+			if err := f.prepare(a); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			for _, p := range f.routes() {
+				key := wildcards.ReplaceAllString(p, "{}")
+				if prev, dup := gets[key]; dup {
+					errs = append(errs, fmt.Errorf("web: Frontend(%q) serves GET %s, as %s does", f.root, p, prev))
+				}
+				gets[key] = fmt.Sprintf("Frontend(%q)", f.root)
+			}
+		}
+	}
 	for _, p := range a.eager {
 		if err := a.c.check(p.out, p.source); err != nil {
 			errs = append(errs, err)
@@ -315,6 +338,11 @@ func (a *App) build() (http.Handler, error) {
 	if a.tb != nil {
 		a.routeToolbar()
 		a.tb.install()
+	}
+	for _, f := range a.frontends {
+		for _, p := range f.routes() {
+			a.router.Handle(http.MethodGet, p, f)
+		}
 	}
 	if a.relay != nil {
 		a.relay.Subscribe(a.hub.deliver)

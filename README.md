@@ -91,6 +91,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.LiveLayout(f)`, `LiveKey(k)`, `LiveOrigins(p…)`, `LiveTokenTTL(d)`, `WithRelay(r)` | live pages (below) |
 | `web.NoTailwind()`, `web.Tailwind(path)` | no stylesheet; or the project's Tailwind stylesheet at another path (below) |
 | `web.NoToolbar()` | no development toolbar (below) |
+| `web.Frontend(fsys, root, opts…)` | a single-page app built by Vite (or anything else) served from the binary (below) |
 
 `app.Build()` resolves everything — every parameter of every route, every
 result and view, the whole dependency graph — and returns all problems at
@@ -845,6 +846,52 @@ web.AddPanel("Cache", func(notes []any) ui.Node {
 ```
 
 A panel noted without `AddPanel` lists its values.
+
+## Frontends
+
+A single-page app — React, Vue, Svelte, anything that builds to static files —
+is served from the binary beside the app's routes:
+
+```vuka
+//go:embed all:frontend/dist
+var dist embed.FS
+
+app := web.New(web.Frontend(dist, "frontend/dist"))
+```
+
+| | |
+|---|---|
+| a path naming a file (`/assets/index-B3x9kQa1.js`, `/robots.txt`) | that file, or 404 |
+| any other GET path (`/`, `/pets/7`) | `index.html`, so client-side routes survive a reload |
+| the app's routes, live pages, `/_vuka/` | matched first |
+| `.vite/` | never served |
+
+Files Vite's manifest (`.vite/manifest.json`) lists as build output, with a
+content hash in their names, are cached for good
+(`Cache-Control: immutable`); everything else, `index.html` included, is
+revalidated by its ETag and answered with a 304 when unchanged. Outside
+development a root without `index.html` fails `Build` ("build it first").
+
+`web.FrontendAt("/admin")` serves it under a prefix (build it with Vite's
+`base: "/admin/"`); `web.FrontendEnv("APP_NAME", "API_URL")` passes those
+variables' values (the environment's, `.env`'s) to the page:
+`index.html` sets them before any module runs, and `import.meta.env.APP_NAME`
+reads them. Only the keys named reach the browser.
+
+**Development.** In development (`web.Dev()`, `VUKA_ENV=development`,
+`vuka run`) the files are read from disk, and a running Vite dev server takes
+over: the Vite plugin in [`vite/vuka.js`](vite/vuka.js) (`vuka()` in
+`vite.config`) writes `<dist>/.vite/vuka-hot.json` with the dev server's
+origin and pid, and the app's pages load their modules from it — the browser
+stays on the app's address and gets hot module replacement, with no proxy to
+configure. Other files redirect to the dev server, which has the current
+`public/` ones. A hot file whose process is gone is ignored. With neither a
+build nor a dev server, pages say how to build. `vuka run` starts the
+frontend's Vite (and installs its dependencies first), `vuka build` runs
+`vite build` before embedding; both copy the plugin into
+`frontend/vuka/vite.js`. A frontend without a `package.json` is served as it
+is. The development toolbar is added to the page; the app's Tailwind
+stylesheet isn't. An example is in [`examples/spa`](examples/spa).
 
 ## Static files
 

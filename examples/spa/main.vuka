@@ -1,0 +1,21 @@
+// Command spa serves a React app built with Vite from its binary, beside a
+// JSON API: web.Frontend embeds frontend/dist, and vuka run starts the
+// frontend's Vite dev server so the app's pages get hot module replacement.
+package main
+
+import (
+	"embed"
+	"log"
+
+	"github.com/vuka-lang/web"
+)
+
+//go:embed all:frontend/dist
+var dist embed.FS
+
+func main() {
+	app := web.New(web.Frontend(dist, "frontend/dist", web.FrontendEnv("APP_NAME")))
+	if err := app.Run(":" + web.Env("PORT", "8080")); err != nil {
+		log.Fatal(err)
+	}
+}
