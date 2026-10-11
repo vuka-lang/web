@@ -343,6 +343,12 @@ func bindConn(c *conn) (unbind func()) {
 // visit of its own, replacing an HTTP load), and for the page's events and
 // renders after the join, though their context descends from the join's. A
 // client can't make it true: web marks its own run, not a header.
+//
+// The route runs for every join whether or not the join adopts the GET's
+// session (LiveAdopt) — middleware, gates and the handler itself, which
+// sees IsLiveJoin true either way. Adoption only skips mounting the page's
+// components again, so Mount runs once per view when the join arrives in
+// time; an expired window, a restart or a reconnect mounts them again.
 func IsLiveJoin(ctx context.Context) bool {
 	j, ok := ctx.Value(joinKey{}).(*join)
 	return ok && j.why == "join" && !j.done.Load()

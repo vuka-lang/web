@@ -254,6 +254,12 @@ func Module(cfg Config) web.Option {
 			return Identity{}, web.Unauthorized
 		}),
 		web.LiveCheck(a.liveCheck),
+		web.LiveIdentity(func(ctx context.Context) string {
+			if id := Current(ctx); id != nil {
+				return id.ID
+			}
+			return ""
+		}),
 		web.GuardLiveEvents(a.guardEvent),
 		web.TrackRequests(),
 		web.CronContext(System),

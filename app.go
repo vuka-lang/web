@@ -57,6 +57,9 @@ type App struct {
 	liveMax     int // the newest live protocol version spoken
 	relay       Relay
 	hub         *hub
+	adoptWindow time.Duration                  // LiveAdopt: 0 or less mounts fresh on every join
+	liveIDs     []func(context.Context) string // LiveIdentity
+	parked      parkStore                      // live sessions between a render and its join
 
 	cronSpecs []*cronSpec
 	cronClock cron.Clock
@@ -92,7 +95,7 @@ type App struct {
 // the env files into the process environment (see LoadEnv), so constructors
 // and Start methods see their values through os.Getenv.
 func New(opts ...Option) *App {
-	a := &App{c: newContainer(), reg: snapshot(), liveTTL: 12 * time.Hour, liveMax: 2, hub: newHub()}
+	a := &App{c: newContainer(), reg: snapshot(), liveTTL: 12 * time.Hour, liveMax: 2, hub: newHub(), adoptWindow: defaultLiveAdoptWindow}
 	for _, o := range opts {
 		o.apply(a)
 	}
@@ -506,6 +509,7 @@ func (a *App) Start(ctx context.Context) error {
 // OnStop hook, in the reverse order of the start sequence.
 func (a *App) Stop(ctx context.Context) error {
 	a.hub.closeAll()
+	a.parked.closeAll()
 	a.css.close()
 	a.assets.close()
 	if a.tb != nil {
@@ -534,6 +538,7 @@ func (a *App) Run(addr string) error {
 	}
 	srv := &http.Server{Handler: a.handler, ReadHeaderTimeout: 10 * time.Second}
 	srv.RegisterOnShutdown(a.hub.closeAll)
+	srv.RegisterOnShutdown(a.parked.closeAll)
 	log.Printf("web: listening on %s", browseURL(ln.Addr()))
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()

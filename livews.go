@@ -111,9 +111,9 @@ func LiveMaxConns(n int) Option { return OptionFunc(func(a *App) { a.hub.maxConn
 func LiveMaxConnsPerIP(n int) Option { return OptionFunc(func(a *App) { a.hub.maxPerIP = n }) }
 
 // LiveMaxConnsPerPage caps the live connections open with the same page
-// token, one rendered page's (or several renders of a URL in the same
-// second): 4 by default, room for a reconnect overlapping its old socket.
-// A socket beyond it is refused with 429; 0 sets no cap.
+// token, one rendered page's: 4 by default, room for a reconnect
+// overlapping its old socket. A socket beyond it is refused with 429; 0
+// sets no cap.
 func LiveMaxConnsPerPage(n int) Option { return OptionFunc(func(a *App) { a.hub.maxPerTok = n }) }
 
 // LiveCheckEvery runs the app's LiveChecks on each joined page this often,
@@ -247,6 +247,7 @@ type conn struct {
 	ws     *websocket.Conn
 	r      *http.Request // the upgrade request
 	uri    string        // the page, from its token
+	tok    string        // the page's join token, the key its render parked a session under
 	s      liveproto.Session
 	page   context.Context                 // the context the page's route ran with: the join's, else the latest navigation's
 	topics []string                        // guarded by the hub's mutex
@@ -313,7 +314,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	ws.SetReadLimit(1 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	c := &conn{app: a, ws: ws, r: r, uri: uri, wake: make(chan struct{}, 1)}
+	c := &conn{app: a, ws: ws, r: r, uri: uri, tok: tok, wake: make(chan struct{}, 1)}
 	if a.tb != nil {
 		if c.tb = a.tb.liveSink(r.URL.Query().Get("tb"), uri); c.tb != nil {
 			ctx = context.WithValue(ctx, tbKey{}, c.tb)
@@ -563,7 +564,9 @@ func (w withError) MarshalJSON() ([]byte, error) {
 // join rebuilds the page: the route its token names runs again, as a GET
 // carrying the upgrade request's headers (cookies, auth), through the app's
 // middleware; the page it renders becomes the session's, speaking protocol
-// version v when the app can (else v1).
+// version v when the app can (else v1). When the GET's own session is still
+// parked under the token and the same identity joins in time, it is adopted
+// instead of mounting the page's components again (livepark.go).
 func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode) {
 	j, rec, err := c.run(ctx, c.uri, "join")
 	if err != nil {
@@ -583,13 +586,51 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
-	c.s = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax))
+	if s := c.adopt(j, v); s != nil {
+		c.s = s
+	} else {
+		c.s = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax))
+	}
 	if e, ok := c.s.(interface{ SetErrorText(func(error) string) }); ok {
 		e.SetErrorText(c.errorText)
 	}
 	c.setPage(j.ctx)
 	c.doing = "join"
 	return c.s.Join(ref), 0
+}
+
+// adopt is the session the page's HTTP render parked, when this join may
+// take it (livepark.go): parked under this very token (so once, and in
+// time), the same URI, the same identity as the join's own run of the
+// route (j.ctx, whose gates passed already), and the native live session
+// about to serve it. Anything else returns nil and the join mounts fresh —
+// adoption is an optimization, never a dependency. The route still ran:
+// only its render's components are kept instead of mounting again, with
+// the join's context and render from here on.
+func (c *conn) adopt(j *join, v int) liveproto.Session {
+	a := c.app
+	if a.adoptWindow <= 0 {
+		return nil
+	}
+	p := a.parked.take(c.tok)
+	if p == nil {
+		return nil
+	}
+	ver := min(v, a.liveMax)
+	if ver >= 2 && liveproto.V2 != nil { // a stand-in session can't adopt
+		p.close()
+		return nil
+	}
+	if p.uri != c.uri || p.who != a.liveWho(j.ctx) {
+		p.close()
+		return nil
+	}
+	s, err := liveproto.Adopt(p.s, j.ctx, c.render(j.page), ver)
+	if err != nil {
+		p.close()
+		return nil
+	}
+	return s
 }
 
 // errRedirectScheme refuses a redirect the browser would run in the page.

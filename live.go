@@ -373,16 +373,27 @@ func (a *App) page(rq *request, n ui.Node) {
 		end := a.span(rq.ctx, "render", "page")
 		out, err := s.Render()
 		end()
-		s.Close()
 		if err != nil {
+			s.Close()
 			a.writeError(w, r, err, true)
 			return
 		}
 		html = []byte(out)
 		live := bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-")) ||
 			bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) // a JS command's push to a handler
+		var token string
+		if live && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			token = a.signToken(r.URL.RequestURI())
+		}
+		if token != "" && r.Method == http.MethodGet && a.adoptWindow > 0 {
+			// keep the mounted session for the page's join to adopt,
+			// so Mount runs once per view (livepark.go)
+			a.parked.park(token, &parkedPage{s: s, uri: r.URL.RequestURI(), who: a.liveWho(rq.ctx)}, a.adoptWindow)
+		} else {
+			s.Close()
+		}
 		if live || bytes.Contains(html, []byte(" data-vk-js-")) {
-			html = injectScript(html, a.scriptTag(r, live && (r.Method == http.MethodGet || r.Method == http.MethodHead)))
+			html = injectScript(html, a.scriptTag(r, token))
 		}
 		html = a.linkCSS(r, html)
 		if a.tb != nil && a.assets != nil {
@@ -425,8 +436,10 @@ func wholePage(r *http.Request) bool {
 	return r.Header.Get("HX-Request") == "" && acceptsHTML(r)
 }
 
-func (a *App) scriptTag(r *http.Request, live bool) string {
-	if !live {
+// scriptTag is the page's runtime script tag, with token (a live page's
+// join token) when the page may connect.
+func (a *App) scriptTag(r *http.Request, token string) string {
+	if token == "" {
 		return `<script src="` + liveScript + `?v=` + liveJSTag + `" defer></script>`
 	}
 	var tb string
@@ -435,7 +448,7 @@ func (a *App) scriptTag(r *http.Request, live bool) string {
 			tb = ` data-vk-toolbar="` + e.ID + `"` // the socket's messages join the page's record
 		}
 	}
-	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + a.signToken(r.URL.RequestURI()) + `"` + tb + ` defer></script>`
+	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + token + `"` + tb + ` defer></script>`
 }
 
 func injectScript(html []byte, tag string) []byte {
@@ -446,13 +459,21 @@ func injectScript(html []byte, tag string) []byte {
 	return append(html[:i:i], append([]byte(tag), html[i:]...)...)
 }
 
-// A join token names the page a live connection rebuilds: its URI, and when
-// the token expires, signed with the app's key.
+// A join token names the page a live connection rebuilds: its URI, when the
+// token expires, and a nonce telling two renders of one URI apart (the key
+// a render's session is parked under, livepark.go), signed with the app's
+// key.
 //
-//	base64url(expiry as 8 bytes, big-endian ‖ URI) "." base64url(HMAC-SHA256)
+//	base64url(expiry as 8 bytes, big-endian ‖ URI ‖ 0x00 ‖ nonce) "." base64url(HMAC-SHA256)
+//
+// A token without the nonce (an earlier release's) still verifies.
 func (a *App) signToken(uri string) string {
 	msg := binary.BigEndian.AppendUint64(nil, uint64(time.Now().Add(a.liveTTL).Unix()))
 	msg = append(msg, uri...)
+	msg = append(msg, 0)
+	var nonce [8]byte
+	rand.Read(nonce[:])
+	msg = append(msg, nonce[:]...)
 	mac := hmac.New(sha256.New, a.liveKey)
 	mac.Write(msg)
 	return base64.RawURLEncoding.EncodeToString(msg) + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
@@ -478,7 +499,11 @@ func (a *App) verifyToken(tok string) (string, error) {
 	if time.Now().Unix() > int64(binary.BigEndian.Uint64(msg)) {
 		return "", errExpiredToken
 	}
-	uri := string(msg[8:])
+	rest := msg[8:]
+	if i := bytes.IndexByte(rest, 0); i >= 0 {
+		rest = rest[:i] // the nonce follows; the URI holds no NUL
+	}
+	uri := string(rest)
 	if !strings.HasPrefix(uri, "/") || strings.HasPrefix(uri, "//") {
 		return "", errBadToken
 	}

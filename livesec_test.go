@@ -77,9 +77,10 @@ func TestLivePatchMountsUnlessUpdate(t *testing.T) {
 		comp   ui.Stateful
 		mounts string
 	}{
-		// the GETs of /orders/2 and /orders/1, the join, then the patch's
-		{"no Update", &secOrder{}, "[2 1 1 2]"},
-		{"Update taking URLParams", &secCheckedOrder{}, "[2 1 1]"},
+		// the GETs of /orders/2 and /orders/1 (the join adopts the GET's
+		// mount), then the patch's
+		{"no Update", &secOrder{}, "[2 1 2]"},
+		{"Update taking URLParams", &secCheckedOrder{}, "[2 1]"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			secOrders.Lock()

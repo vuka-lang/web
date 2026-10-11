@@ -42,6 +42,17 @@ func New(ctx context.Context, render Render, v int) Session {
 	return native{live.NewSession(ctx, render), v}
 }
 
+// Adopt is the session of a page whose HTTP render's live session was kept
+// for its connection (live.Session.Adopt): its instances, mounted by the
+// render, serve the join without mounting again, speaking protocol version
+// v. ctx and render replace the finished render request's.
+func Adopt(s *live.Session, ctx context.Context, render Render, v int) (Session, error) {
+	if err := s.Adopt(ctx, render); err != nil {
+		return nil, err
+	}
+	return native{s, v}, nil
+}
+
 type native struct {
 	s *live.Session
 	v int
