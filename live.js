@@ -37,7 +37,7 @@
       if (nav) return load(nav.href, nav.pop); // the page it was going to, the long way
       pending.forEach((p) => clearTimeout(p.timer));
       pending.clear();
-      busy.forEach((b) => b.el.removeAttribute("aria-busy"));
+      busy.forEach((b) => release(b.el));
       busy.clear();
       [...preds.keys()].forEach((r) => settle(r, true)); // no reply comes
       replies.forEach((w) => w.reject(new Error("live: the connection closed")));
@@ -116,7 +116,7 @@
     }
     if (b) {
       busy.delete(m.ref);
-      b.el.removeAttribute("aria-busy");
+      release(b.el);
     }
     if (m.ref && m.type !== "redirect") settle(m.ref, m.type === "error" || !!m.error);
     const w = m.ref && replies.get(m.ref);
@@ -125,6 +125,15 @@
       if (m.type === "error" || m.error) w.reject(new Error(m.error || "live: " + m.type));
       else w.resolve();
     }
+  }
+
+  // release ends an element's wait for a reply; one a busy command marked
+  // stays busy until its mark is undone.
+  // When the wait set aria-busy before the mark, the mark puts back none.
+  function release(el) {
+    const m = marked.get(el);
+    if (!m) return el.removeAttribute("aria-busy");
+    m.recs.forEach((r) => { if (r.el === el && r.name === "aria-busy") r.before = null; });
   }
 
   function fail(message, ref) {
@@ -518,7 +527,7 @@
     let ops;
     try { ops = JSON.parse(el.getAttribute("data-vk-js-" + e.type)); } catch (_) {}
     if (!Array.isArray(ops)) return warn("bad JS commands in data-vk-js-" + e.type);
-    if (e.type === "submit" || ops.some((o) => o[0] === "push")) prevent(el, e);
+    if (ops.some((o) => o[0] === "push")) prevent(el, e); // else a submit goes on: a plain form post
     return run(el, ops, e);
   }
 
@@ -565,6 +574,8 @@
         if (!e || !(a.keys || []).includes(e.key)) return;
       } else if (name === "confirm") {
         if (!window.confirm(a.msg)) return false;
+      } else if (name === "busy") {
+        busyOn(el, a, ops.slice(i + 1).some((o) => o[0] === "push" && (o[1] || {}).h));
       } else if (name !== "end") {
         if (jsOps[name]) jsOps[name](el, a, e);
         else warn("unknown JS command " + name);
@@ -607,7 +618,9 @@
   // holds now: a value, checked state or attribute, else whether it holds.
   function arg(el, v) {
     if (!v || typeof v !== "object" || Object.keys(v).length !== 1 || !v.$read) return v;
-    const c = v.$read, t = targets(el, c.to)[0];
+    const c = v.$read;
+    if (c.and || c.or || c.not) return holds(el, c);
+    const t = targets(el, c.to)[0];
     if ("exists" in c) return !!t === !!c.exists;
     if (!t) return null;
     if ("value_eq" in c || "is" in c) return holds(el, c);
@@ -620,7 +633,7 @@
   // without being sent.
   function refuse(el, rest, r) {
     const p = rest.find((o) => o[0] === "push");
-    if (p) settle(track(el, p[1] || {}, r ? r.splice(0) : []), true);
+    if (p) settle(track(el, p[1] || {}, r ? r.splice(0) : [], 0, r && r.busy && r.busy.splice(0)), true);
   }
 
   // Optimistic updates: a sent push keeps what its chain changed before it
@@ -628,10 +641,10 @@
   // time, or a lost connection undoes them (but not what the server has
   // changed since) and runs on_error; a reply without one runs on_ok.
   let local = 0;
-  function track(el, a, recs, sent) {
+  function track(el, a, recs, sent, marks) {
     const id = sent || "local" + ++local;
     const root = el && el.closest("[data-vk-id]");
-    const p = { el, a, recs, root: root && root.getAttribute("data-vk-id") };
+    const p = { el, a, recs, marks: marks || [], root: root && root.getAttribute("data-vk-id") };
     preds.set(id, p);
     if (el) {
       el.removeAttribute("data-vk-failed");
@@ -651,6 +664,7 @@
       if (!p.a.keep) for (let i = p.recs.length; i--;) undo(p.recs[i]);
       if (el) el.setAttribute("data-vk-failed", "");
     }
+    p.marks.forEach(unbusy); // usable again before its hooks run
     const hooks = error ? p.a.on_error : p.a.on_ok;
     if (hooks) run(el && el.isConnected ? el : p.root && byID(p.root) || document.body, hooks, null, []);
   }
@@ -698,32 +712,74 @@
   }
 
   // targets finds what a command acts on: el, or elements by ref (within
-  // el's instance, not the instances inside it), selector, closest ancestor,
-  // or selector inside el.
+  // el's instance, not the instances inside it), by attribute (the same, or
+  // the page's), selector, closest ancestor, or selector inside el. A ref,
+  // sel or attribute of several parts finds what any part does, in page
+  // order, each once.
   function targets(el, to) {
     if (!to) return el ? [el] : [];
     try {
       if (to.ref !== undefined) {
-        const scope = el && el.closest("[data-vk-id]");
-        const own = (x) => !scope || x === scope || x.parentElement.closest("[data-vk-id]") === scope;
-        const all = Array.from((scope || document).querySelectorAll("[data-vk-ref]"));
-        if (scope && scope.hasAttribute("data-vk-ref")) all.unshift(scope);
-        return all.filter((x) => x.getAttribute("data-vk-ref") === String(to.ref) && own(x));
+        const names = [].concat(to.ref).map(String);
+        return scoped(el, "[data-vk-ref]", false).filter((x) => names.includes(x.getAttribute("data-vk-ref")));
       }
-      if (to.sel) return Array.from(document.querySelectorAll(to.sel));
+      if (to.attr) return scoped(el, attrSel(to.attr), !!to.attr.page);
+      if (to.sel) return Array.from(document.querySelectorAll([].concat(to.sel).join(", ")));
       if (to.closest) { const c = el && el.closest(to.closest); return c ? [c] : []; }
       if (to.inner) return el ? Array.from(el.querySelectorAll(to.inner)) : [];
     } catch (err) { warn(err.message); }
     return [];
   }
+  // scoped is the elements matching sel in el's instance (or, with page or
+  // on a static page, the document), the instance's root among them.
+  function scoped(el, sel, page) {
+    const scope = !page && el && el.closest("[data-vk-id]");
+    const all = Array.from((scope || document).querySelectorAll(sel));
+    if (!scope) return all;
+    if (scope.matches(sel)) all.unshift(scope);
+    return all.filter((x) => x === scope || x.parentElement.closest("[data-vk-id]") === scope);
+  }
+  // attrSel is an attr target's selector, every name and value escaped: a
+  // value is data, never selector syntax.
+  const esc = (s) => window.CSS && CSS.escape ? CSS.escape(String(s)) : cssEscape(String(s));
+  const matchOps = { prefix: "^=", suffix: "$=", contains: "*=", word: "~=" };
+  function attrSel(a) {
+    const name = esc(a.name), is = a.is || [];
+    if (!is.length) return "[" + name + "]";
+    return is.map((v) => {
+      const [k, s] = v && typeof v === "object" ? Object.entries(v)[0] || [] : ["", v];
+      if (k && (!matchOps[k] || !s)) return null; // an unknown or empty matcher matches nothing
+      return "[" + name + (k ? matchOps[k] : "=") + '"' + esc(s) + '"]';
+    }).filter(Boolean).join(", ") || ":not(*)";
+  }
+  // cssEscape is CSS.escape where a browser lacks it (CSSOM's algorithm).
+  function cssEscape(s) {
+    let out = "";
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (c === 0) out += "\uFFFD";
+      else if (c <= 0x1f || c === 0x7f || (c >= 0x30 && c <= 0x39 && (i === 0 || i === 1 && s[0] === "-"))) out += "\\" + c.toString(16) + " ";
+      else if (i === 0 && s === "-") out += "\\-";
+      else if (c >= 0x80 || c === 0x2d || c === 0x5f || c >= 0x30 && c <= 0x39 || c >= 0x41 && c <= 0x5a || c >= 0x61 && c <= 0x7a) out += s[i];
+      else out += "\\" + s[i];
+    }
+    return out;
+  }
 
-  // holds tests a condition on the first element its target names; only
-  // exists holds without one.
+  // holds tests a condition: and, or and not by their parts; a read by
+  // every element its target names, or with some by at least one. A read
+  // of no element fails, except exists.
   const read = (t) => isField(t) ? t.value : t.getAttribute("value") || "";
   function holds(el, c) {
-    const t = targets(el, c.to)[0];
-    if ("exists" in c) return !!t === !!c.exists;
-    if (!t) return false;
+    if (c.and) return c.and.every((k) => holds(el, k || {}));
+    if (c.or) return c.or.some((k) => holds(el, k || {}));
+    if (c.not) return !holds(el, c.not);
+    const ts = targets(el, c.to);
+    if ("exists" in c) return !!ts.length === !!c.exists;
+    if (!ts.length) return false;
+    return c.some ? ts.some((t) => passes(t, c)) : ts.every((t) => passes(t, c));
+  }
+  function passes(t, c) {
     if ("checked" in c) return t.tagName === "INPUT" && !!t.checked === !!c.checked;
     if ("value_eq" in c) return read(t) === String(c.value_eq);
     if ("value" in c) return !!read(t) === !!c.value;
@@ -731,6 +787,58 @@
     if ("attr" in c) return t.hasAttribute(c.attr);
     return true;
   }
+
+  // Busy: an element marked busy (aria-busy) while what its event started
+  // is under way; its fields readonly (still submitted), its buttons and
+  // links aria-disabled and out of the tab order, and clicks and submits on
+  // it ignored. Each change is recorded as a command's is, and put back
+  // when it is undone: by the reply to a push of the chain (before its
+  // hooks), its timeout, or the page coming back from the back/forward
+  // cache.
+  const marked = new Map(); // el → its mark: {recs, timer}
+  const pressable = "button, a[href], input[type=submit], input[type=button], input[type=reset], input[type=image]";
+  function busyOn(el, a, later) {
+    const r = rec;
+    for (const t of targets(el, a.to)) {
+      if (marked.has(t)) continue;
+      const m = { recs: [], fresh: true }; // fresh: the submit a click marking it goes on to is let through
+      marked.set(t, m);
+      setTimeout(() => { m.fresh = false; }, 0);
+      rec = m.recs; // its changes are its own, no push's predictions
+      try {
+        const set = (x, name, v) => { if (x.getAttribute(name) !== v && !(name === "readonly" && x.hasAttribute(name))) touch(x, name, () => x.setAttribute(name, v)); };
+        touch(t, "aria-busy", () => t.setAttribute("aria-busy", "true")); // recorded even when set: a reply's wait may have set it
+        for (const x of [t, ...t.querySelectorAll("input, textarea, select, button, a[href]")]) {
+          if (x.matches(pressable)) { set(x, "aria-disabled", "true"); set(x, "tabindex", "-1"); }
+          else if (isField(x)) set(x, "readonly", "");
+        }
+      } finally { rec = r; }
+      if (a.timeout > 0) m.timer = setTimeout(() => unbusy(m), a.timeout);
+      if (!r) continue;
+      const p = !later && r.sent && preds.get(r.sent);
+      if (p) p.marks.push(m); // a push before it, still waiting
+      else (r.busy ||= []).push(m); // the next push's
+    }
+  }
+  function unbusy(m) {
+    for (const [t, x] of marked) if (x === m) marked.delete(t);
+    clearTimeout(m.timer);
+    for (let i = m.recs.length; i--;) undo(m.recs[i]);
+  }
+  const unbusyAll = () => [...new Set(marked.values())].forEach(unbusy);
+  const busyAt = (t, submit) => {
+    for (; t; t = t.parentElement) if (marked.has(t) && !(submit && marked.get(t).fresh)) return true;
+    return false;
+  };
+  for (const type of ["click", "submit"]) {
+    document.addEventListener(type, (e) => {
+      const t = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
+      if (!busyAt(t, type === "submit")) return;
+      e.preventDefault();
+      e.stopImmediatePropagation ? e.stopImmediatePropagation() : e.stopPropagation();
+    }, true);
+  }
+  window.addEventListener("pageshow", (e) => { if (e.persisted) unbusyAll(); });
 
   // Reconciliation: per element, each attribute (or its text, TEXT) a
   // command changed, with the server's value then and the command's. A
@@ -952,7 +1060,7 @@
       const recs = rec ? rec.splice(0) : [];
       if (!a.h) return; // rendered without a session
       if (!live) return warn("a push command needs a live page");
-      if (!joined) return settle(track(el, a, recs), true); // not sent: it fails at once
+      if (!joined) return settle(track(el, a, recs, 0, rec && rec.busy && rec.busy.splice(0)), true); // not sent: it fails at once
       const type = a.event || (e ? e.type : "push");
       const msg = { type: "event", target: a.h, event: type };
       if (e && typeof e.key === "string") msg.key = e.key;
@@ -961,8 +1069,12 @@
       const form = type === "submit" ? (e && e.target.closest("form")) || (el && el.closest("form")) : null;
       if (form) msg.form = formOf(form, e && e.submitter);
       flush();
+      const marks = rec && rec.busy ? rec.busy.splice(0) : [];
       const id = send(msg, el, form);
-      if (id) track(el, a, recs, id);
+      if (id) {
+        track(el, a, recs, id, marks);
+        if (rec) rec.sent = id;
+      } else marks.forEach(unbusy);
     },
   };
 
@@ -1007,6 +1119,7 @@
     if (!n.patch) {
       preds.forEach((p) => clearTimeout(p.timer));
       preds.clear();
+      unbusyAll();
       pageID = n.pop && n.pop.vk || newPage();
     }
     if (n.pop) history.replaceState({ ...history.state, vk: pageID }, "");

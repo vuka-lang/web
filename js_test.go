@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -410,4 +411,68 @@ func optimisticServer(v int) http.Handler {
 		io.WriteString(w, `<!doctype html><html><head><title>optimistic</title></head><body>`+page(5, []string{"a", "b"})+`<script src="/_vuka/live.js" data-vk-token="x" defer></script></body></html>`)
 	})
 	return mux
+}
+
+// A plain POST form marked busy as it submits: the browser posts it, its
+// fields' values included; a second click does nothing; the next page
+// arrives; going back shows the form usable. An invalid form never submits,
+// so never goes busy.
+func TestBrowserBusyForm(t *testing.T) {
+	var posts atomic.Int32
+	release := make(chan struct{})
+	type login struct{ Username, Password string }
+	app := New(Only("none"))
+	app.Get("/login", func() ui.Node {
+		return fullPage(ui.El("form", attrs("method", "post", "action", "/login", "class", "group", "onSubmit", ui.On(ui.JS.Busy())),
+			ui.El("input", attrs("name", "username", "required", true)),
+			ui.El("input", attrs("name", "password", "type", "password")),
+			ui.El("button", attrs("id", "go"), ui.Text("Sign in"))))
+	})
+	app.Post("/login", func(in login) ui.Node {
+		posts.Add(1)
+		<-release
+		return fullPage(ui.El("p", attrs("id", "hi"), ui.Text("hi "+in.Username+"/"+in.Password)))
+	})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	p := chrome.Launch(t).Visit(srv.URL + "/login")
+	const idle = `(() => { const f = document.querySelector("form"); return f && !f.hasAttribute("aria-busy") &&
+		!document.querySelector("[name=username]").hasAttribute("readonly") && !document.querySelector("#go").hasAttribute("aria-disabled"); })()`
+
+	p.Click("#go") // username is required: the browser refuses the submit
+	p.Wait(`document.activeElement.name === "username"`)
+	time.Sleep(100 * time.Millisecond)
+	p.Wait(idle)
+	if posts.Load() != 0 {
+		t.Fatal("an invalid form was posted")
+	}
+
+	p.Type("[name=username]", "ann")
+	p.Type("[name=password]", "pw")
+	p.Eval(`window.before = true`, nil)
+	p.Click("#go")
+	p.Wait(`(() => { const f = document.querySelector("form"); return f && f.getAttribute("aria-busy") === "true" &&
+		document.querySelector("[name=username]").hasAttribute("readonly") && document.querySelector("#go").getAttribute("aria-disabled") === "true"; })()`)
+	p.Click("#go")
+	p.Press("Enter")
+	time.Sleep(100 * time.Millisecond)
+	close(release)
+	p.WaitText("#hi", "hi ann/pw")
+	if n := posts.Load(); n != 1 {
+		t.Fatalf("%d posts, want 1", n)
+	}
+
+	p.Eval(`history.back()`, nil)
+	p.Wait(`location.pathname === "/login"`)
+	p.Wait(idle)
+	var cached bool
+	p.Eval(`window.before === true`, &cached)
+	t.Logf("back/forward cache: %v", cached) // either way the form is usable
 }

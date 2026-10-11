@@ -160,13 +160,197 @@ test("conditions and blocks", () => {
   eq(click(), "checked a big req after", "checked and a");
 });
 
-test("conditions read the first element; refs on a static page are the document's", () => {
+test("a read holds when every element passes it; refs on a static page are the document's", () => {
   const p = open(`<input class="c" type="checkbox"><input class="c" type="checkbox" checked><p data-vk-ref="r"></p><div data-vk-id="c1"><p data-vk-ref="r"></p></div>
     <button data-vk-js-click='${js([["if", { cond: { to: { sel: ".c" }, checked: true } }], ["add_class", { names: ["any"] }], ["end", {}],
       ["if", { cond: { to: { sel: ".none" }, value: false } }], ["add_class", { names: ["missing"] }], ["end", {}],
       ["set_value", { to: { sel: ".c" }, value: "true" }], ["add_class", { to: { ref: "r" }, names: ["r"] }]])}'></button>`);
   p.fire("button", "click");
   eq([p.$("button").className, p.doc.querySelectorAll(".c").map((c) => c.checked), p.doc.querySelectorAll(".r").length], ["", [true, true], 2]);
+});
+
+test("targets of several parts: every element any part finds, in page order, each once", () => {
+  const p = open(`<div data-vk-id="c1"><input data-vk-ref="b" id="b1"><input data-vk-ref="a" id="a1"><input data-vk-ref="c" id="c1">
+    <i class="x" id="i1"></i><i class="x y" id="i2"></i><i class="y" id="i3"></i>
+    <button data-vk-js-click='${js([
+      ["toggle_class", { to: { ref: ["a", "b", "a"] }, names: ["r"] }],
+      ["toggle_class", { to: { sel: [".y", ".x", "#i2"] }, names: ["s"] }],
+      ["call", { fn: "seen", args: [{ $read: { to: { ref: ["a", "b"] }, attr: "id" } }] }],
+      ["focus", { to: { ref: ["c", "a"] } }],
+    ])}'></button></div>`);
+  let first;
+  p.window.vuka.register("seen", (ctx, id) => { first = id; });
+  p.fire("button", "click");
+  eq(p.doc.querySelectorAll(".r").map((e) => e.id), ["b1", "a1"], "refs, toggled once each");
+  eq(p.doc.querySelectorAll(".s").map((e) => e.id), ["i1", "i2", "i3"], "selectors, toggled once each");
+  eq([first, p.doc.activeElement.id], ["b1", "a1"], "a read and focus take the first in page order");
+});
+
+test("attribute targets: presence, exact values, matchers; the instance's own unless page", () => {
+  const p = open(`<div data-vk-id="c1"><input name="username" id="u"><input name="password" id="p"><input name="step-1" data-tags="new old" id="s1">
+    <input name="last-step" data-tags="older" id="s2"><input name="pre-draft-x" id="d">
+    <button data-vk-js-click='${js([
+      ["add_class", { to: { attr: { name: "name", is: ["username", "password"] } }, names: ["exact"] }],
+      ["add_class", { to: { attr: { name: "name", is: [{ prefix: "step-" }] } }, names: ["prefix"] }],
+      ["add_class", { to: { attr: { name: "name", is: [{ suffix: "-step" }] } }, names: ["suffix"] }],
+      ["add_class", { to: { attr: { name: "name", is: [{ contains: "draft" }] } }, names: ["contains"] }],
+      ["add_class", { to: { attr: { name: "data-tags", is: [{ word: "old" }] } }, names: ["word"] }],
+      ["add_class", { to: { attr: { name: "data-tags" } }, names: ["has"] }],
+      ["add_class", { to: { attr: { name: "data-outside" } }, names: ["mine"] }],
+      ["add_class", { to: { attr: { name: "data-outside", page: true } }, names: ["page"] }],
+      ["add_class", { to: { attr: { name: "name", is: [{ prefix: "" }, { bogus: "u" }] } }, names: ["none"] }],
+    ])}'></button><div data-vk-id="c2"><input name="username" id="nested"></div></div><p data-vk-id="c3"><b data-vk-ref="x" data-outside id="out"></b></p>`);
+  p.fire("button", "click");
+  const by = (c) => p.doc.querySelectorAll("." + c).map((e) => e.id);
+  eq(["exact", "prefix", "suffix", "contains", "word", "has", "mine", "page", "none"].map(by),
+    [["u", "p"], ["s1"], ["s2"], ["d"], ["s1"], ["s1", "s2"], [], ["out"], []]);
+});
+
+test("attribute targets escape: a value can't break out of its selector", () => {
+  const evil = `x"], * , [name="`;
+  const p = open(`<input name='${evil.replace(/"/g, "&quot;")}' id="evil"><input name="other" id="other"><input name="1a" id="digit"><input name='a\\b' id="slash">
+    <button data-vk-js-click='${js([
+      ["add_class", { to: { attr: { name: "name", is: [evil] } }, names: ["hit"] }],
+      ["add_class", { to: { attr: { name: "name", is: [{ contains: '"]' }] } }, names: ["part"] }],
+      ["add_class", { to: { attr: { name: "name", is: ["1a", "a\\b"] } }, names: ["esc"] }],
+      ["add_class", { to: { attr: { name: 'x"]' } }, names: ["bad"] }],
+    ])}'></button>`);
+  p.fire("button", "click");
+  eq([p.doc.querySelectorAll(".hit").map((e) => e.id), p.doc.querySelectorAll(".part").map((e) => e.id), p.doc.querySelectorAll(".esc").map((e) => e.id),
+    p.doc.querySelectorAll(".bad").length], [["evil"], ["evil"], ["digit", "slash"], 0]);
+});
+
+test("conditions join: and, or, not; reads of every element or some; no element fails a read", () => {
+  const cond = (c) => [["if", { cond: c }], ["add_class", { names: ["yes"] }], ["else", {}], ["add_class", { names: ["no"] }], ["end", {}]];
+  const p = open(`<input class="f" value="a"><input class="f"><input type="checkbox" id="c" checked><button data-vk-js-click="[]"></button>`);
+  const holds = (c) => {
+    const b = p.$("button");
+    b.setAttribute("class", "");
+    b.setAttribute("data-vk-js-click", JSON.stringify(cond(c)));
+    p.fire(b, "click");
+    return b.className;
+  };
+  const f = { sel: ".f" }, none = { sel: ".none" }, c = { to: { sel: "#c" }, checked: true };
+  eq([holds({ to: f, value: true }), holds({ to: f, value: true, some: true }), holds({ to: f, value_eq: "a", some: true }), holds({ to: f, value_eq: "b", some: true })],
+    ["no", "yes", "yes", "no"], "every, some");
+  eq([holds({ to: none, value: true }), holds({ to: none, value: true, some: true }), holds({ not: { to: none, value: true } }), holds({ to: none, exists: true })],
+    ["no", "no", "yes", "no"], "no element");
+  eq([holds({ and: [c, { to: f, value: true, some: true }] }), holds({ and: [c, { to: f, value: true }] }), holds({ or: [{ to: f, value: true }, c] }),
+    holds({ or: [{ to: none, exists: true }, { not: c }] }), holds({ and: [] }), holds({ or: [] })],
+    ["yes", "no", "yes", "no", "yes", "no"], "joined");
+  eq(holds({ or: [{ and: [c, { to: f, value: true }] }, { not: { to: none, exists: true } }] }), "yes", "nested: (c and every f) or no .none");
+  p.$("#c").checked = false;
+  p.$("#c").setAttribute("checked", "");
+  let v;
+  p.window.vuka.register("r", (ctx, x) => { v = x; });
+  window_run(p, [["call", { fn: "r", args: [{ $read: { and: [c, { not: { to: f, value: true } }] } }] }]]);
+  eq(v, false, "a joined read as a call's argument");
+});
+
+test("when and its else: if blocks, nested", () => {
+  // As ui.JS.When(c, ui.JS.When(v, …)).Else(…) encodes.
+  const ops = [
+    ["if", { cond: { to: { sel: "#c" }, checked: true } }],
+    ["if", { cond: { to: { sel: "#v" }, value: true } }], ["add_class", { names: ["both"] }], ["end", {}],
+    ["add_class", { names: ["c"] }],
+    ["else", {}], ["add_class", { names: ["not-c"] }], ["end", {}],
+    ["add_class", { names: ["after"] }],
+  ];
+  const p = open(`<input id="c" type="checkbox"><input id="v"><button data-vk-js-click='${js(ops)}'></button>`);
+  const click = () => { p.$("button").setAttribute("class", ""); p.fire("button", "click"); return p.$("button").className; };
+  eq(click(), "not-c after", "else");
+  p.$("#c").checked = true;
+  eq(click(), "c after", "when");
+  p.$("#v").value = "x";
+  eq(click(), "both c after", "nested when");
+});
+
+// login is a plain POST form, as onSubmit={ui.JS.Busy()} renders it.
+const login = (ops = [["busy", {}]], extra = "") => `<form method="post" class="group" data-vk-js-submit='${js(ops)}'>
+  <input name="username" value="ann"><input name="password" value="pw"><input name="code" readonly="readonly" value="7">
+  <select name="lang"><option>en</option></select><textarea name="note"></textarea>
+  <a href="/help" aria-disabled="false" id="help">help</a><button id="go" tabindex="2">Sign in</button>${extra}</form>`;
+const busyState = (p) => {
+  const a = (sel, n) => p.$(sel).getAttribute(n);
+  return [a("form", "aria-busy"), a("[name=username]", "readonly"), a("[name=code]", "readonly"), a("select", "readonly"), a("textarea", "readonly"),
+    a("#help", "aria-disabled"), a("#help", "tabindex"), a("#go", "aria-disabled"), a("#go", "tabindex")];
+};
+const idle = [null, null, "readonly", null, null, "false", null, null, "2"];
+const busy = ["true", "", "readonly", "", "", "true", "-1", "true", "-1"];
+
+test("busy: a plain post goes on, its fields still sent; a second submit or click is ignored", () => {
+  const p = open(login());
+  let posts = 0;
+  p.doc.addEventListener("submit", (e) => { if (!e.defaultPrevented) posts++; });
+  let clicks = 0;
+  p.doc.addEventListener("click", () => { clicks++; });
+  const first = p.fire("form", "submit");
+  eq([first.defaultPrevented, posts, busyState(p)], [false, 1, busy], "the browser posts it, marked busy");
+  const fd = new p.window.FormData(p.$("form"));
+  eq([...fd].map(([k]) => k), ["username", "password", "code", "lang", "note"], "readonly fields are submitted");
+  eq([p.$("[name=username]").hasAttribute("disabled")], [false], "never disabled");
+  p.tick(0);
+  const again = p.fire("form", "submit");
+  const click = p.fire("#go", "click");
+  eq([again.defaultPrevented, click.defaultPrevented, posts, clicks], [true, true, 1, 0], "ignored");
+  p.window.dispatchEvent(Object.assign(new p.window.Event("pageshow"), { persisted: false }));
+  eq(busyState(p), busy, "a pageshow not from the back/forward cache leaves it");
+  p.window.dispatchEvent(Object.assign(new p.window.Event("pageshow"), { persisted: true }));
+  eq(busyState(p), idle, "from the back/forward cache: undone, exactly as it was");
+  eq(p.fire("form", "submit").defaultPrevented, false, "usable again");
+});
+
+test("busy: a click marking its form lets that click's submit through", () => {
+  const p = open(login([], "").replace(`<button id="go" tabindex="2">`, `<button id="go" tabindex="2" data-vk-js-click='${js([["busy", { to: { closest: "form" } }]])}'>`));
+  p.fire("#go", "click");
+  eq([p.$("form").getAttribute("aria-busy"), p.fire("form", "submit").defaultPrevented], ["true", false], "the click's own submit");
+  p.tick(0);
+  eq(p.fire("form", "submit").defaultPrevented, true, "a later one");
+});
+
+test("busy: undone by its timeout", () => {
+  const p = open(login([["busy", { timeout: 500 }]]));
+  p.fire("form", "submit");
+  p.tick(499);
+  eq(busyState(p), busy, "before");
+  p.tick(1);
+  eq(busyState(p), idle, "after");
+});
+
+test("busy: the reply to the chain's push undoes it, before on_error runs", () => {
+  const form = (ops) => `<div data-vk-id="c1">${login(ops)}<p id="log"></p></div>`;
+  const usable = [["if", { cond: { not: { to: { sel: "form" }, attr: "aria-busy" } } }], ["set_attr", { to: { sel: "#log" }, name: "data-usable", value: "yes" }], ["end", {}]];
+  for (const [ok, hook] of [[true, "on_ok"], [false, "on_error"]]) {
+    const ops = [["busy", {}], ["push", { h: "c1:0", [hook]: usable }]];
+    const p = joined(form(ops));
+    const s = p.fire("form", "submit");
+    eq([s.defaultPrevented, busyState(p)], [true, busy], "a live submit: prevented, busy");
+    p.tick(0);
+    p.fire("form", "submit");
+    eq(p.ws().sent.length, 2, "a second submit sends nothing");
+    p.server({ type: "patch", ref: sentRef(p, 1), updates: [{ id: "c1", html: form(ops) }], error: ok ? undefined : "nope" });
+    eq([busyState(p), p.$("#log").getAttribute("data-usable")], [idle, "yes"], (ok ? "ok" : "error") + ": undone before its hook");
+    p.server({ type: "patch", updates: [{ id: "c1", html: form(ops) }] });
+    eq(busyState(p), idle, "a later patch doesn't bring it back");
+  }
+  // A busy after the push waits for it too; one with no connection fails at once.
+  const after = [["push", { h: "c1:0" }], ["busy", {}]];
+  const p = joined(form(after));
+  p.fire("form", "submit");
+  eq(busyState(p), busy, "after the push");
+  p.server({ type: "patch", ref: sentRef(p, 1), updates: [] });
+  eq(busyState(p), idle, "its reply");
+  const q = open(form([["busy", {}], ["push", { h: "c1:0" }]]), { live: true });
+  q.fire("form", "submit");
+  eq(busyState(q), idle, "not joined: the push fails at once, and the mark with it");
+});
+
+test("busy: puts back what was there, and the server's later value wins", () => {
+  const p = open(`<div data-vk-id="c1"><button id="b" aria-busy="false" aria-disabled="true" tabindex="-1" data-vk-js-click='${js([["busy", { timeout: 100 }]])}'>x</button></div>`);
+  p.fire("#b", "click");
+  eq([p.$("#b").getAttribute("aria-busy"), p.$("#b").getAttribute("aria-disabled"), p.$("#b").getAttribute("tabindex")], ["true", "true", "-1"]);
+  p.tick(100);
+  eq([p.$("#b").getAttribute("aria-busy"), p.$("#b").getAttribute("aria-disabled"), p.$("#b").getAttribute("tabindex")], ["false", "true", "-1"], "as it was");
 });
 
 test("debounce: the steps after it run once things are quiet, per element and event", () => {
@@ -278,7 +462,7 @@ test("the nearest element with either attribute takes the event", () => {
   eq([p.$("button").className, p.ws().sent.length], ["on", 1], "commands only");
   p.fire("#srv", "click");
   eq([p.doc.querySelectorAll("div")[1].className, p.ws().sent.length], ["", 2], "the handler only");
-  eq(p.fire("form", "submit").defaultPrevented, true, "a submit's commands prevent it");
+  eq([p.fire("form", "submit").defaultPrevented, p.$("form").className], [false, "sub"], "a submit's commands without a push let it go on");
 });
 
 test("the chain runs before data-vk-on; a declined confirm keeps the event from the server", () => {
