@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -264,6 +265,24 @@ func TestLiveLimits(t *testing.T) {
 			srv.Close()
 		}
 	})
+	t.Run("per address behind a trusted proxy", func(t *testing.T) {
+		app := liveApp(LiveMaxConnsPerIP(1), TrustedProxies("127.0.0.1"))
+		srv := httptest.NewServer(app.Handler())
+		defer srv.Close()
+		from := func(ip string) http.Header {
+			return http.Header{"Origin": {srv.URL}, "X-Forwarded-For": {ip}}
+		}
+		for i, ip := range []string{"203.0.113.1", "203.0.113.2"} {
+			_, tok := pageToken(t, srv, "/counter?start="+string(rune('0'+i)))
+			if _, err := dial(t, srv, tok, from(ip)); err != nil {
+				t.Fatalf("%s: %v", ip, err)
+			}
+		}
+		_, tok := pageToken(t, srv, "/counter?start=9")
+		if _, err := dial(t, srv, tok, from("203.0.113.1")); err == nil || !strings.Contains(err.Error(), "429") {
+			t.Fatalf("a second socket from one client behind the proxy: %v", err)
+		}
+	})
 	t.Run("join deadline", func(t *testing.T) {
 		app := liveApp(LiveJoinTimeout(200 * time.Millisecond))
 		srv := httptest.NewServer(app.Handler())
@@ -324,6 +343,21 @@ func TestLiveLimits(t *testing.T) {
 		app2.Broadcast(context.Background(), "room:x", said{"hi"})
 		if _, err := recv(c2, 2*time.Second); websocket.CloseStatus(err) != closeReload {
 			t.Fatalf("check before a broadcast: %v", err)
+		}
+
+		// A broadcast is checked once, before it is delivered.
+		end(false)
+		var calls atomic.Int32
+		count := LiveCheck(func(context.Context) error { calls.Add(1); return nil })
+		app3 := liveApp(count, LiveCheckEvery(0))
+		srv3 := httptest.NewServer(app3.Handler())
+		defer srv3.Close()
+		c3, _ := joined(t, srv3, "/chat/x")
+		before := calls.Load()
+		app3.Broadcast(context.Background(), "room:x", said{"hi"})
+		must(t, c3)
+		if n := calls.Load() - before; n != 1 {
+			t.Fatalf("checks for one broadcast: %d", n)
 		}
 	})
 }
