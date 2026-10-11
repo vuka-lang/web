@@ -1,0 +1,110 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/auth"
+)
+
+type Notice struct {
+	ID   int    `json:"id"`
+	By   string `json:"by"`
+	Text string `json:"text"`
+}
+
+type NoticeForm struct {
+	Text string `form:"text" json:"text"`
+}
+
+// changed is broadcast to every board when the notices change.
+type changed struct{}
+
+// Notices are the board's, shared by every page and the API.
+@web.Service
+type Notices struct {
+	mu   sync.Mutex `inject:"-"`
+	list []Notice   `inject:"-"`
+	next int        `inject:"-"`
+}
+
+func (n *Notices) Add(by, text string) Notice {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.next++
+	x := Notice{ID: n.next, By: by, Text: text}
+	n.list = append(n.list, x)
+	return x
+}
+
+func (n *Notices) All() []Notice {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return slices.Clone(n.list)
+}
+
+func (n *Notices) Clear() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.list = nil
+}
+
+// Board is a live page; like every route it needs a sign-in.
+@web.Live("/board")
+type Board struct {
+	ui.Live
+	Notices *Notices
+	me      *auth.Identity
+	list    []Notice
+}
+
+// Mount sees who opened the page: the identity the connection joined with.
+func (b *Board) Mount(ctx context.Context) {
+	b.me = auth.Current(ctx)
+	b.list = b.Notices.All()
+	b.Subscribe("notices")
+}
+
+func (b *Board) Update(changed) { b.list = b.Notices.All() }
+
+@auth.Requires("notices.write")
+func (b *Board) Post(ctx context.Context, f NoticeForm) error {
+	text := strings.TrimSpace(f.Text)
+	if text == "" {
+		return errors.New("write something")
+	}
+	b.Notices.Add(name(b.me), text)
+	return web.Broadcast(ctx, "notices", changed{})
+}
+
+// Clear is for admins: anyone else's click is refused (the page gets
+// vk:error), whatever the browser sends.
+@auth.Requires("notices.delete")
+func (b *Board) Clear(ctx context.Context) error {
+	b.Notices.Clear()
+	return web.Broadcast(ctx, "notices", changed{})
+}
+
+func (b *Board) Render() ui.Node {
+	return <section class="board">
+		<Nav me={b.me} />
+		<h1>Notices</h1>
+		<ul class="notices">
+			{for _, n := range b.list {
+				<li id={"n" + strconv.Itoa(n.ID)}>{n.Text} <small>— {n.By}</small></li>
+			}}
+		</ul>
+		<form class="post" onSubmit={b.Post}>
+			<input name="text" placeholder="A notice" autocomplete="off" />
+			<button>Post</button>
+		</form>
+		<p><button type="button" class="clear" onClick={b.Clear}>Clear the board</button> (admins only)</p>
+		<p id="error" role="alert" data-vk-ignore></p>
+	</section>
+}

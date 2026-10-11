@@ -9,3 +9,8 @@ require (
 )
 
 require github.com/vuka-lang/ui v0.7.0
+
+require (
+	golang.org/x/crypto v0.55.0
+	golang.org/x/sys v0.47.0 // indirect
+)

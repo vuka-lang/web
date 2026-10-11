@@ -15,6 +15,7 @@
 	<tr><th>Handler</th><td>{{if .Func}}<code>{{.Func}}</code> <span class="dim">{{.Pos}}</span>{{else}}<span class="dim">—</span>{{end}}</td></tr>
 	<tr><th>Started</th><td>{{.Start.Format "15:04:05.000"}}</td></tr>
 </table>
+{{- range .Sections}}<h4>{{.Name}}</h4><table class="kv">{{range .Rows}}<tr><th>{{.Name}}</th><td>{{if .Refused}}<span class="errtext">{{.Value}}</span>{{else}}{{.Value}}{{end}}</td></tr>{{end}}</table>{{end}}
 {{- if .Params}}<h4>Parameters</h4><table class="grid">
 	<tr><th>Name</th><th>From</th><th>Value</th></tr>
 	{{- range .Params}}<tr><td><code>{{.Name}}</code></td><td class="dim">{{.From}}</td><td><code class="wrap">{{.Value}}</code></td></tr>{{end}}

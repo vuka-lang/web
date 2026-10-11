@@ -1,0 +1,27 @@
+package main
+
+import (
+	"context"
+	"strings"
+
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/auth"
+)
+
+// The API: a browser's session cookie or a bearer token from
+// POST /auth/token, whichever the request carries.
+
+@web.Get("/api/notices")
+@auth.Requires("notices.read")
+func ListNotices(n *Notices) []Notice { return n.All() }
+
+@web.Post("/api/notices")
+@auth.Requires("notices.write")
+func PostNotice(ctx context.Context, me auth.Identity, in NoticeForm, n *Notices) Result[Notice] {
+	if strings.TrimSpace(in.Text) == "" {
+		return Err(web.BadRequest("text is required"))
+	}
+	x := n.Add(name(&me), in.Text)
+	web.Broadcast(ctx, "notices", changed{})
+	return Ok(x)
+}

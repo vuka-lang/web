@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,7 +39,7 @@ import (
 // names, or else a bare HTML document. Use adds middleware.
 func Live(path string, opts ...LiveOption) func(*vuka.Type) {
 	return func(t *vuka.Type) {
-		ls := &liveSpec{path: path, typ: t.Reflect, name: t.Name, pkg: t.Reflect.PkgPath()}
+		ls := &liveSpec{path: path, typ: t.Reflect, name: t.Name, pkg: t.Reflect.PkgPath(), attrs: flattenAttrs(t.Attrs)}
 		for _, o := range opts {
 			o.liveOption(ls)
 		}
@@ -72,6 +73,17 @@ type liveSpec struct {
 	template        reflect.Value
 	layout          func(ui.Node) ui.Node
 	mw              []Middleware
+	attrs           []any         // the type's typed attributes
+	routeOpts       []RouteOption // App.Live's Attrs and Wrap
+}
+
+// route is the page's GET route.
+func (ls *liveSpec) route() *routeSpec {
+	s := &routeSpec{method: http.MethodGet, path: ls.path, where: "live page " + ls.name, live: ls, mw: slices.Clone(ls.mw), attrs: slices.Clone(ls.attrs)}
+	for _, o := range ls.routeOpts {
+		o(s)
+	}
+	return s
 }
 
 // Live serves component (a pointer to a stateful component, whose fields are
@@ -83,7 +95,7 @@ func (a *App) Live(path string, component ui.Stateful, opts ...LiveOption) *App 
 	for _, o := range opts {
 		o.liveOption(ls)
 	}
-	a.specs = append(a.specs, &routeSpec{method: http.MethodGet, path: path, where: "live page " + ls.name, live: ls, mw: ls.mw})
+	a.specs = append(a.specs, ls.route())
 	return a
 }
 

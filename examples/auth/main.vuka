@@ -1,0 +1,34 @@
+// Command auth shows github.com/vuka-lang/web/auth: a login page, pages and
+// a live board that need a sign-in, an action only admins may take, and a
+// JSON API that takes bearer tokens.
+//
+//	vuka run ./examples/auth     then open http://localhost:8080
+//
+// Sign in as ada@example.com / correct horse battery (an admin) or
+// bob@example.com / hunter2hunter2.
+package main
+
+import (
+	"log"
+
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/auth"
+)
+
+// options are the app's, shared by main and the tests.
+func options() []web.Option {
+	return []web.Option{
+		auth.Module(auth.Config{
+			Endpoints: "/auth", // POST /auth/login, /auth/logout, /auth/token; GET /auth/me
+			Roles:     map[string][]string{"admin": {"notices.*"}},
+			// Users: the @web.Service implementing auth.Users (users.vuka).
+		}),
+		web.LiveLayout(livePage),
+	}
+}
+
+func main() {
+	if err := web.New(options()...).Run(""); err != nil {
+		log.Fatal(err)
+	}
+}

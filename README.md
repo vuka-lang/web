@@ -94,6 +94,8 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.Style(paths…)`, `Script(paths…)`, `CSS(src)`, `JS(src)` | the app's own stylesheets and scripts, unscoped (below) |
 | `web.NoToolbar()` | no development toolbar (below) |
 | `web.NoCrons()`, `web.CronClock(c)` | don't schedule the crons; run them by another clock (below) |
+| `web.CSRF(trusted…)` | refuse cross-origin form posts and the like (below) |
+| `web.WrapRoutes`, `ParamFrom`, `LiveCheck` | hooks for libraries guarding routes (below) |
 
 `app.Build()` resolves everything — every parameter of every route, every
 result and view, the whole dependency graph — and returns all problems at
@@ -1023,6 +1025,63 @@ web.AddPanel("Cache", func(notes []any) ui.Node {
 A panel noted without `AddPanel` lists its values. A panel's markup may
 use the toolbar's classes: `kv` and `grid` tables, `dim`, `errtext`,
 `status`, and `preview` for an `<iframe>` (the Mail panel's).
+
+## Authentication
+
+[`web/auth`](auth) signs users in and guards the app. The app writes one
+interface — where users and their passwords live — and every route, live
+page and live event then needs a sign-in unless marked public:
+
+```vuka
+@web.Service
+type Users struct{ db *DB }
+
+func (u *Users) FindLogin(ctx context.Context, login string) (*auth.Identity, string, error) { … } // + the encoded password
+func (u *Users) Load(ctx context.Context, id string) (*auth.Identity, error) { … }
+
+@web.Get("/login")
+@auth.Public
+func Login(r *http.Request) ui.Node { return <auth.LoginPage request={r} /> }
+
+@web.Get("/orders")
+@auth.Requires("orders.read")
+func Orders(me *auth.Identity, store *Store) Result[[]Order] { return store.For(me.ID) }
+
+@auth.Requires("orders.delete")
+func (b *Board) Clear(ctx context.Context) error { … }  // a live event: refused to anyone else
+
+func main() {
+	web.New(auth.Module(auth.Config{Endpoints: "/auth"})).Run("")
+}
+```
+
+Cookie sessions for pages and live pages (rotated on sign-in, HttpOnly,
+SameSite=Lax, Secure under HTTPS), opaque bearer tokens for APIs
+(`POST /auth/token`), JWTs issued elsewhere, Argon2id hashes (bcrypt ones
+upgraded at login), one error for an unknown login and a wrong password,
+throttled failures, `auth.RevokeUser` closing the user's live pages, and
+`authtest` for tests. Its sessions and tokens are kept in memory unless the
+app gives it stores. See the [auth guide](https://vuka-lang.github.io/vuka/web/auth)
+and [`examples/auth`](examples/auth).
+
+**CSRF.** `web.CSRF()` (which `auth.Module` turns on) answers 403 to a POST,
+PUT, PATCH or DELETE a browser sends from another site's page, read from
+`Sec-Fetch-Site` and `Origin` by net/http's `CrossOriginProtection`: no
+token in forms. Requests with `Authorization: Bearer` pass, as browsers
+never add one. Live connections check their origin themselves.
+
+**Hooks for libraries.** What `auth` builds on, open to any library:
+
+| | |
+|---|---|
+| `web.WrapRoutes(name, f)` | `f(web.RouteInfo)` returns middleware for each route (its method, path, attributes, whether it is a page or a Live page); an attribute implementing `RouteWrapper() string` fails Build when no `WrapRoutes` of that name is installed |
+| `web.Attrs(attrs…)` | typed attributes for a route or `App.Live` page added in code |
+| `web.ParamFrom(f)` | parameters of `f`'s result type bind with `f(r)` |
+| `web.Implementation[I](app)` | the provided value implementing interface `I` |
+| `web.LiveCheck(f)` | `f(ctx)` before each message of a live connection; an error closes it (4001) and the page reloads |
+| `web.CurrentLiveEvent()` | the live event the goroutine handles: its context, its handler's name, and `Refuse(err)` — for a decorator of a handler without a `context.Context` |
+| `web.NoteRequest(ctx, note)` | a row in the toolbar's Request panel |
+| `app.WriteError(w, r, err, html)` | answer as a handler's error is answered |
 
 ## Static files
 

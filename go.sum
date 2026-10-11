@@ -8,3 +8,7 @@ github.com/vuka-lang/ui v0.7.0 h1:9w31wwIc2iYkKoGx12s0DTCbE7iZikySsfAv7GWpNOQ=
 github.com/vuka-lang/ui v0.7.0/go.mod h1:mSklUzwU2oZQK3r+JQtcK6JRqCRlc0T6znVHH8NKqn4=
 github.com/vuka-lang/vuka v0.14.0 h1:afASyxMU7+IMuU85PCCE+wLa7Yb9GBII9sbxe3fFvRQ=
 github.com/vuka-lang/vuka v0.14.0/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
+golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
+golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=
+golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
+golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
