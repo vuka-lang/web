@@ -816,8 +816,9 @@ type Counter struct { … }
   it renders and runs its hooks: `mounted(el, ctx)` on load, join or
   arrival, `updated` after a patch that keeps it, `destroyed` when it leaves
   (live navigation too). `ctx.push("Inc", payload)` calls a Go method of the
-  component as an event (one it declares, not `Render`, `Mount` or
-  `Update`), `ctx.on(name, fn)` receives `c.PushEvent(name, payload)`,
+  component as an event — only those its scripts name in `ctx.push("…")`
+  literals, which the `vuka` command lists in the manifest and the app
+  allows (`live.AllowPush`); any other name is refused, `ctx.on(name, fn)` receives `c.PushEvent(name, payload)`,
   `ctx.ref(name)` finds its `ref` element. `ui.JS.Call("bump")` reaches the
   component's own methods before `vuka.register`'s and `window`'s.
 - `vuka run` keeps them compiled in `.vuka/assets` (`VUKA_ASSETS`): a saved

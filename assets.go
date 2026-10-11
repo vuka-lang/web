@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/vuka-lang/ui/live"
 )
 
 // A page's styles and scripts: web.Style, Script, CSS and JS name them on
@@ -91,6 +93,8 @@ type scopeAssets struct {
 	Module  string   `json:"module,omitempty"`
 	Methods []string `json:"methods,omitempty"`
 	CSS     int      `json:"css,omitempty"`
+	Type    string   `json:"type,omitempty"`   // a live component's struct type, as reflect spells it
+	Pushes  []string `json:"pushes,omitempty"` // the methods its scripts push by name (ctx.push)
 }
 
 var (
@@ -129,6 +133,7 @@ type assetSet struct {
 	mod     time.Time
 	checked time.Time
 	scripts map[string][]byte
+	allowed []string // the types whose pushes it allowed
 
 	streams *streams // development: the pages hearing of each new manifest
 }
@@ -149,6 +154,7 @@ func (a *App) appAssets() *assetSet {
 		return nil
 	}
 	s.loader, s.tag = s.loaderJS()
+	s.allow()
 	return s
 }
 
@@ -167,10 +173,30 @@ func (s *assetSet) current() (manifest, []byte, string) {
 			if data, err := os.ReadFile(file); err == nil && json.Unmarshal(data, &m) == nil {
 				s.m, s.mod = m, fi.ModTime()
 				s.loader, s.tag = s.loaderJS()
+				s.allow()
 			}
 		}
 	}
 	return s.m, s.loader, s.tag
+}
+
+// allow lets each live component's scripts push the methods they name, and
+// no others: the server, not the page, decides what the browser may call by
+// name (live.AllowPush). Types an earlier manifest allowed lose theirs.
+func (s *assetSet) allow() {
+	var now []string
+	for _, sc := range s.m.Scopes {
+		if sc.Type != "" && len(sc.Pushes) > 0 {
+			live.AllowPush(sc.Type, sc.Pushes...)
+			now = append(now, sc.Type)
+		}
+	}
+	for _, t := range s.allowed {
+		if !slices.Contains(now, t) {
+			live.AllowPush(t)
+		}
+	}
+	s.allowed = now
 }
 
 // scripted reports whether the app has any component scripts: pages then

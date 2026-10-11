@@ -40,7 +40,8 @@ type scopedCounter struct {
 	n int
 }
 
-func (c *scopedCounter) Inc() { c.n++ }
+func (c *scopedCounter) Inc()    { c.n++ }
+func (c *scopedCounter) Secret() { c.n = 100 }
 func (c *scopedCounter) Render() ui.Node {
 	s := func(more ...ui.Attr) []ui.Attr { return append(more, ui.Attr{Name: "data-vk-s", Value: "k1"}) }
 	return ui.F(0x1c1, "Es(Es(h)Eds(t)Eds(t)c)", ui.El("div", s(),
@@ -68,12 +69,16 @@ func devAssets(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
-	write("manifest.json", `{"scopes":{"k1":{"name":"web.scopedCounter","styles":["counter.css"],"scripts":["counter.ts"],"module":"k1.0a1b2c3d.js","methods":["bump"],"css":64},`+
+	write("manifest.json", `{"scopes":{"k1":{"name":"web.scopedCounter","styles":["counter.css"],"scripts":["counter.ts"],"module":"k1.0a1b2c3d.js","methods":["bump"],"css":64,`+
+		`"type":"github.com/vuka-lang/web.scopedCounter","pushes":["Inc"]},`+
 		`"k2":{"name":"web.scopedLabel","styles":["label.css"],"css":48}}}`)
 	write("c/k1.0a1b2c3d.js", `export default [{
 	mounted(el, ctx) { (window.hooks ||= []).push("mounted " + el.dataset.vkId); },
 	updated(el, ctx) { window.hooks.push("updated " + el.dataset.vkId); },
 	bump(el, ctx, by) { window.hooks.push("bump " + by + " " + ctx.target.id + " " + ctx.event.type + " " + el.dataset.vkId); },
+	async press(el, ctx, name) {
+		try { await ctx.push(name); window.hooks.push("pushed " + name); } catch (e) { window.hooks.push("refused " + e.message); }
+	},
 }];
 `)
 	write("app.css", `output[data-vk-s="k1"]{color:rgb(200, 0, 0)} output[data-vk-s="k2"]{color:rgb(0, 0, 200)}`)
@@ -136,6 +141,35 @@ func TestAssetsServe(t *testing.T) {
 	time.Sleep(150 * time.Millisecond)
 	if _, page, _ := get("/"); strings.Contains(page, "loader.js") {
 		t.Errorf("an app without scripts loads the loader: %s", page)
+	}
+}
+
+// A by-name push reaches only the methods the manifest lists for the
+// component (what its scripts push), under either protocol; any other is an
+// unknown handler. Handlers the page renders work as ever.
+func TestAssetsPushGate(t *testing.T) {
+	devAssets(t)
+	a := scopedApp()
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	defer a.Stop(context.Background())
+	for _, v := range []int{1, 2} {
+		_, tok := pageToken(t, srv, "/")
+		c, err := dial(t, srv, tok, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		send(t, c, map[string]any{"type": "join", "ref": 1, "v": v})
+		recv2(t, c)
+		for i, target := range []string{"c1:Inc", "c1:Secret", "c1:Render", "c2:Render", "c1:0"} {
+			send(t, c, map[string]any{"type": "event", "ref": 2 + i, "target": target, "event": "push"})
+			m, raw := recv2(t, c)
+			ok := target == "c1:Inc" || target == "c1:0"
+			if ok && m.Type != "patch" || !ok && (m.Type != "error" || m.Error != `live: no handler "`+target+`"`) {
+				t.Errorf("v%d %s: %s", v, target, raw)
+			}
+		}
+		c.CloseNow()
 	}
 }
 
@@ -214,4 +248,9 @@ func TestBrowserAssets(t *testing.T) {
 	p.Click("#inc")
 	p.WaitText("#count", "1")
 	p.Wait(`String(window.hooks) === "mounted c1,bump 2 bump click c1,updated c1"`)
+
+	// The scripts push Inc, which the manifest lists; not Secret.
+	p.Eval(`(async () => { const inst = window.vukaComponents.instances()[0]; await inst.hooks[0].press(inst.el, inst.ctx, "Inc"); await inst.hooks[0].press(inst.el, inst.ctx, "Secret"); })()`, nil)
+	p.WaitText("#count", "2")
+	p.Wait(`String(window.hooks).endsWith("updated c1,pushed Inc,refused live: no handler \"c1:Secret\"")`)
 }
