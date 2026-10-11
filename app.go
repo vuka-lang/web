@@ -501,7 +501,7 @@ func (a *App) Run(addr string) error {
 	}
 	srv := &http.Server{Handler: a.handler, ReadHeaderTimeout: 10 * time.Second}
 	srv.RegisterOnShutdown(a.hub.closeAll)
-	log.Printf("web: listening on http://%s", ln.Addr())
+	log.Printf("web: listening on %s", browseURL(ln.Addr()))
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	select {
@@ -517,6 +517,19 @@ func (a *App) Run(addr string) error {
 	sctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
 	return errors.Join(err, a.Stop(sctx))
+}
+
+// browseURL is the address a browser opens for a listener: localhost for
+// one on every interface (":8080" listens on [::] or 0.0.0.0).
+func browseURL(a net.Addr) string {
+	host, port, err := net.SplitHostPort(a.String())
+	if err != nil {
+		return "http://" + a.String()
+	}
+	if ip := net.ParseIP(host); host == "" || ip != nil && ip.IsUnspecified() {
+		host = "localhost"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 func funcName(v reflect.Value) string {

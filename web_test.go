@@ -589,3 +589,23 @@ func TestDecoratorSeesRequest(t *testing.T) {
 	expect(t, h, "GET", "/secret", "", 401, "unauthorized")
 	expect(t, h, "GET", "/secret", "", 200, "secret for ann", "X-User", "ann")
 }
+
+func TestBrowseURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"[::]:8080":      "http://localhost:8080",
+		"0.0.0.0:8080":   "http://localhost:8080",
+		":8080":          "http://localhost:8080",
+		"127.0.0.1:9000": "http://127.0.0.1:9000",
+		"[::1]:8080":     "http://[::1]:8080",
+		"10.0.0.5:80":    "http://10.0.0.5:80",
+	} {
+		if got := browseURL(fakeAddr(in)); got != want {
+			t.Errorf("browseURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+type fakeAddr string
+
+func (a fakeAddr) Network() string { return "tcp" }
+func (a fakeAddr) String() string  { return string(a) }
