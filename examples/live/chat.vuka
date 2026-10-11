@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -64,7 +63,7 @@ func (c *Chat) Update(j Joined) { c.lines = append(c.lines, j.Who+" joined") }
 func (c *Chat) SetName(ctx context.Context, f ChatForm) error {
 	name := strings.TrimSpace(f.Text)
 	if name == "" {
-		return errors.New("pick a name")
+		return web.BadRequest("pick a name")
 	}
 	c.name = name
 	c.Log.Add(c.Room, name+" joined")

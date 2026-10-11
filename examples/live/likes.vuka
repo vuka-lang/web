@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 
@@ -24,7 +23,7 @@ func (l *Likes) Mount() { l.likes, l.notes = 5, []string{"milk", "eggs", "keep"}
 
 func (l *Likes) Like() error {
 	if l.closed {
-		return errors.New("likes are closed")
+		return web.BadRequest("likes are closed")
 	}
 	l.likes++
 	return nil
@@ -34,7 +33,7 @@ func (l *Likes) Toggle() { l.closed = !l.closed }
 
 func (l *Likes) Delete(e ui.Event) error {
 	if e.Value == "keep" {
-		return errors.New("that note stays")
+		return web.BadRequest("that note stays")
 	}
 	l.notes = slices.DeleteFunc(l.notes, func(s string) bool { return s == e.Value })
 	return nil

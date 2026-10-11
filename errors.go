@@ -28,6 +28,11 @@ func (e *Error) Error() string {
 
 func (e *Error) Unwrap() error { return e.Err }
 
+// PublicMessage is the message the browser reads (live.PublicError): a live
+// page's handler returning an *Error shows its message, as an HTTP route's
+// answer does, where any other error's text stays in the log.
+func (e *Error) PublicMessage() string { return e.Error() }
+
 // Is matches another *Error of the same status: errors.Is(err, web.NotFound).
 func (e *Error) Is(target error) bool {
 	t, ok := target.(*Error)

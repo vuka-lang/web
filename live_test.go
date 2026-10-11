@@ -44,7 +44,7 @@ type todo struct {
 
 func (t *todo) Add(f todoForm) error {
 	if f.Name == "" {
-		return errors.New("a name, please")
+		return BadRequest("a name, please")
 	}
 	t.items = append(t.items, f.Name)
 	return nil
@@ -96,7 +96,7 @@ type pagerParams struct {
 func (p *pager) Mount() { p.mounts++ }
 func (p *pager) Update(q pagerParams) error {
 	if q.Page < 0 {
-		return errors.New("no such page")
+		return Status(http.StatusNotFound, "no such page")
 	}
 	p.got = append(p.got, q.Page)
 	return nil
@@ -442,7 +442,9 @@ func TestLiveNavigate(t *testing.T) {
 		!strings.Contains(m.Updates[0].HTML, "page 2, mounts 1, got [2]") {
 		t.Fatalf("patch: %+v %q", m, tok)
 	}
-	if m, _ := nav(3, "/pager?page=-1", true); m.Type != live.PatchMsg || m.Error != "no such page" {
+	// An Update refusing the URL fails the navigation: nothing stays mounted,
+	// and the browser loads the URL.
+	if m, _ := nav(3, "/pager?page=-1", true); m.Type != live.Error || m.Error != "no such page" {
 		t.Fatalf("Update's error: %+v", m)
 	}
 	if m, _ := nav(4, "/pager?page=x", true); m.Type != live.Redirect || m.URL != "/pager?page=x" {

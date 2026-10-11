@@ -86,13 +86,17 @@ func (x native) Component(target string) ui.Stateful {
 	return nil
 }
 
+// SetErrorText sets the text the browser gets for an error
+// (live.Session.SetErrorText).
+func (x native) SetErrorText(text func(error) string) { x.s.SetErrorText(text) }
+
 func (x native) Topics() []string { return x.s.Topics() }
 func (x native) Close()           { x.s.Close() }
 
 func (x native) Navigate(ref int, url string, rt live.Route, patch bool) (any, bool) {
 	p, err := x.s.Navigate(rt, patch)
 	if err != nil {
-		return live.ServerMessage{Type: live.Error, Ref: ref, Error: err.Error()}, false
+		return live.ServerMessage{Type: live.Error, Ref: ref, Error: x.s.ErrorText(err)}, false
 	}
 	m := live.PatchMessage(ref, p)
 	m.URL = url
@@ -103,7 +107,7 @@ func (x native) Info(topic string, msg any) any {
 	p, err := x.s.Info(topic, msg)
 	switch {
 	case err != nil:
-		return live.ServerMessage{Type: live.Error, Error: err.Error()}
+		return live.ServerMessage{Type: live.Error, Error: x.s.ErrorText(err)}
 	case !empty(p):
 		return live.PatchMessage(0, p)
 	}

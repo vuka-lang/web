@@ -149,7 +149,8 @@ func (a *App) WriteError(w http.ResponseWriter, r *http.Request, err error, html
 }
 
 // LiveCheck has every message of a live connection after its join checked
-// with f, given the context the page's route ran with: an error closes the
+// with f, given the context the page's route ran with, and each broadcast
+// before the page takes it, and every LiveCheckEvery: an error closes the
 // connection with code 4001 and the page reloads, its route running again
 // for the browser. A library that ends sessions closes their pages this
 // way.
