@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"runtime/debug"
 )
 
 // Error is an error with an HTTP status. Returned by a handler (wrapped or
@@ -73,13 +72,9 @@ func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, html
 		}
 	}
 	if e.Status >= 500 {
-		// Server errors go to the console, not only the response: in
-		// development with a stack so the failing call is findable.
-		if a.dev {
-			log.Printf("web: %d %s %s: %v\n%s", e.Status, r.Method, r.URL.Path, err, debug.Stack())
-		} else {
-			log.Printf("web: %d %s %s: %v", e.Status, r.Method, r.URL.Path, err)
-		}
+		// Server errors go to the console, not only the response: one
+		// clean line with the method, path and error.
+		log.Printf("web: %d %s %s: %v", e.Status, r.Method, r.URL.Path, err)
 	}
 	if a.onError != nil {
 		a.onError(w, r, e, htmlPage)
