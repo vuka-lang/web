@@ -11,11 +11,13 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/vuka-lang/ui"
@@ -367,57 +369,128 @@ func (a *App) page(rq *request, n ui.Node) {
 		j.page, j.ctx = n, rq.ctx
 		return
 	}
-	var html []byte
-	if wholePage(r) {
-		s := live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
-		end := a.span(rq.ctx, "render", "page")
-		out, err := s.Render()
-		end()
-		if err != nil {
-			s.Close()
-			a.writeError(w, r, err, true)
-			return
-		}
-		html = []byte(out)
-		live := bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-")) ||
-			bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) // a JS command's push to a handler
-		var token string
-		if live && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
-			token = a.signToken(r.URL.RequestURI())
-		}
-		if token != "" && r.Method == http.MethodGet && a.adoptWindow > 0 {
-			// keep the mounted session for the page's join to adopt,
-			// so Mount runs once per view (livepark.go)
-			a.parked.park(token, &parkedPage{s: s, uri: r.URL.RequestURI(), who: a.liveWho(rq.ctx)}, a.adoptWindow)
-		} else {
-			s.Close()
-		}
-		if live || bytes.Contains(html, []byte(" data-vk-js-")) {
-			html = injectScript(html, a.scriptTag(r, token))
-		}
-		html = a.linkCSS(r, html)
-		if a.tb != nil && a.assets != nil {
-			if e := entryOf(rq.ctx); e != nil {
-				e.mu.Lock()
-				e.Assets = a.assets.pageAssets(html)
-				e.mu.Unlock()
-			}
-		}
-	} else {
-		var b bytes.Buffer
+	buf := pageBufs.Get().(*bytes.Buffer)
+	defer putPageBuf(buf)
+	if !wholePage(r) {
 		if n != nil {
 			defer a.span(rq.ctx, "render", "page")()
-			if err := n.Render(rq.ctx, &b); err != nil {
+			if err := n.Render(rq.ctx, buf); err != nil {
 				a.writeError(w, r, err, true)
 				return
 			}
 		}
-		html = b.Bytes()
+		writeHTML(w, buf.Bytes())
+		return
+	}
+	// The page renders straight to HTML (ui.RenderPage) unless it meets
+	// something live: then a session renders it again, to mount its
+	// components and number its handlers.
+	end := a.span(rq.ctx, "render", "page")
+	info, err := ui.RenderPage(rq.ctx, n, buf)
+	html := buf.Bytes()
+	var s *live.Session
+	if err == nil && (info.Live || info.Opaque && pageLive(html)) {
+		s = live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
+		var out string
+		if out, err = s.Render(); err == nil {
+			buf.Reset()
+			buf.WriteString(out)
+			html = buf.Bytes()
+		}
+	}
+	end()
+	if err != nil {
+		if s != nil {
+			s.Close()
+		}
+		a.writeError(w, r, err, true)
+		return
+	}
+	live := s != nil && pageLive(html)
+	var token string
+	if live && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		token = a.signToken(r.URL.RequestURI())
+	}
+	if token != "" && r.Method == http.MethodGet && a.adoptWindow > 0 {
+		// keep the mounted session for the page's join to adopt,
+		// so Mount runs once per view (livepark.go)
+		a.parked.park(token, &parkedPage{s: s, uri: r.URL.RequestURI(), who: a.liveWho(rq.ctx)}, a.adoptWindow)
+	} else if s != nil {
+		s.Close()
+	}
+	var script string
+	if live || (s != nil || info.Opaque) && bytes.Contains(html, []byte(" data-vk-js-")) || s == nil && !info.Opaque && info.JS {
+		script = a.scriptTag(r, token)
+	}
+	head := a.headTags(r, html)
+	if a.tb != nil && a.assets != nil {
+		if e := entryOf(rq.ctx); e != nil {
+			e.mu.Lock()
+			e.Assets = a.assets.pageAssets(html)
+			e.mu.Unlock()
+		}
 	}
 	if w.Header().Get("Content-Type") == "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	}
+	writePage(w, html, head, script)
+}
+
+// pageLive reports whether a page's HTML is live: it holds stateful
+// components, event handlers or a JS command's push to a handler.
+func pageLive(html []byte) bool {
+	return bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-")) ||
+		bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) // a JS command's push to a handler
+}
+
+// writePage writes html with script (the runtime's tag, if any) before its
+// last </body>, or at its end, and head (linkCSS's tags) where linkCSS
+// puts them, after the script when both go before one </body>.
+func writePage(w http.ResponseWriter, html []byte, head, script string) {
+	if head == "" && script == "" {
+		w.Write(html)
+		return
+	}
+	si, hi := len(html), -1
+	if script != "" {
+		if i := indexTag(html, "</body>", true); i >= 0 {
+			si = i
+		}
+	}
+	if head != "" {
+		hi = headAt(html)
+	}
+	if hi < 0 {
+		head = ""
+		hi = si
+	}
+	first, second, fi, li := script, head, si, hi
+	if hi < si {
+		first, second, fi, li = head, script, hi, si
+	}
+	w.Write(html[:fi])
+	io.WriteString(w, first)
+	w.Write(html[fi:li])
+	io.WriteString(w, second)
+	w.Write(html[li:])
+}
+
+func writeHTML(w http.ResponseWriter, html []byte) {
+	if w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	}
 	w.Write(html)
+}
+
+// pageBufs are the buffers pages render into.
+var pageBufs = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
+func putPageBuf(b *bytes.Buffer) {
+	if b.Cap() > 1<<20 {
+		return
+	}
+	b.Reset()
+	pageBufs.Put(b)
 }
 
 // wholePage reports whether r's page is a whole document, with the app's
@@ -449,14 +522,6 @@ func (a *App) scriptTag(r *http.Request, token string) string {
 		}
 	}
 	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + token + `"` + tb + ` defer></script>`
-}
-
-func injectScript(html []byte, tag string) []byte {
-	i := bytes.LastIndex(bytes.ToLower(html), []byte("</body>"))
-	if i < 0 {
-		return append(html, tag...)
-	}
-	return append(html[:i:i], append([]byte(tag), html[i:]...)...)
 }
 
 // A join token names the page a live connection rebuilds: its URI, when the

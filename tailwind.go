@@ -180,6 +180,19 @@ func (s *stylesheet) headTags() string {
 // that doesn't link it already, the loader of component scripts, and in
 // development the toolbar's script for the request r.
 func (a *App) linkCSS(r *http.Request, html []byte) []byte {
+	tags := a.headTags(r, html)
+	if tags == "" {
+		return html
+	}
+	i := headAt(html)
+	if i < 0 {
+		return html
+	}
+	return append(html[:i:i], append([]byte(tags), html[i:]...)...)
+}
+
+// headTags is what linkCSS adds to html.
+func (a *App) headTags(r *http.Request, html []byte) string {
 	var tags string
 	if a.css != nil && !bytes.Contains(html, []byte(cssPath)) {
 		tags = a.css.headTags()
@@ -190,17 +203,57 @@ func (a *App) linkCSS(r *http.Request, html []byte) []byte {
 	if a.tb != nil {
 		tags += a.tb.tag(r)
 	}
-	if tags == "" {
-		return html
+	return tags
+}
+
+// headAt is where linkCSS adds its tags to html: before its first </head>,
+// else its first </body>, else -1.
+func headAt(html []byte) int {
+	if i := indexTag(html, "</head>", false); i >= 0 {
+		return i
 	}
-	lower := bytes.ToLower(html)
-	i := bytes.Index(lower, []byte("</head>"))
-	if i < 0 {
-		if i = bytes.Index(lower, []byte("</body>")); i < 0 {
-			return html
+	return indexTag(html, "</body>", false)
+}
+
+// indexTag is the index of html's first (last) tag, a lowercase ASCII
+// string, matched ignoring ASCII case; -1 when there is none.
+func indexTag(html []byte, tag string, last bool) int {
+	rest := html
+	for {
+		var i int
+		if last {
+			i = bytes.LastIndexByte(rest, '<')
+		} else {
+			i = bytes.IndexByte(rest, '<')
+		}
+		if i < 0 {
+			return -1
+		}
+		if len(rest)-i >= len(tag) && foldEq(rest[i:i+len(tag)], tag) {
+			if last {
+				return i
+			}
+			return len(html) - len(rest) + i
+		}
+		if last {
+			rest = rest[:i]
+		} else {
+			rest = rest[i+1:]
 		}
 	}
-	return append(html[:i:i], append([]byte(tags), html[i:]...)...)
+}
+
+func foldEq(b []byte, lower string) bool {
+	for i := range len(lower) {
+		c := b[i]
+		if 'A' <= c && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != lower[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // cssWatchJS swaps the stylesheet's link when the server says it changed,
