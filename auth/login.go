@@ -167,5 +167,7 @@ func (a *Auth) SetPassword(ctx context.Context, uid, password string) error {
 	if err != nil {
 		return err
 	}
-	return s.SetPassword(ctx, uid, h)
+	err = s.SetPassword(ctx, uid, h)
+	a.Refresh(uid)
+	return err
 }

@@ -188,7 +188,7 @@ func (a *Auth) signIn(ctx context.Context, st *state, uid string) error {
 	if st.w == nil || st.r == nil || isLive(st.r) {
 		return errNoResponse
 	}
-	id, err := a.load(ctx, uid)
+	id, err := a.loadFresh(ctx, uid)
 	if err != nil {
 		return err
 	}
@@ -227,6 +227,9 @@ func SignOut(ctx context.Context) error {
 		return errNoAuth
 	}
 	a := st.auth
+	if st.id != nil {
+		a.Refresh(st.id.ID)
+	}
 	var err error
 	switch st.via {
 	case viaSession:

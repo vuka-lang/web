@@ -222,6 +222,16 @@ type Config struct {
 	// hand, another process) is caught by the check every
 	// web.LiveCheckEvery (30 seconds by default).
 	LiveRecheck time.Duration
+
+	// UserCache keeps the identity Users.Load returns for a user this long,
+	// so a request signed in with a session or token reads only the
+	// session or token: 0 (the default) loads it on every request. A
+	// cached identity is dropped when RevokeUser, SetPassword or SignOut
+	// touch its user, when Load finds the user gone, and when the app
+	// calls Refresh after changing a user's perms, roles or record; a sign-in
+	// and LiveRecheck always load afresh. The cache is the process's own:
+	// another replica keeps its copy until it expires.
+	UserCache time.Duration
 }
 
 // Auth is an app's authentication: Module provides it, for code without a
@@ -240,6 +250,7 @@ type Auth struct {
 	dummyN   atomic.Int32 // kinds stored
 	lastKind atomic.Value // the encoding kind of the last login found
 	problems []error      // found while wrapping routes, reported by check
+	cache    *userCache   // nil unless Config.UserCache
 }
 
 // Module installs auth in an app: it reads each request's credentials,
@@ -325,6 +336,9 @@ func (a *Auth) defaults() {
 		policyTypes.add(p.typ)
 	}
 	a.jwtEpoch = epochs{m: map[string]time.Time{}}
+	if c.UserCache > 0 {
+		a.cache = &userCache{ttl: c.UserCache, m: map[string]cachedUser{}}
+	}
 }
 
 func cmpStore[T comparable](v, def T) T {
@@ -367,19 +381,6 @@ func (a *Auth) usersOf() (Users, error) {
 		return nil, errors.New("auth: the app has no Users")
 	}
 	return a.users, nil
-}
-
-// load is the identity of a user id, its roles expanded; nil when gone.
-func (a *Auth) load(ctx context.Context, uid string) (*Identity, error) {
-	u, err := a.usersOf()
-	if err != nil {
-		return nil, err
-	}
-	id, err := u.Load(ctx, uid)
-	if err != nil || id == nil {
-		return nil, err
-	}
-	return a.expand(id), nil
 }
 
 // expand adds the perms of the identity's roles.
@@ -560,7 +561,7 @@ func (a *Auth) recheck(ctx context.Context, st *state) error {
 	if now-last < int64(a.cfg.LiveRecheck) {
 		return nil
 	}
-	fresh, err := a.load(ctx, st.id.ID)
+	fresh, err := a.loadFresh(ctx, st.id.ID)
 	if err != nil {
 		log.Printf("auth: loading user %s again for a live page: %v", st.id.ID, err)
 		return nil // the next check tries again; a database down doesn't reload every page
@@ -611,6 +612,7 @@ func (a *Auth) stillValid(ctx context.Context, st *state) (bool, error) {
 // another process's at their next web.LiveCheckEvery check.
 func (a *Auth) RevokeUser(ctx context.Context, uid string) error {
 	a.jwtEpoch.revoke(uid, time.Now())
+	a.Refresh(uid)
 	err := errors.Join(a.sessions.DeleteUser(ctx, uid), a.tokens.DeleteUser(ctx, uid))
 	a.closeLive(func(st *state) bool { return st.via != viaContext && st.id != nil && st.id.ID == uid })
 	return err
