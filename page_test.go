@@ -33,17 +33,33 @@ func benchRows() []benchRow {
 	return out
 }
 
+// benchLayout and benchPage are the FT lowering the compiler now emits (see
+// vuka's frameFT): each frame carries only its dynamics and a closure that
+// rebuilds the F tree. The HTML stays byte-identical to the F lowering, which
+// TestPagesGolden pins.
 func benchLayout(title string, children ui.Node) ui.Node {
-	return ui.F(0x4b44aa8876d5918c, "Es(E(Es()Ess()E(ht))Es(Es(E(Es(t)tEs(t)))Es(h)Es(t)))", ui.El("html", []ui.Attr{{Name: "lang", Value: "en"}}, ui.El("head", nil, ui.El("meta", []ui.Attr{{Name: "charset", Value: "utf-8"}}), ui.El("meta", []ui.Attr{{Name: "name", Value: "viewport"}, {Name: "content", Value: "width=device-width, initial-scale=1"}}), ui.El("title", nil, ui.Child(title), ui.Text(" · Bench"))), ui.El("body", []ui.Attr{{Name: "class", Value: "page"}}, ui.El("header", []ui.Attr{{Name: "class", Value: "top"}}, ui.El("nav", nil, ui.El("a", []ui.Attr{{Name: "href", Value: "/"}}, ui.Text("Home")), ui.Text(" "), ui.El("a", []ui.Attr{{Name: "href", Value: "/page"}}, ui.Text("Users")))), ui.El("main", []ui.Attr{{Name: "class", Value: "content"}}, ui.Child(children)), ui.El("footer", []ui.Attr{{Name: "class", Value: "foot"}}, ui.Text("Benchmark page")))))
+	const shape = "Es(E(Es()Ess()E(ht))Es(Es(E(Es(t)tEs(t)))Es(h)Es(t)))"
+	return ui.FT(0x4b44aa8876d5918c, shape, func(__d []any) ui.Node {
+		return ui.F(0x4b44aa8876d5918c, shape, ui.El("html", []ui.Attr{{Name: "lang", Value: "en"}}, ui.El("head", nil, ui.El("meta", []ui.Attr{{Name: "charset", Value: "utf-8"}}), ui.El("meta", []ui.Attr{{Name: "name", Value: "viewport"}, {Name: "content", Value: "width=device-width, initial-scale=1"}}), ui.El("title", nil, ui.Child(__d[0]), ui.Text(" · Bench"))), ui.El("body", []ui.Attr{{Name: "class", Value: "page"}}, ui.El("header", []ui.Attr{{Name: "class", Value: "top"}}, ui.El("nav", nil, ui.El("a", []ui.Attr{{Name: "href", Value: "/"}}, ui.Text("Home")), ui.Text(" "), ui.El("a", []ui.Attr{{Name: "href", Value: "/page"}}, ui.Text("Users")))), ui.El("main", []ui.Attr{{Name: "class", Value: "content"}}, ui.Child(__d[1])), ui.El("footer", []ui.Attr{{Name: "class", Value: "foot"}}, ui.Text("Benchmark page")))))
+	}, title, children)
 }
 
 func benchPage() ui.Node {
 	rs := benchRows()
-	return ui.F(0xaf63de4c8601eff2, "c", benchLayout("Users", ui.F(0xd553e1cee178f424, "Es(t)Es(E(E(E(t)E(t)E(t)E(t)E(t)))E(b))", ui.El("h1", []ui.Attr{{Name: "class", Value: "title"}}, ui.Text("Users")), ui.El("table", []ui.Attr{{Name: "class", Value: "table"}}, ui.El("thead", nil, ui.El("tr", nil, ui.El("th", nil, ui.Text("ID")), ui.El("th", nil, ui.Text("Name")), ui.El("th", nil, ui.Text("Email")), ui.El("th", nil, ui.Text("Role")), ui.El("th", nil, ui.Text("Status")))), ui.El("tbody", nil, ui.Nodes(func(__add func(ui.Node)) {
+	const contentShape = "Es(t)Es(E(E(E(t)E(t)E(t)E(t)E(t)))E(b))"
+	const rowShape = "Es(Es(h)Es(h)Es(Ed(h))Es(h)Ed(h))"
+	content := ui.FT(0xd553e1cee178f424, contentShape, func(__d []any) ui.Node {
+		return ui.F(0xd553e1cee178f424, contentShape, ui.El("h1", []ui.Attr{{Name: "class", Value: "title"}}, ui.Text("Users")), ui.El("table", []ui.Attr{{Name: "class", Value: "table"}}, ui.El("thead", nil, ui.El("tr", nil, ui.El("th", nil, ui.Text("ID")), ui.El("th", nil, ui.Text("Name")), ui.El("th", nil, ui.Text("Email")), ui.El("th", nil, ui.Text("Role")), ui.El("th", nil, ui.Text("Status")))), ui.El("tbody", nil, ui.Child(__d[0]))))
+	}, ui.Nodes(func(__add func(ui.Node)) {
 		for _, r := range rs {
-			__add(ui.F(0x8b2b40ae54e58b1f, "Es(Es(h)Es(h)Es(Ed(h))Es(h)Ed(h))", ui.El("tr", []ui.Attr{{Name: "class", Value: "row"}}, ui.El("td", []ui.Attr{{Name: "class", Value: "num"}}, ui.Child(strconv.Itoa(r.ID))), ui.El("td", []ui.Attr{{Name: "class", Value: "name"}}, ui.Child(r.Name)), ui.El("td", []ui.Attr{{Name: "class", Value: "email"}}, ui.El("a", []ui.Attr{{Name: "href", Value: "mailto:" + r.Email}}, ui.Child(r.Email))), ui.El("td", []ui.Attr{{Name: "class", Value: "role"}}, ui.Child(r.Role)), ui.El("td", []ui.Attr{{Name: "class", Value: "status status-" + r.Status}}, ui.Child(r.Status)))))
+			__add(ui.FT(0x8b2b40ae54e58b1f, rowShape, func(__d []any) ui.Node {
+				return ui.F(0x8b2b40ae54e58b1f, rowShape, ui.El("tr", []ui.Attr{{Name: "class", Value: "row"}}, ui.El("td", []ui.Attr{{Name: "class", Value: "num"}}, ui.Child(__d[0])), ui.El("td", []ui.Attr{{Name: "class", Value: "name"}}, ui.Child(__d[1])), ui.El("td", []ui.Attr{{Name: "class", Value: "email"}}, ui.El("a", []ui.Attr{{Name: "href", Value: __d[2]}}, ui.Child(__d[3]))), ui.El("td", []ui.Attr{{Name: "class", Value: "role"}}, ui.Child(__d[4])), ui.El("td", []ui.Attr{{Name: "class", Value: __d[5]}}, ui.Child(__d[6]))))
+			}, strconv.Itoa(r.ID), r.Name, "mailto:"+r.Email, r.Email, r.Role, "status status-"+r.Status, r.Status))
 		}
-	}))))))
+	}))
+	return ui.FT(0xaf63de4c8601eff2, "c", func(__d []any) ui.Node {
+		return ui.F(0xaf63de4c8601eff2, "c", ui.Child(__d[0]))
+	}, benchLayout("Users", content))
 }
 
 func pagesApp(opts ...Option) *App {
