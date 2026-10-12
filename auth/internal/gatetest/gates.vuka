@@ -1,5 +1,7 @@
 // Package gatetest checks auth's gates on live events with the code Vuka
 // generates: the registry it fills is what web's dispatch reads.
+//
+//vuka:nolink
 package gatetest
 
 import (

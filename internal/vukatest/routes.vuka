@@ -1,4 +1,6 @@
 // Package vukatest exercises the web package through the Vuka transpiler.
+//
+//vuka:nolink
 package vukatest
 
 import (
