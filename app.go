@@ -102,7 +102,7 @@ func New(opts ...Option) *App {
 	if a.env = loadEnv(a.envFiles); a.env.err != nil {
 		a.c.errs = append(a.c.errs, a.env.err)
 	}
-	a.dev = a.dev || os.Getenv("VUKA_ENV") == "development" // never an env file's: loadEnv skips VUKA_ keys
+	a.dev = a.dev || IsDev() // VUKA_ENV=development, or VUKA_DEV_DIR under `vuka run`; never an env file's (loadEnv skips VUKA_ keys)
 	if a.liveKey == nil {
 		a.liveKey = devLiveKey(a.dev)
 	}
