@@ -151,17 +151,51 @@ func (a *App) WriteError(w http.ResponseWriter, r *http.Request, err error, html
 	a.writeError(w, r, err, html)
 }
 
-// LiveCheck has every message of a live connection after its join checked
-// with f, given the context the page's route ran with, and each batch of
-// broadcasts before the page takes it, and every LiveCheckEvery (30
-// seconds by default) of a joined page: an error closes the connection
-// with code 4001 and the page reloads, its route running again for the
-// browser. A library that ends sessions closes their pages this way.
+// LiveCheck has each joined live page checked with f every LiveCheckEvery
+// (30 seconds by default), given the context the page's route ran with: an
+// error closes the connection with code 4001 and the page reloads, its
+// route running again for the browser. A page is checked when it mounts by
+// its route itself — the join and each navigation run it through the app's
+// middleware and gates — and its events and broadcasts trust what it
+// mounted with; LiveCheck is the net for what changes while it sits open
+// without the app hearing of it (a session deleted by another process). A
+// library that ends sessions itself closes their pages at once with
+// CloseLive.
 func LiveCheck(f func(ctx context.Context) error) Option {
 	return OptionFunc(func(a *App) {
 		a.mutable("LiveCheck")
 		a.liveChecks = append(a.liveChecks, f)
 	})
+}
+
+// CloseLive closes the app's joined live pages whose context — the one
+// their route ran with, as LiveCheck gets it — match reports true for,
+// with code 4001: each page reloads, its route running again for the
+// browser. It returns how many it closes. A page closes before it handles
+// another message or broadcast; one handling a message closes once that
+// is done. match runs on the caller's goroutine, once per joined page: a
+// library ending a session closes the pages signed in with it this way.
+func (a *App) CloseLive(match func(ctx context.Context) bool) int {
+	a.hub.mu.Lock()
+	conns := make([]*conn, 0, len(a.hub.conns))
+	for c := range a.hub.conns {
+		conns = append(conns, c)
+	}
+	a.hub.mu.Unlock()
+	n := 0
+	for _, c := range conns {
+		ctx := c.pageCtx()
+		if ctx == nil || c.ending.Load() || !match(ctx) {
+			continue
+		}
+		c.ending.Store(true)
+		select {
+		case c.wake <- struct{}{}:
+		default:
+		}
+		n++
+	}
+	return n
 }
 
 // LiveHandler describes the handler a live event targets, for a guard

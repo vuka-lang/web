@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/vuka-lang/ui"
@@ -180,9 +181,9 @@ func (g *guarded) Render() ui.Node {
 }
 
 func TestLiveEventAndCheck(t *testing.T) {
-	ended := map[string]bool{}
-	a := New(Only("none"), LiveCheck(func(ctx context.Context) error {
-		if ended[Request(ctx).URL.Query().Get("who")] {
+	var ended sync.Map
+	a := New(Only("none"), LiveCheckEvery(50*time.Millisecond), LiveCheck(func(ctx context.Context) error {
+		if _, ok := ended.Load(Request(ctx).URL.Query().Get("who")); ok {
 			return errors.New("ended")
 		}
 		return nil
@@ -209,8 +210,7 @@ func TestLiveEventAndCheck(t *testing.T) {
 		t.Errorf("Handling: in the handler %v, in the render after it %v", guardedSeen.inc, guardedSeen.render)
 	}
 	guardedSeen.Unlock()
-	ended["b"] = true
-	send(t, c, map[string]any{"type": "event", "ref": 3, "target": handlerOf(t, html, "click", 0), "event": "click"})
+	ended.Store("b", true) // the periodic check closes the page, no message needed
 	if _, err := recv(c, 5e9); websocket.CloseStatus(err) != closeReload {
 		t.Errorf("LiveCheck: %v", err)
 	}

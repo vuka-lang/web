@@ -291,15 +291,17 @@ func TestLivePagesFollowTheSignIn(t *testing.T) {
 	}
 	a, _ := web.Resolve[*auth.Auth](app)
 	a.RevokeUser(context.Background(), "2")
-	app.Broadcast(context.Background(), "news", 2)
 	if m, err := recv(ws); websocket.CloseStatus(err) != 4001 {
-		t.Errorf("a broadcast after RevokeUser: %+v %v", m, err)
+		t.Errorf("after RevokeUser: %+v %v", m, err)
 	}
 
+	// Perms changed in Users: the periodic check loads the identity again.
+	u = users()
+	app = newApp(t, u, func(c *auth.Config) { c.LiveRecheck = time.Nanosecond }, web.LiveCheckEvery(50*time.Millisecond))
+	c = serve(t, app)
 	c.login("bob@example.com", "hunter22", "")
-	ws, m := c.socket("/board", c.srv.URL)
+	ws, _ = c.socket("/board", c.srv.URL)
 	u.Add("bob@example.com", "hunter22", auth.Identity{ID: "2"}) // orders.read taken away
-	send(t, ws, map[string]any{"type": "event", "ref": 2, "target": handler(t, m.HTML, 0), "event": "click"})
 	if _, err := recv(ws); websocket.CloseStatus(err) != 4001 {
 		t.Errorf("a page whose perms changed: %v", err)
 	}

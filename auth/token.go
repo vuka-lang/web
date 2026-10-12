@@ -114,12 +114,16 @@ func IssueToken(ctx context.Context, uid, name string, ttl time.Duration) (strin
 	return tok, err
 }
 
-// Revoke ends a bearer token: requests carrying it are refused from now on.
+// Revoke ends a bearer token: requests carrying it are refused from now on,
+// and the live pages signed in with it close.
 func (a *Auth) Revoke(ctx context.Context, token string) error {
 	if !wellFormedToken(token) {
 		return errors.New("auth: not a token")
 	}
-	return a.tokens.Delete(ctx, storeKey(token))
+	key := storeKey(token)
+	err := a.tokens.Delete(ctx, key)
+	a.closeKey(viaBearer, key)
+	return err
 }
 
 // Revoke ends a bearer token, as Auth.Revoke does, for the app of ctx.
@@ -148,6 +152,9 @@ func (a *Auth) verifyBearer(ctx context.Context, st *state, tok string) error {
 		return err
 	}
 	if t == nil || time.Now().After(t.Expires) {
+		if t != nil {
+			a.closeKey(viaBearer, key)
+		}
 		return errBadCredentials
 	}
 	id, err := a.load(ctx, t.UserID)

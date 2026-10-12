@@ -143,6 +143,7 @@ func (a *Auth) readSession(ctx context.Context, st *state, r *http.Request) erro
 	if s == nil || !a.sessionLive(s, now) {
 		if s != nil {
 			a.sessions.Delete(ctx, key)
+			a.closeKey(viaSession, key)
 		}
 		return nil
 	}
@@ -152,6 +153,7 @@ func (a *Auth) readSession(ctx context.Context, st *state, r *http.Request) erro
 	}
 	if id == nil { // the user is gone
 		a.sessions.Delete(ctx, key)
+		a.closeKey(viaSession, key)
 		return nil
 	}
 	if now.Sub(s.Seen) > time.Minute {
@@ -194,10 +196,13 @@ func (a *Auth) signIn(ctx context.Context, st *state, uid string) error {
 		return errors.New("auth: SignIn: no user " + uid)
 	}
 	if c, err := st.r.Cookie(a.cfg.Cookie); err == nil && wellFormed(c.Value) {
-		a.sessions.Delete(ctx, storeKey(c.Value))
+		old := storeKey(c.Value)
+		a.sessions.Delete(ctx, old)
+		a.closeKey(viaSession, old)
 	}
 	if st.via == viaSession && st.key != "" {
 		a.sessions.Delete(ctx, st.key)
+		a.closeKey(viaSession, st.key)
 	}
 	secret, now := newSecret(), time.Now()
 	key := storeKey(secret)
@@ -214,7 +219,8 @@ func (a *Auth) signIn(ctx context.Context, st *state, uid string) error {
 }
 
 // SignOut ends ctx's sign-in: the session is deleted and its cookie
-// expired, or the bearer token the request carries is revoked.
+// expired, or the bearer token the request carries is revoked. The live
+// pages signed in with it close and reload.
 func SignOut(ctx context.Context) error {
 	st := stateOf(ctx)
 	if st == nil || st.auth == nil {
@@ -229,8 +235,10 @@ func SignOut(ctx context.Context) error {
 		}
 		err = a.sessions.Delete(ctx, st.key)
 		a.setCookie(st, "", -1)
+		a.closeKey(viaSession, st.key)
 	case viaBearer:
 		err = a.tokens.Delete(ctx, st.key)
+		a.closeKey(viaBearer, st.key)
 	}
 	st.id, st.via, st.key = nil, "", ""
 	return err

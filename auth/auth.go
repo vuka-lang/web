@@ -211,9 +211,16 @@ type Config struct {
 	// (Users.Load) to see that the user is still there with the same perms
 	// and roles; a page whose identity changed reloads, signed in afresh
 	// or sent to the login page. 60 seconds by default; negative for never.
-	// The sign-in itself (session, token, JWT) is checked at every message,
-	// before every broadcast reaches the page and every web.LiveCheckEvery
-	// (30 seconds by default).
+	// It is looked at when web.LiveCheckEvery checks the page.
+	//
+	// A live page's sign-in is checked when the page mounts: its join and
+	// each navigation run its route, which reads the session or token. Its
+	// events trust the identity it mounted with. A sign-in ended through
+	// auth — SignOut, Revoke, RevokeUser, a new SignIn replacing the
+	// browser's session, a session found expired — closes its pages at
+	// once (web's CloseLive); one ended elsewhere (a store row deleted by
+	// hand, another process) is caught by the check every
+	// web.LiveCheckEvery (30 seconds by default).
 	LiveRecheck time.Duration
 }
 
@@ -522,8 +529,10 @@ func (a *Auth) noteIdentity(ctx context.Context) {
 	web.NoteRequest(ctx, web.RequestNote{Section: "Auth", Name: "Identity", Value: v})
 }
 
-// liveCheck refuses a live connection's message once the credential its
-// page joined with is gone: signed out, revoked, expired.
+// liveCheck closes a live page, checked every web.LiveCheckEvery, once the
+// credential it mounted with is gone: signed out, revoked, expired — the
+// net for endings auth doesn't hear of; those it does close the page at
+// once (closeLive).
 func (a *Auth) liveCheck(ctx context.Context) error {
 	st := stateOf(ctx)
 	if st == nil || st.id == nil {
@@ -554,7 +563,7 @@ func (a *Auth) recheck(ctx context.Context, st *state) error {
 	fresh, err := a.load(ctx, st.id.ID)
 	if err != nil {
 		log.Printf("auth: loading user %s again for a live page: %v", st.id.ID, err)
-		return nil // the next message tries again; a database down doesn't reload every page
+		return nil // the next check tries again; a database down doesn't reload every page
 	}
 	if fresh == nil {
 		return errors.New("auth: the user is gone")
@@ -598,10 +607,34 @@ func (a *Auth) stillValid(ctx context.Context, st *state) (bool, error) {
 
 // RevokeUser ends every sign-in of user id: its sessions and bearer tokens
 // are deleted, JWTs issued before now are refused by this process, and its
-// live pages close at their next message (and load again, signed out).
+// live pages in this process close at once (and load again, signed out);
+// another process's at their next web.LiveCheckEvery check.
 func (a *Auth) RevokeUser(ctx context.Context, uid string) error {
 	a.jwtEpoch.revoke(uid, time.Now())
-	return errors.Join(a.sessions.DeleteUser(ctx, uid), a.tokens.DeleteUser(ctx, uid))
+	err := errors.Join(a.sessions.DeleteUser(ctx, uid), a.tokens.DeleteUser(ctx, uid))
+	a.closeLive(func(st *state) bool { return st.via != viaContext && st.id != nil && st.id.ID == uid })
+	return err
+}
+
+// closeLive closes the app's live pages whose sign-in match says ended,
+// at once rather than at their next periodic check.
+func (a *Auth) closeLive(match func(*state) bool) {
+	if a.app == nil {
+		return
+	}
+	a.app.CloseLive(func(ctx context.Context) bool {
+		st := stateOf(ctx)
+		return st != nil && st.auth == a && match(st)
+	})
+}
+
+// closeKey closes the live pages signed in with the session or token
+// stored under key.
+func (a *Auth) closeKey(via, key string) {
+	if key == "" {
+		return
+	}
+	a.closeLive(func(st *state) bool { return st.via == via && st.key == key })
 }
 
 // RevokeUser ends every sign-in of user id, as Auth.RevokeUser does, for

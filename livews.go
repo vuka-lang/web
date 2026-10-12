@@ -116,12 +116,12 @@ func LiveMaxConnsPerIP(n int) Option { return OptionFunc(func(a *App) { a.hub.ma
 // sets no cap.
 func LiveMaxConnsPerPage(n int) Option { return OptionFunc(func(a *App) { a.hub.maxPerTok = n }) }
 
-// LiveCheckEvery runs the app's LiveChecks on each joined page this often,
-// as well as on every message from the browser and before each broadcast
-// it takes: 30 seconds by default; 0 runs them only on messages and
-// broadcasts. A page some check fails closes with code 4001 and reloads,
-// so an ended session or a revoked permission reaches pages that sit
-// open.
+// LiveCheckEvery runs the app's LiveChecks on each joined page this often:
+// 30 seconds by default; 0 never runs them. A page some check fails closes
+// with code 4001 and reloads, so a session ended where the app doesn't
+// hear of it (another process, a store edited by hand) or a revoked
+// permission reaches pages that sit open; an ending the app hears of
+// closes them at once (CloseLive).
 func LiveCheckEvery(d time.Duration) Option {
 	return OptionFunc(func(a *App) { a.hub.checkEvery = d })
 }
@@ -258,9 +258,10 @@ type conn struct {
 	doing  string                          // what the session runs, for its errors' log: a handler's name, "join", …
 	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
-	mu    sync.Mutex
-	inbox []delivery
-	wake  chan struct{}
+	mu     sync.Mutex
+	inbox  []delivery
+	wake   chan struct{}
+	ending atomic.Bool // CloseLive matched the page: it closes before anything else
 }
 
 type delivery struct {
@@ -364,6 +365,10 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			ws.CloseNow()
 			return
 		case data := <-msgs:
+			if c.ending.Load() {
+				ws.Close(closeReload, "live: the page must load again")
+				return
+			}
 			if !c.handle(ctx, data) {
 				return
 			}
@@ -391,6 +396,10 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-c.wake:
+			if c.ending.Load() {
+				ws.Close(closeReload, "live: the page must load again")
+				return
+			}
 			if !c.drain(ctx) {
 				return
 			}
@@ -451,9 +460,6 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		}
 	case c.s == nil:
 		c.write(ctx, live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: "live: join first"})
-	case !c.check():
-		c.ws.Close(closeReload, "live: the page must load again")
-		return false
 	case m.Type == live.Navigate:
 		reply, patch := c.navigate(ctx, m.ClientMessage)
 		if _, moved := reply.(withToken); moved && c.tb != nil {
@@ -761,9 +767,7 @@ func (w withToken) MarshalJSON() ([]byte, error) {
 }
 
 // drain delivers the broadcasts waiting for the page; before a join there is
-// nothing to deliver them to, and the join renders the page fresh. The
-// app's LiveChecks run first: false closes the connection, the page
-// reloading.
+// nothing to deliver them to, and the join renders the page fresh.
 func (c *conn) drain(ctx context.Context) bool {
 	c.mu.Lock()
 	batch := c.inbox
@@ -771,10 +775,6 @@ func (c *conn) drain(ctx context.Context) bool {
 	c.mu.Unlock()
 	if c.s == nil || len(batch) == 0 {
 		return true
-	}
-	if !c.check() {
-		c.ws.Close(closeReload, "live: the page must load again")
-		return false
 	}
 	for _, d := range batch {
 		c.doing = "broadcast " + cmp.Or(d.topic, `""`)

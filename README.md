@@ -504,10 +504,13 @@ closes with code 4002, dropping its session, and the runtime joins again at
 once if the page is in view, else when it is shown. At most
 `LiveMaxConns` (10,000) sockets are open, `LiveMaxConnsPerIP` (100) from one
 client address (`web.ClientIP`, so through `TrustedProxies`) and `LiveMaxConnsPerPage` (4) with one page token; a socket
-beyond a cap is refused (503, 429) and the runtime retries. `LiveCheck`s run
-on every message, before every broadcast a page takes, and every
-`LiveCheckEvery` (30s): one failing closes the page with 4001, and it reloads.
-Each is an option; 0 lifts it.
+beyond a cap is refused (503, 429) and the runtime retries. A page is
+checked when it mounts — its join and each navigation run its route through
+the app's middleware and gates — and its events and broadcasts trust what it
+mounted with. `LiveCheck`s run on each joined page every `LiveCheckEvery`
+(30s): one failing closes the page with 4001, and it reloads;
+`app.CloseLive(match)` closes the pages whose context `match` picks at once.
+Each limit is an option; 0 lifts it.
 
 **Security.** The token is the page's URI and an expiry (`LiveTokenTTL`,
 12h by default), HMAC-SHA256-signed with the app's key: a connection can only
@@ -1167,9 +1170,12 @@ on any goroutine. A gated call no identity accounts for is refused
 context with `auth.System(ctx)`, and crons are marked by themselves. A
 failed login takes at least `FailedLoginTime` (300ms), whatever failed, and
 throttling counts the account a login finds, not only its spelling. A live
-page's sign-in is checked at every message and broadcast and every
-`web.LiveCheckEvery` (30s), and its identity
-loaded again every `LiveRecheck` (60s). Its sessions and tokens are kept in memory unless the
+page's sign-in is checked when the page mounts (its join, each navigation),
+its events trusting the identity it mounted with; a sign-in ended through
+auth (`SignOut`, `Revoke`, `RevokeUser`, a new sign-in, a session found
+expired) closes its pages at once, and one ended behind auth's back (a store
+row deleted, another process) is caught within `web.LiveCheckEvery` (30s),
+when its identity is also loaded again if `LiveRecheck` (60s) has passed. Its sessions and tokens are kept in memory unless the
 app gives it stores. An app's own login handler re-renders its page on a
 failure (see Forms that fail) with `auth.LoginMessage(err)`;
 `auth.LoginPage` keeps the posted login and `next`. See the [auth guide](https://vuka-lang.github.io/vuka/web/auth)
@@ -1189,7 +1195,8 @@ never add one. Live connections check their origin themselves.
 | `web.Attrs(attrs…)` | typed attributes for a route or `App.Live` page added in code |
 | `web.ParamFrom(f)` | parameters of `f`'s result type bind with `f(r)` |
 | `web.Implementation[I](app)` | the provided value implementing interface `I` |
-| `web.LiveCheck(f)` | `f(ctx)` before each message of a live connection, before broadcasts reach it and every `LiveCheckEvery` (30s); an error closes it (4001) and the page reloads |
+| `web.LiveCheck(f)` | `f(ctx)` on each joined live page every `LiveCheckEvery` (30s); an error closes it (4001) and the page reloads |
+| `app.CloseLive(match)` | closes (4001, reload) the joined live pages whose context `match(ctx)` picks, at once: a library ending a session closes its pages |
 | `web.GuardLiveEvents(f)` | `f(ctx, web.LiveHandler)` before each live event's handler runs, with the page's context: the handler's name, its component's type, its receiver type and method, its declaration's attributes (Vuka's registry: `vuka.FuncOf`), whether it is a function literal; an error refuses the event as a handler's error would |
 | `web.CurrentLiveEvent()` | the live event the goroutine handles: its context, its handler's name, `Handling()` (its handler, or what the handler calls, runs; not the render after it), and `Refuse(err)` — for a decorator of a handler without a `context.Context` |
 | `web.LiveOrigin()` | on a goroutine a live connection's goroutine started (one a handler starts), that page's context; nil elsewhere |

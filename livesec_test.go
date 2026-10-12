@@ -335,18 +335,8 @@ func TestLiveLimits(t *testing.T) {
 			t.Fatalf("periodic check: %v", err)
 		}
 
-		end(false)
-		app2 := liveApp(check, LiveCheckEvery(0))
-		srv2 := httptest.NewServer(app2.Handler())
-		defer srv2.Close()
-		c2, _ := joined(t, srv2, "/chat/x")
-		end(true)
-		app2.Broadcast(context.Background(), "room:x", said{"hi"})
-		if _, err := recv(c2, 2*time.Second); websocket.CloseStatus(err) != closeReload {
-			t.Fatalf("check before a broadcast: %v", err)
-		}
-
-		// A broadcast is checked once, before it is delivered.
+		// Messages and broadcasts trust what the page mounted with: no
+		// checks, only the periodic ones (none here).
 		end(false)
 		var calls atomic.Int32
 		count := LiveCheck(func(context.Context) error { calls.Add(1); return nil })
@@ -354,11 +344,30 @@ func TestLiveLimits(t *testing.T) {
 		srv3 := httptest.NewServer(app3.Handler())
 		defer srv3.Close()
 		c3, _ := joined(t, srv3, "/chat/x")
-		before := calls.Load()
 		app3.Broadcast(context.Background(), "room:x", said{"hi"})
 		must(t, c3)
-		if n := calls.Load() - before; n != 1 {
-			t.Fatalf("checks for one broadcast: %d", n)
+		send(t, c3, map[string]any{"type": "navigate", "ref": 2, "url": "/chat/y"})
+		must(t, c3)
+		if n := calls.Load(); n != 0 {
+			t.Fatalf("checks for a join, a broadcast and a navigation: %d", n)
+		}
+	})
+	t.Run("CloseLive", func(t *testing.T) {
+		app := liveApp(LiveCheckEvery(0))
+		srv := httptest.NewServer(app.Handler())
+		defer srv.Close()
+		x, _ := joined(t, srv, "/chat/x")
+		y, _ := joined(t, srv, "/chat/y")
+		n := app.CloseLive(func(ctx context.Context) bool { return Request(ctx).URL.Path == "/chat/x" })
+		if n != 1 {
+			t.Errorf("CloseLive closed %d pages", n)
+		}
+		if _, err := recv(x, 2*time.Second); websocket.CloseStatus(err) != closeReload {
+			t.Fatalf("the matched page: %v", err)
+		}
+		app.Broadcast(context.Background(), "room:y", said{"hi"})
+		if m, err := recv(y, 2*time.Second); err != nil || m.Type == "" {
+			t.Fatalf("the other page: %+v %v", m, err)
 		}
 	})
 }

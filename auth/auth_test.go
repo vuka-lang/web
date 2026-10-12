@@ -1013,7 +1013,7 @@ func TestRevokeClosesLivePages(t *testing.T) {
 	if err := a.RevokeUser(context.Background(), "2"); err != nil {
 		t.Fatal(err)
 	}
-	send(t, ws, map[string]any{"type": "event", "ref": 3, "target": inc, "event": "click"})
+	// Closed at once, without a message from the page.
 	_, err := recv(ws)
 	if websocket.CloseStatus(err) != 4001 {
 		t.Errorf("after RevokeUser: %v", err)
@@ -1025,7 +1025,6 @@ func TestRevokeClosesLivePages(t *testing.T) {
 	c.login("bob@example.com", "hunter22", "")
 	ws, m = c.socket("/board", c.srv.URL)
 	c.do("POST", "/auth/logout", "", "Origin", c.srv.URL)
-	send(t, ws, map[string]any{"type": "event", "ref": 2, "target": handler(t, m.HTML, 0), "event": "click"})
 	if _, err := recv(ws); websocket.CloseStatus(err) != 4001 {
 		t.Errorf("after logout: %v", err)
 	}
@@ -1035,10 +1034,9 @@ func TestRevokeClosesLivePages(t *testing.T) {
 	c.login("bob@example.com", "hunter22", "")
 	ws, m = c.socket("/board", c.srv.URL)
 	u.Remove("2")
-	if r := c.do("GET", "/api/private", ""); r.status != 401 {
+	if r := c.do("GET", "/api/private", ""); r.status != 401 { // finds the user gone, ending the session
 		t.Errorf("a removed user: %d", r.status)
 	}
-	send(t, ws, map[string]any{"type": "event", "ref": 2, "target": handler(t, m.HTML, 0), "event": "click"})
 	if _, err := recv(ws); websocket.CloseStatus(err) != 4001 {
 		t.Errorf("a removed user's page: %v", err)
 	}
