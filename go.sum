@@ -4,6 +4,8 @@ github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNU
 github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
+github.com/vuka-lang/ui v0.11.0 h1:QBhwVpaeGhnPMkCFeojckmVS2pYJaLqreut9DIWqhSk=
+github.com/vuka-lang/ui v0.11.0/go.mod h1:Z8oeW6UIRkv2nWiymFiViLvzp7m8ythLyB1lDTMPEZ0=
 github.com/vuka-lang/vuka v0.16.0 h1:IalEDs8UJDht8O7kLAY9fptoIdJRQyfWjaxrmpz/d34=
 github.com/vuka-lang/vuka v0.16.0/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
 golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
