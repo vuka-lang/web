@@ -293,6 +293,10 @@
   function morph(el, next) {
     if (el.tagName !== next.tagName) return el.replaceWith(document.importNode(next, true));
     if (el.hasAttribute("data-vk-ignore") && el.id && el.id === next.id) return;
+    // An island host owns its children (the client-mounted component). Update
+    // its attributes — a changed data-vk-props drives the island's update() —
+    // but never morph into its subtree.
+    if (el.hasAttribute("data-vk-island")) return attrs(el, next);
     if (!isField(el)) {
       attrs(el, next);
       return keptText(el, next) || children(el, next);
