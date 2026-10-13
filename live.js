@@ -1204,11 +1204,29 @@
     });
   }
 
+  // emit sends an island's event to an already-registered handler id (a
+  // data-vk-emit-<name> value, "cN:idx"), with the emit's argument as a JSON
+  // payload the server binds into the handler's parameter (ui.Event.Data).
+  function emitIsland(target, payload) {
+    if (!live) return Promise.reject(new Error("live: emit needs a live page"));
+    return new Promise((resolve, reject) => {
+      const go = () => {
+        const msg = { type: "event", target, event: "emit" };
+        if (payload !== undefined) msg.data = payload;
+        const id = send(msg, null, null);
+        if (id) replies.set(id, { resolve, reject });
+        else reject(new Error("live: not connected"));
+      };
+      if (joined) go();
+      else waiting.push(go);
+    });
+  }
+
   // register names a function for call; a page's script that runs first
   // queues its calls on window.vuka.q.
   const register = (name, fn) => { fns.set(String(name), fn); };
   ((window.vuka && window.vuka.q) || []).forEach((r) => register(...r));
-  window.vuka = { connect, tree, register, push, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
+  window.vuka = { connect, tree, register, push, emit: emitIsland, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   listenIn(document.documentElement.outerHTML);
   if (!live) return;
   history.replaceState({ ...history.state, vk: pageID }, "");

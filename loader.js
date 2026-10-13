@@ -54,6 +54,15 @@
       push: (name, payload) => window.vuka && window.vuka.push
         ? window.vuka.push(inst.el, name, payload)
         : Promise.reject(new Error("vuka: ctx.push needs a live page")),
+      // emit forwards an island component's event to the handler bound on the
+      // tag (on<Emit> → a data-vk-emit-<name> handler id); payload is the
+      // emit's argument, delivered as JSON to the server handler.
+      emit: (name, payload) => {
+        const norm = String(name).toLowerCase().replace(/[^a-z0-9]/g, "");
+        const id = inst.el && inst.el.getAttribute("data-vk-on-" + norm);
+        if (id && window.vuka && window.vuka.emit) return window.vuka.emit(id, payload);
+        return Promise.reject(new Error("vuka: no island handler for emit " + name));
+      },
       on: (name, fn) => {
         if (!ons.has(name)) ons.set(name, []);
         ons.get(name).push(fn);
