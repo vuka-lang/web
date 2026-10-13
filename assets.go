@@ -69,19 +69,31 @@ func (Asset) apply(*App)           {}
 func (Asset) liveOption(*liveSpec) {}
 
 const (
-	assetsPrefix = livePrefix + "c/"
-	loaderPath   = assetsPrefix + "loader.js"
-	assetEvents  = assetsPrefix + "events"
+	assetsPrefix  = livePrefix + "c/"
+	islandsPrefix = livePrefix + "i/"
+	loaderPath    = assetsPrefix + "loader.js"
+	assetEvents   = assetsPrefix + "events"
 	// AssetsEnv names the directory vuka run keeps the compiled assets in:
-	// manifest.json and the modules.
+	// manifest.json, the modules (c/), and the island chunks (i/).
 	AssetsEnv = "VUKA_ASSETS"
 )
 
 // manifest is what the vuka command compiled: the scoped components and
 // the app-wide (Global) assets.
 type manifest struct {
-	Scopes map[string]*scopeAssets `json:"scopes,omitempty"`
-	Global *scopeAssets            `json:"global,omitempty"`
+	Scopes  map[string]*scopeAssets `json:"scopes,omitempty"`
+	Global  *scopeAssets            `json:"global,omitempty"`
+	Islands map[string]*islandAsset `json:"islands,omitempty"`
+}
+
+// islandAsset is a registered island: its name (data-vk-island), the bundled
+// component chunk (a file under /_vuka/i/), and an optional framework adapter
+// chunk. A vanilla island's module exports mount directly, so Adapter is empty.
+type islandAsset struct {
+	Name      string `json:"name"`
+	Module    string `json:"module"`
+	Adapter   string `json:"adapter,omitempty"`
+	Framework string `json:"framework,omitempty"`
 }
 
 // scopeAssets is a component's: its name, files, module (a file name under
@@ -101,6 +113,7 @@ var (
 	assetsMu  sync.Mutex
 	assetsReg []byte
 	scriptReg = map[string][]byte{}
+	islandReg = map[string][]byte{}
 )
 
 // RegisterAssets registers the manifest of the app's compiled styles and
@@ -120,6 +133,15 @@ func RegisterScript(name string, js []byte) {
 	scriptReg[name] = js
 }
 
+// RegisterIsland registers an island's bundled chunk (component or adapter),
+// served at /_vuka/i/<name> and cached for good: its name carries its
+// content's hash. vuka build calls it from the file it generates.
+func RegisterIsland(name string, js []byte) {
+	assetsMu.Lock()
+	defer assetsMu.Unlock()
+	islandReg[name] = js
+}
+
 // assetSet is an app's compiled assets: registered, or a directory vuka run
 // keeps up to date (re-read when its manifest changes, checked at most
 // every 100ms).
@@ -133,6 +155,7 @@ type assetSet struct {
 	mod     time.Time
 	checked time.Time
 	scripts map[string][]byte
+	islands map[string][]byte
 	allowed []string // the types whose pushes it allowed
 
 	streams *streams // development: the pages hearing of each new manifest
@@ -149,7 +172,7 @@ func (a *App) appAssets() *assetSet {
 	if assetsReg == nil {
 		return nil
 	}
-	s := &assetSet{scripts: scriptReg}
+	s := &assetSet{scripts: scriptReg, islands: islandReg}
 	if json.Unmarshal(assetsReg, &s.m) != nil {
 		return nil
 	}
@@ -203,6 +226,7 @@ func (s *assetSet) allow() {
 // load the loader.
 func (m manifest) scripted() bool {
 	return m.Global != nil && m.Global.Module != "" ||
+		len(m.Islands) > 0 ||
 		slices.ContainsFunc(mapValues(m.Scopes), func(s *scopeAssets) bool { return s.Module != "" })
 }
 
@@ -220,10 +244,11 @@ var loaderSrc string
 // loaderInfo is what the loader knows of the manifest: each scope's module
 // and methods, the global module, and in development the event stream.
 type loaderInfo struct {
-	Modules map[string]string   `json:"m"`
-	Methods map[string][]string `json:"f,omitempty"`
-	Global  string              `json:"g,omitempty"`
-	Events  string              `json:"e,omitempty"`
+	Modules map[string]string    `json:"m"`
+	Methods map[string][]string  `json:"f,omitempty"`
+	Global  string               `json:"g,omitempty"`
+	Events  string               `json:"e,omitempty"`
+	Islands map[string][2]string `json:"i,omitempty"` // name → [moduleURL, adapterURL]
 }
 
 func (s *assetSet) info() loaderInfo {
@@ -240,6 +265,16 @@ func (s *assetSet) info() loaderInfo {
 		li.Global = assetsPrefix + g.Module
 		if len(g.Methods) > 0 {
 			li.Methods[""] = g.Methods
+		}
+	}
+	if len(s.m.Islands) > 0 {
+		li.Islands = make(map[string][2]string, len(s.m.Islands))
+		for name, is := range s.m.Islands {
+			adapter := ""
+			if is.Adapter != "" {
+				adapter = islandsPrefix + is.Adapter
+			}
+			li.Islands[name] = [2]string{islandsPrefix + is.Module, adapter}
 		}
 	}
 	if s.dir != "" {
@@ -300,6 +335,35 @@ func (s *assetSet) serveModule(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(js))
 }
 
+// serveIsland serves an island's bundled chunk, named for its content: cached
+// for good.
+func (s *assetSet) serveIsland(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, islandsPrefix)
+	if !moduleName.MatchString(name) {
+		http.NotFound(w, r)
+		return
+	}
+	var js []byte
+	if s.dir != "" {
+		js, _ = os.ReadFile(filepath.Join(s.dir, "i", name))
+	} else {
+		assetsMu.Lock()
+		js = s.islands[name]
+		assetsMu.Unlock()
+	}
+	if js == nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	if s.dir != "" {
+		w.Header().Set("Cache-Control", "no-cache")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
+	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(js))
+}
+
 // events streams the loader's view of the manifest to development pages,
 // so a component mounted after its script changed loads the new module.
 func (s *assetSet) events(w http.ResponseWriter, r *http.Request) {
@@ -335,6 +399,9 @@ func (a *App) routeAssets() {
 		default:
 			a.assets.serveModule(w, r)
 		}
+	}))
+	a.router.Handle(http.MethodGet, islandsPrefix+"{name}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.assets.serveIsland(w, r)
 	}))
 }
 

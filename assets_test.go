@@ -197,6 +197,37 @@ func TestAssetsRegistered(t *testing.T) {
 	}
 }
 
+func TestIslandAssets(t *testing.T) {
+	RegisterAssets([]byte(`{"islands":{"Counter":{"name":"Counter","module":"counter.abcd1234.js","framework":"vanilla"}}}`))
+	RegisterIsland("counter.abcd1234.js", []byte("export function mount(){}"))
+	t.Cleanup(func() { RegisterAssets(nil); delete(islandReg, "counter.abcd1234.js") })
+	srv := httptest.NewServer(scopedApp().Handler())
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/_vuka/i/counter.abcd1234.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if res.StatusCode != 200 || string(b) != "export function mount(){}" || !strings.Contains(res.Header.Get("Cache-Control"), "immutable") {
+		t.Errorf("island chunk: %d %v %s", res.StatusCode, res.Header, b)
+	}
+
+	// The loader learns the island's module URL (adapter empty → vanilla).
+	res, _ = http.Get(srv.URL + "/_vuka/c/loader.js")
+	b, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(b), `"i":{"Counter":["/_vuka/i/counter.abcd1234.js",""]}`) {
+		t.Errorf("loader islands map missing: %s", b)
+	}
+
+	// An app with only islands still loads the loader.
+	if res, _ := http.Get(srv.URL + "/_vuka/i/missing.js"); res.StatusCode != 404 {
+		t.Errorf("unknown island should 404, got %d", res.StatusCode)
+	}
+}
+
 // The toolbar's Assets panel lists the page's scoped components.
 func TestAssetsToolbar(t *testing.T) {
 	devAssets(t)

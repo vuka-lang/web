@@ -84,6 +84,19 @@ func Frontend(fsys fs.FS, root string, opts ...FrontendOption) Option {
 // FrontendOption configures a Frontend.
 type FrontendOption func(*frontend)
 
+// FrontendRoot names the frontend project folder — the directory that holds
+// the Vite project (package.json, src, node_modules) whose build output is the
+// dist Frontend serves. The vuka command reads it to root the island build:
+// it is esbuild's resolve base (node_modules for framework islands) and where
+// islands.d.ts is written. It does not change where an @ui.Island("…") path
+// resolves — that is relative to the Go file declaring the island. When unset,
+// the build uses the parent of Frontend's root (its dist's directory).
+func FrontendRoot(dir string) FrontendOption {
+	return func(f *frontend) {
+		f.srcRoot = strings.Trim(path.Clean("/"+filepath.ToSlash(dir)), "/")
+	}
+}
+
 // FrontendAt serves the frontend under prefix ("/admin") instead of the
 // root: build it with the same base (Vite's base: "/admin/").
 func FrontendAt(prefix string) FrontendOption {
@@ -105,11 +118,12 @@ func FrontendEnv(keys ...string) FrontendOption {
 }
 
 type frontend struct {
-	fsys   fs.FS
-	root   string
-	prefix string
-	env    []string
-	srcDir string // the directory of the source calling Frontend
+	fsys    fs.FS
+	root    string
+	srcRoot string // the frontend project folder (FrontendRoot); "" = parent of root
+	prefix  string
+	env     []string
+	srcDir  string // the directory of the source calling Frontend
 
 	// set by prepare
 	a         *App

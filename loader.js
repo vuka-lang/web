@@ -14,6 +14,8 @@
   let m = info;
   const mods = new Map(); // module URL → Promise of its hook objects
   const insts = new Map(); // root element → instance
+  const islandInsts = new Map(); // island host element → island instance
+  let islandIO = null; // shared IntersectionObserver for client:visible
   let global = null;
 
   const load = (url) => {
@@ -90,6 +92,7 @@
     }
     const kept = new Set(insts.keys());
     for (const el of roots()) if (!insts.has(el)) mount(el, scopeOf(el), m.m[scopeOf(el)]);
+    syncIslands(d); // arm new island hosts, unmount gone ones, re-push live props
     if (!d || d.join) return;
     const patched = (d.ids || []).map((id) => id === "c0" ? document.body : document.querySelector('[data-vk-id="' + id + '"]')).filter(Boolean);
     for (const el of kept) {
@@ -133,8 +136,94 @@
     return null;
   }
 
+  // --- islands ---
+  // An island host carries data-vk-island (its name), data-vk-client (its
+  // hydration strategy) and data-vk-props (JSON). roots() ignores them (their
+  // data-vk-s scope "iN" is not in m.m), so the island branch owns them.
+  function islandRoots() {
+    return m.i ? [...document.querySelectorAll("[data-vk-island]")] : [];
+  }
+
+  function syncIslands(d) {
+    for (const [el, inst] of islandInsts) if (!el.isConnected) unmountIsland(inst);
+    for (const el of islandRoots()) if (!islandInsts.has(el)) armIsland(el);
+    if (d && !d.join) updateIslands();
+  }
+
+  function armIsland(el) {
+    const name = el.getAttribute("data-vk-island");
+    const spec = m.i && m.i[name];
+    if (!spec) { el.setAttribute("data-vk-error", "unknown island"); return; }
+    const inst = { el, id: scopeOf(el) || name, name, spec, ons: null, state: "armed", handle: null, props: el.getAttribute("data-vk-props") || "" };
+    islandInsts.set(el, inst);
+    const go = () => hydrateIsland(inst);
+    switch (el.getAttribute("data-vk-client") || "visible") {
+      case "load": case "only": go(); break;
+      case "idle": (window.requestIdleCallback || ((f) => setTimeout(f, 1)))(go); break;
+      case "media": {
+        const mq = window.matchMedia(el.getAttribute("data-vk-media") || "all");
+        if (mq.matches) { go(); break; }
+        const on = () => { if (mq.matches) { mq.removeEventListener("change", on); go(); } };
+        mq.addEventListener("change", on); inst.mq = [mq, on]; break;
+      }
+      default: {
+        const rm = el.getAttribute("data-vk-rootmargin");
+        if (rm) { const obs = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { obs.disconnect(); go(); } }, { rootMargin: rm }); obs.observe(el); inst.obs = obs; break; }
+        if (!islandIO) islandIO = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { const i = islandInsts.get(e.target); islandIO.unobserve(e.target); if (i) hydrateIsland(i); } });
+        islandIO.observe(el);
+      }
+    }
+  }
+
+  function hydrateIsland(inst) {
+    if (inst.state !== "armed") return;
+    inst.state = "loading";
+    const [moduleURL, adapterURL] = inst.spec;
+    let props = {};
+    try { props = JSON.parse(inst.el.getAttribute("data-vk-props") || "{}"); } catch (_) {}
+    const ctx = context(inst);
+    const want = adapterURL ? [import(moduleURL), import(adapterURL)] : [import(moduleURL)];
+    Promise.all(want).then((mods) => {
+      if (!inst.el.isConnected || !islandInsts.has(inst.el)) return;
+      let handle;
+      if (adapterURL) {
+        const comp = mods[0].default || mods[0];
+        const mount = mods[1].mount || (mods[1].default && mods[1].default.mount);
+        handle = mount(comp, inst.el, props, ctx);
+      } else {
+        const mount = mods[0].mount || (mods[0].default && mods[0].default.mount);
+        if (typeof mount !== "function") throw new Error("island " + inst.name + " has no mount export");
+        handle = mount(inst.el, props, ctx);
+      }
+      inst.handle = handle || {};
+      inst.state = "mounted";
+    }, (err) => { inst.state = "armed"; console.error("vuka: island " + inst.name + ":", err); });
+  }
+
+  // updateIslands re-pushes props to a mounted island whose host data-vk-props
+  // changed in a patch (live props); the adapter keeps the component mounted.
+  function updateIslands() {
+    for (const [el, inst] of islandInsts) {
+      if (inst.state !== "mounted" || !inst.handle || typeof inst.handle.update !== "function") continue;
+      const now = el.getAttribute("data-vk-props") || "";
+      if (now === inst.props) continue;
+      inst.props = now;
+      let props = {}; try { props = JSON.parse(now || "{}"); } catch (_) {}
+      try { inst.handle.update(props); } catch (err) { console.error("vuka: island " + inst.name + " update:", err); }
+    }
+  }
+
+  function unmountIsland(inst) {
+    islandInsts.delete(inst.el);
+    if (inst.obs) inst.obs.disconnect();
+    if (inst.mq) inst.mq[0].removeEventListener("change", inst.mq[1]);
+    if (inst.handle && typeof inst.handle.unmount === "function") {
+      try { inst.handle.unmount(); } catch (err) { console.error("vuka: island " + inst.name + " unmount:", err); }
+    }
+  }
+
   function update(next) {
-    m = { m: next.m || {}, f: next.f || {}, g: next.g, e: next.e };
+    m = { m: next.m || {}, f: next.f || {}, g: next.g, e: next.e, i: next.i || {} };
   }
   update(m);
 
@@ -143,9 +232,9 @@
   // the capture phase, and kept for an instance whose module is loading.
   document.addEventListener("vk:event", (e) => {
     const inst = insts.get(e.target), d = e.detail || {};
-    if (!inst) return;
-    if (inst.hooks) deliver(inst, d);
-    else inst.queue.push(d);
+    if (inst) { if (inst.hooks) deliver(inst, d); else inst.queue.push(d); return; }
+    const isl = islandInsts.get(e.target);
+    if (isl && isl.ons) deliver(isl, d);
   }, true);
   if (m.e && typeof EventSource === "function") {
     new EventSource(m.e).onmessage = (e) => { try { update(JSON.parse(e.data)); } catch (_) {} };
