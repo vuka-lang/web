@@ -16,6 +16,7 @@
   const insts = new Map(); // root element → instance
   const islandInsts = new Map(); // island host element → island instance
   let islandIO = null; // shared IntersectionObserver for client:visible
+  const islandCSS = new Set(); // island stylesheet URLs already linked
   let global = null;
 
   const load = (url) => {
@@ -159,7 +160,23 @@
     if (d && !d.join) updateIslands();
   }
 
+  // ensureIslandCSS links a framework island build's stylesheets (Tailwind +
+  // a UI library's CSS) once, as soon as a page carries an island, so its
+  // components are styled before they hydrate.
+  function ensureIslandCSS() {
+    for (const href of m.ic || []) {
+      if (islandCSS.has(href)) continue;
+      islandCSS.add(href);
+      const l = document.createElement("link");
+      l.rel = "stylesheet";
+      l.href = href;
+      l.setAttribute("data-vk-island-css", "");
+      document.head.appendChild(l);
+    }
+  }
+
   function armIsland(el) {
+    ensureIslandCSS();
     const name = el.getAttribute("data-vk-island");
     const spec = m.i && m.i[name];
     if (!spec) { el.setAttribute("data-vk-error", "unknown island"); return; }
@@ -232,7 +249,7 @@
   }
 
   function update(next) {
-    m = { m: next.m || {}, f: next.f || {}, g: next.g, e: next.e, i: next.i || {} };
+    m = { m: next.m || {}, f: next.f || {}, g: next.g, e: next.e, i: next.i || {}, ic: next.ic || [] };
   }
   update(m);
 

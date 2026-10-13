@@ -84,6 +84,10 @@ type manifest struct {
 	Scopes  map[string]*scopeAssets `json:"scopes,omitempty"`
 	Global  *scopeAssets            `json:"global,omitempty"`
 	Islands map[string]*islandAsset `json:"islands,omitempty"`
+	// IslandCSS are the stylesheet chunks a framework island build emits
+	// (e.g. Tailwind + a UI library's CSS), served from /_vuka/i/. A page
+	// that carries an island links them so its components are styled.
+	IslandCSS []string `json:"islandCSS,omitempty"`
 }
 
 // islandAsset is a registered island: its name (data-vk-island), the bundled
@@ -246,9 +250,10 @@ var loaderSrc string
 type loaderInfo struct {
 	Modules map[string]string    `json:"m"`
 	Methods map[string][]string  `json:"f,omitempty"`
-	Global  string               `json:"g,omitempty"`
-	Events  string               `json:"e,omitempty"`
-	Islands map[string][2]string `json:"i,omitempty"` // name → [moduleURL, adapterURL]
+	Global    string               `json:"g,omitempty"`
+	Events    string               `json:"e,omitempty"`
+	Islands   map[string][2]string `json:"i,omitempty"`  // name → [moduleURL, adapterURL]
+	IslandCSS []string             `json:"ic,omitempty"` // stylesheet URLs a page with an island links
 }
 
 func (s *assetSet) info() loaderInfo {
@@ -276,6 +281,9 @@ func (s *assetSet) info() loaderInfo {
 			}
 			li.Islands[name] = [2]string{islandsPrefix + is.Module, adapter}
 		}
+	}
+	for _, css := range s.m.IslandCSS {
+		li.IslandCSS = append(li.IslandCSS, islandsPrefix+css)
 	}
 	if s.dir != "" {
 		li.Events = assetEvents
@@ -305,6 +313,12 @@ func (s *assetSet) serveLoader(w http.ResponseWriter, r *http.Request) {
 }
 
 var moduleName = regexp.MustCompile(`^[a-z0-9]+(?:\.[a-z0-9]+)*\.js$`)
+
+// islandFile is a chunk or stylesheet served under /_vuka/i/. A Vite island
+// build hashes names with a mixed-case, base64url-ish alphabet and emits CSS
+// assets, so the island route accepts more than moduleName does — still no
+// slash or "..", so it can't escape the registry.
+var islandFile = regexp.MustCompile(`^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\.(?:js|css)$`)
 
 // serveModule serves a component's module, named for its content: cached
 // for good.
@@ -339,7 +353,7 @@ func (s *assetSet) serveModule(w http.ResponseWriter, r *http.Request) {
 // for good.
 func (s *assetSet) serveIsland(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, islandsPrefix)
-	if !moduleName.MatchString(name) {
+	if !islandFile.MatchString(name) {
 		http.NotFound(w, r)
 		return
 	}
@@ -355,7 +369,11 @@ func (s *assetSet) serveIsland(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	ctype := "text/javascript; charset=utf-8"
+	if strings.HasSuffix(name, ".css") {
+		ctype = "text/css; charset=utf-8"
+	}
+	w.Header().Set("Content-Type", ctype)
 	if s.dir != "" {
 		w.Header().Set("Cache-Control", "no-cache")
 	} else {

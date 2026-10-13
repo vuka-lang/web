@@ -20,6 +20,18 @@
 //     PROD, SSR, BASE_URL, those with envPrefix, those in define), reads the
 //     value the app passes the page (web.FrontendEnv), at load time.
 //
+// It also drives the UI-island build. When vuka build (or vuka run) runs
+// `vite build` with VUKA_ISLAND_BUILD set to a spec file, the plugin turns
+// the user's own Vite project — their [vue(), ui(), tailwindcss()] plugins
+// intact — into a multi-entry island build: it replaces rollupOptions.input
+// with the island entries vuka generated (a framework adapter, one
+// `export {default}` entry per @ui.Island component, and a Tailwind/UI CSS
+// entry), redirects the output to vuka's own temp directory, and forces the
+// manifest on. vuka then reads that manifest and serves the island chunks and
+// CSS from /_vuka/i/. This is how an island reaches a Vite-plugin UI library
+// (e.g. Nuxt UI) whose components and Tailwind v4 CSS only exist after its
+// Vite plugin runs. The spec is {outDir, input:{key:relPath}}.
+//
 // No dependencies but Node's own modules.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
@@ -27,6 +39,19 @@ import { dirname, join, resolve } from 'node:path'
 
 export const HOT_FILE = '.vite/vuka-hot.json'
 export const ENV_GLOBAL = '__VUKA_ENV__'
+/** The env var naming the island-build spec file; set by vuka build/run. */
+export const ISLAND_ENV = 'VUKA_ISLAND_BUILD'
+
+/** The island-build spec vuka wrote, or null when not an island build. */
+function islandSpec() {
+  const file = process.env[ISLAND_ENV]
+  if (!file) return null
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'))
+  } catch {
+    return null
+  }
+}
 
 const VITE_ENV = new Set(['MODE', 'DEV', 'PROD', 'SSR', 'BASE_URL'])
 const ENV_REF = /\bimport\.meta\.env\.([A-Za-z_$][\w$]*)/g
@@ -46,7 +71,28 @@ export default function vuka() {
     name: 'vuka',
     enforce: 'pre',
 
-    config(_, { command }) {
+    config(cfg, { command }) {
+      const spec = islandSpec()
+      if (spec) {
+        // An island build: keep the user's plugins, replace the entry set
+        // with vuka's island entries, and send the output to vuka's temp dir.
+        cfg.build = cfg.build || {}
+        cfg.build.manifest = true
+        cfg.build.outDir = spec.outDir
+        cfg.build.emptyOutDir = true
+        cfg.build.copyPublicDir = false
+        const ro = (cfg.build.rollupOptions = cfg.build.rollupOptions || {})
+        ro.input = spec.input
+        if (ro.preserveEntrySignatures == null) ro.preserveEntrySignatures = 'allow-extension'
+        ro.output = {
+          ...(ro.output || {}),
+          format: 'es',
+          entryFileNames: '[name].[hash].js',
+          chunkFileNames: 'chunk.[hash].js',
+          assetFileNames: '[name].[hash][extname]',
+        }
+        return
+      }
       if (command === 'build') return { build: { manifest: true } }
     },
 

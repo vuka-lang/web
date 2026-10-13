@@ -4,6 +4,8 @@ import type { Plugin } from 'vite'
 export const HOT_FILE: string
 /** The global holding the values the app passes the page (web.FrontendEnv). */
 export const ENV_GLOBAL: string
+/** The env var naming the island-build spec file; set by vuka build/run. */
+export const ISLAND_ENV: string
 
 /**
  * The Vite plugin for frontends served by a github.com/vuka-lang/web app:
