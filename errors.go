@@ -64,6 +64,14 @@ func (r Redirect) Error() string                           { return "redirect to
 func (r Redirect) Render(context.Context, io.Writer) error { return nil }
 
 func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, htmlPage bool) {
+	// A redirect returned anywhere — a page handler, a live view's Mount or
+	// render — redirects, rather than becoming a 500. The request path handles
+	// this before erroring; doing it here covers the live paths too.
+	var to Redirect
+	if errors.As(err, &to) {
+		redirect(w, r, to)
+		return
+	}
 	var e *Error
 	if !errors.As(err, &e) {
 		e = &Error{Status: http.StatusInternalServerError, Err: err}
