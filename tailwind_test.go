@@ -309,3 +309,39 @@ func TestDevCSSEventsShutdown(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 }
+
+func TestInlineCSS(t *testing.T) {
+	const css = ".x{color:red}"
+
+	s := newStylesheet([]byte(css))
+	if tags := s.headTags(); !strings.Contains(tags, `<link rel="stylesheet"`) || strings.Contains(tags, "<style") {
+		t.Fatalf("link mode: %s", tags)
+	}
+
+	s.inline = true
+	tags := s.headTags()
+	if !strings.Contains(tags, `<style `+cssInlineMark+`>`+css+`</style>`) {
+		t.Fatalf("inline <style> missing: %s", tags)
+	}
+	if strings.Contains(tags, "<link") {
+		t.Fatalf("inline mode still links: %s", tags)
+	}
+	if !s.present([]byte(tags)) {
+		t.Fatal("present should detect the inline style")
+	}
+	if s.present([]byte("<html></html>")) {
+		t.Fatal("present false positive")
+	}
+}
+
+func TestInlineCSSOption(t *testing.T) {
+	withCSS(t, ".x{color:red}")
+	a := &App{cssInline: true}
+	s := a.appCSS()
+	if s == nil || !s.inline {
+		t.Fatalf("appCSS should carry the inline flag: %+v", s)
+	}
+	if !strings.Contains(s.headTags(), "<style "+cssInlineMark) {
+		t.Fatalf("inline app head tags: %s", s.headTags())
+	}
+}

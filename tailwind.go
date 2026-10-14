@@ -24,6 +24,9 @@ const (
 	cssEvents = livePrefix + "app-css"
 	// CSSEnv names the stylesheet file vuka run keeps up to date.
 	CSSEnv = "VUKA_TAILWIND_CSS"
+	// cssInlineMark marks the inline <style> (InlineCSS), for the idempotency
+	// check and the development hot-reload.
+	cssInlineMark = "data-vk-app"
 )
 
 var (
@@ -45,6 +48,14 @@ func RegisterCSS(name string, css []byte) {
 // /_vuka/app.css and the vuka command builds none.
 func NoTailwind() Option { return OptionFunc(func(a *App) { a.noCSS = true }) }
 
+// InlineCSS puts the app's stylesheet in a <style> in every page's head
+// instead of a <link> to /_vuka/app.css. The styles then arrive with the
+// HTML, so a full page load never waits on a stylesheet request and never
+// flashes unstyled content — the cost is the CSS rides every full page (gzip
+// and in-app navigation, which does not reload, keep that cheap). Development
+// hot-reload still applies.
+func InlineCSS() Option { return OptionFunc(func(a *App) { a.cssInline = true }) }
+
 // Tailwind names the project's Tailwind stylesheet, relative to the module
 // root, when it isn't app.css or styles/app.css. The vuka command reads the
 // path from the source, so it must be a string literal.
@@ -56,13 +67,13 @@ func Tailwind(path string) Option {
 type stylesheet struct {
 	file string // a file re-read when it changes (development); else fixed
 
-	mu         sync.Mutex
-	css        []byte
-	tag        string
-	mod        time.Time
-	size       int64
-	checked    time.Time
-	found, dev bool
+	mu                 sync.Mutex
+	css                []byte
+	tag                string
+	mod                time.Time
+	size               int64
+	checked            time.Time
+	found, dev, inline bool
 
 	streams *streams // development: the pages hearing of each new tag
 }
@@ -85,12 +96,14 @@ func (a *App) appCSS() *stylesheet {
 		return nil
 	}
 	if f := os.Getenv(CSSEnv); f != "" {
-		return &stylesheet{file: f, dev: true, streams: newStreams()}
+		return &stylesheet{file: f, dev: true, inline: a.cssInline, streams: newStreams()}
 	}
 	cssMu.Lock()
 	defer cssMu.Unlock()
 	if css, ok := cssReg[cssName]; ok {
-		return newStylesheet(css)
+		s := newStylesheet(css)
+		s.inline = a.cssInline
+		return s
 	}
 	return nil
 }
@@ -168,12 +181,26 @@ func serveContent(w http.ResponseWriter, r *http.Request, ctype, tag string, imm
 // headTags is what a full page gets before </head>: the stylesheet's link,
 // and in development the script swapping it when it changes.
 func (s *stylesheet) headTags() string {
-	_, tag, _ := s.current()
-	t := `<link rel="stylesheet" href="` + cssPath + `?v=` + tag + `">`
+	css, tag, _ := s.current()
+	var t string
+	if s.inline {
+		t = `<style ` + cssInlineMark + `>` + string(css) + `</style>`
+	} else {
+		t = `<link rel="stylesheet" href="` + cssPath + `?v=` + tag + `">`
+	}
 	if s.dev {
 		t += `<script src="` + cssWatch + `" defer></script>`
 	}
 	return t
+}
+
+// present reports whether html already carries the stylesheet, so linkCSS
+// does not add it twice.
+func (s *stylesheet) present(html []byte) bool {
+	if s.inline {
+		return bytes.Contains(html, []byte(cssInlineMark))
+	}
+	return bytes.Contains(html, []byte(cssPath))
 }
 
 // linkCSS adds the stylesheet to a full page (one with </head> or </body>)
@@ -194,7 +221,7 @@ func (a *App) linkCSS(r *http.Request, html []byte) []byte {
 // headTags is what linkCSS adds to html.
 func (a *App) headTags(r *http.Request, html []byte) string {
 	var tags string
-	if a.css != nil && !bytes.Contains(html, []byte(cssPath)) {
+	if a.css != nil && !a.css.present(html) {
 		tags = a.css.headTags()
 	}
 	if a.assets != nil && !bytes.Contains(html, []byte(loaderPath)) {
@@ -261,9 +288,13 @@ func foldEq(b []byte, lower string) bool {
 // development only. EventSource reconnects by itself when the app restarts.
 const cssWatchJS = `(() => {
 	const path = "` + cssPath + `";
-	const link = () => document.querySelector('link[rel="stylesheet"][href^="' + path + '"]');
-	new EventSource("` + cssEvents + `").onmessage = (e) => {
-		const old = link();
+	new EventSource("` + cssEvents + `").onmessage = async (e) => {
+		const style = document.querySelector('style[` + cssInlineMark + `]');
+		if (style) {
+			style.textContent = await fetch(path + "?v=" + e.data).then((r) => r.text());
+			return;
+		}
+		const old = document.querySelector('link[rel="stylesheet"][href^="' + path + '"]');
 		if (!old || new URL(old.href).searchParams.get("v") === e.data) return;
 		const next = old.cloneNode();
 		next.href = path + "?v=" + e.data;
