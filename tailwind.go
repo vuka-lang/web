@@ -24,8 +24,8 @@ const (
 	cssEvents = livePrefix + "app-css"
 	// CSSEnv names the stylesheet file vuka run keeps up to date.
 	CSSEnv = "VUKA_TAILWIND_CSS"
-	// cssInlineMark marks the inline <style> (InlineCSS), for the idempotency
-	// check and the development hot-reload.
+	// cssInlineMark marks the development inline <style>, for the idempotency
+	// check and the hot-reload.
 	cssInlineMark = "data-vk-app"
 )
 
@@ -48,14 +48,6 @@ func RegisterCSS(name string, css []byte) {
 // /_vuka/app.css and the vuka command builds none.
 func NoTailwind() Option { return OptionFunc(func(a *App) { a.noCSS = true }) }
 
-// InlineCSS puts the app's stylesheet in a <style> in every page's head
-// instead of a <link> to /_vuka/app.css. The styles then arrive with the
-// HTML, so a full page load never waits on a stylesheet request and never
-// flashes unstyled content — the cost is the CSS rides every full page (gzip
-// and in-app navigation, which does not reload, keep that cheap). Development
-// hot-reload still applies.
-func InlineCSS() Option { return OptionFunc(func(a *App) { a.cssInline = true }) }
-
 // Tailwind names the project's Tailwind stylesheet, relative to the module
 // root, when it isn't app.css or styles/app.css. The vuka command reads the
 // path from the source, so it must be a string literal.
@@ -67,13 +59,13 @@ func Tailwind(path string) Option {
 type stylesheet struct {
 	file string // a file re-read when it changes (development); else fixed
 
-	mu                 sync.Mutex
-	css                []byte
-	tag                string
-	mod                time.Time
-	size               int64
-	checked            time.Time
-	found, dev, inline bool
+	mu         sync.Mutex
+	css        []byte
+	tag        string
+	mod        time.Time
+	size       int64
+	checked    time.Time
+	found, dev bool
 
 	streams *streams // development: the pages hearing of each new tag
 }
@@ -96,14 +88,12 @@ func (a *App) appCSS() *stylesheet {
 		return nil
 	}
 	if f := os.Getenv(CSSEnv); f != "" {
-		return &stylesheet{file: f, dev: true, inline: a.cssInline, streams: newStreams()}
+		return &stylesheet{file: f, dev: true, streams: newStreams()}
 	}
 	cssMu.Lock()
 	defer cssMu.Unlock()
 	if css, ok := cssReg[cssName]; ok {
-		s := newStylesheet(css)
-		s.inline = a.cssInline
-		return s
+		return newStylesheet(css)
 	}
 	return nil
 }
@@ -180,25 +170,24 @@ func serveContent(w http.ResponseWriter, r *http.Request, ctype, tag string, imm
 
 // headTags is what a full page gets before </head>: the stylesheet's link,
 // and in development the script swapping it when it changes.
+// headTags is the stylesheet's tags for a page's head. Development inlines it
+// in a <style> so a full reload never flashes unstyled while the stylesheet
+// (served no-cache so it stays fresh) revalidates, and adds the hot-reload
+// script; the build links it, which the browser caches across loads.
 func (s *stylesheet) headTags() string {
 	css, tag, _ := s.current()
-	var t string
-	if s.inline {
-		t = `<style ` + cssInlineMark + `>` + string(css) + `</style>`
-	} else {
-		t = `<link rel="stylesheet" href="` + cssPath + `?v=` + tag + `">`
-	}
 	if s.dev {
-		t += `<script src="` + cssWatch + `" defer></script>`
+		return `<style ` + cssInlineMark + `>` + string(css) + `</style>` +
+			`<script src="` + cssWatch + `" defer></script>`
 	}
-	return t
+	return `<link rel="stylesheet" href="` + cssPath + `?v=` + tag + `">`
 }
 
 // present reports whether html already carries the stylesheet, so linkCSS
 // does not add it twice.
 func (s *stylesheet) present(html []byte) bool {
-	if s.inline {
-		return bytes.Contains(html, []byte(cssInlineMark))
+	if s.dev && bytes.Contains(html, []byte(cssInlineMark)) {
+		return true
 	}
 	return bytes.Contains(html, []byte(cssPath))
 }

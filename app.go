@@ -71,7 +71,6 @@ type App struct {
 	noToolbar bool
 
 	noCSS     bool
-	cssInline bool        // inline the stylesheet instead of linking it
 	cssSource string      // web.Tailwind's path, for the vuka command
 	css       *stylesheet // nil: pages link no stylesheet
 	assets    *assetSet   // nil: no compiled styles or scripts

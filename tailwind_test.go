@@ -48,6 +48,8 @@ func cssApp(opts ...Option) *App {
 
 var linkRE = regexp.MustCompile(`<link rel="stylesheet" href="/_vuka/app\.css\?v=([\w-]*)">`)
 
+var styleRE = regexp.MustCompile(`<style ` + cssInlineMark + `>(.*?)</style>`)
+
 func TestCSSLink(t *testing.T) {
 	withCSS(t, ".text-red-500{color:red}")
 	h := cssApp().Handler()
@@ -117,7 +119,7 @@ func TestNoTailwind(t *testing.T) {
 	if _, body, _ := do(t, cssApp(NoTailwind()).Handler(), "GET", "/doc", ""); strings.Contains(body, "app.css") {
 		t.Errorf("NoTailwind with %s: %s", CSSEnv, body)
 	}
-	if _, body, _ := do(t, cssApp(NoTailwind(), Tailwind("ui/site.css")).Handler(), "GET", "/doc", ""); !strings.Contains(body, "app.css") {
+	if _, body, _ := do(t, cssApp(NoTailwind(), Tailwind("ui/site.css")).Handler(), "GET", "/doc", ""); !strings.Contains(body, cssInlineMark) {
 		t.Errorf("Tailwind after NoTailwind: %s", body)
 	}
 }
@@ -143,12 +145,12 @@ func TestCSSDevFile(t *testing.T) {
 		t.Errorf("before the first build: %d", code)
 	}
 	_, body, _ := do(t, h, "GET", "/doc", "")
-	if !linkRE.MatchString(body) || !strings.Contains(body, `<script src="/_vuka/app-css.js" defer></script></head>`) {
+	if !styleRE.MatchString(body) || !strings.Contains(body, `<script src="/_vuka/app-css.js" defer></script></head>`) {
 		t.Errorf("a page before the first build: %s", body)
 	}
-	tagOf := func() string {
+	cssOf := func() string {
 		_, body, _ := do(t, h, "GET", "/doc", "")
-		return linkRE.FindStringSubmatch(body)[1]
+		return styleRE.FindStringSubmatch(body)[1]
 	}
 	for _, css := range []string{".one{color:red}", ".two{color:blue}"} {
 		os.WriteFile(file, []byte(css), 0o644)
@@ -160,8 +162,8 @@ func TestCSSDevFile(t *testing.T) {
 		if _, body, _ := do(t, h, "GET", "/_vuka/app.css", ""); body != css {
 			t.Errorf("GET: %q, want %q", body, css)
 		}
-		if got := tagOf(); got != cssTag([]byte(css)) {
-			t.Errorf("the page links %s, want %s", got, cssTag([]byte(css)))
+		if got := cssOf(); got != css {
+			t.Errorf("the page inlines %q, want %q", got, css)
 		}
 	}
 	if code, body, _ := do(t, h, "GET", "/_vuka/app-css.js", ""); code != 200 || !strings.Contains(body, "/_vuka/app-css") {
@@ -273,10 +275,10 @@ func TestBrowserTailwind(t *testing.T) {
 	p.Wait(bg + ` !== "` + green + `" && window.marker === 1`)
 	p.Click("button")
 	p.WaitText("#box button", "1")
-	var links int
-	p.Eval(`document.querySelectorAll('link[href^="/_vuka/app.css"]').length`, &links)
-	if links != 1 {
-		t.Errorf("%d stylesheet links after the swap, want 1", links)
+	var styles int
+	p.Eval(`document.querySelectorAll('style[`+cssInlineMark+`]').length`, &styles)
+	if styles != 1 {
+		t.Errorf("%d inline stylesheets after the update, want 1", styles)
 	}
 }
 
@@ -310,38 +312,29 @@ func TestDevCSSEventsShutdown(t *testing.T) {
 	}
 }
 
-func TestInlineCSS(t *testing.T) {
-	const css = ".x{color:red}"
-
-	s := newStylesheet([]byte(css))
-	if tags := s.headTags(); !strings.Contains(tags, `<link rel="stylesheet"`) || strings.Contains(tags, "<style") {
-		t.Fatalf("link mode: %s", tags)
-	}
-
-	s.inline = true
+func TestCSSLinkedInBuild(t *testing.T) {
+	s := newStylesheet([]byte(".x{color:red}"))
 	tags := s.headTags()
-	if !strings.Contains(tags, `<style `+cssInlineMark+`>`+css+`</style>`) {
-		t.Fatalf("inline <style> missing: %s", tags)
+	if !strings.Contains(tags, `<link rel="stylesheet"`) || strings.Contains(tags, "<style") {
+		t.Fatalf("the build should link the stylesheet: %s", tags)
 	}
-	if strings.Contains(tags, "<link") {
-		t.Fatalf("inline mode still links: %s", tags)
-	}
-	if !s.present([]byte(tags)) {
-		t.Fatal("present should detect the inline style")
-	}
-	if s.present([]byte("<html></html>")) {
-		t.Fatal("present false positive")
+	if !s.present([]byte(tags)) || s.present([]byte("<html></html>")) {
+		t.Fatalf("present (link): %s", tags)
 	}
 }
 
-func TestInlineCSSOption(t *testing.T) {
-	withCSS(t, ".x{color:red}")
-	a := &App{cssInline: true}
-	s := a.appCSS()
-	if s == nil || !s.inline {
-		t.Fatalf("appCSS should carry the inline flag: %+v", s)
+func TestCSSInlinedInDev(t *testing.T) {
+	const css = ".x{color:red}"
+	s := newStylesheet([]byte(css))
+	s.dev = true
+	tags := s.headTags()
+	if !strings.Contains(tags, `<style `+cssInlineMark+`>`+css+`</style>`) {
+		t.Fatalf("dev should inline the stylesheet: %s", tags)
 	}
-	if !strings.Contains(s.headTags(), "<style "+cssInlineMark) {
-		t.Fatalf("inline app head tags: %s", s.headTags())
+	if strings.Contains(tags, "<link") {
+		t.Fatalf("dev still links: %s", tags)
+	}
+	if !s.present([]byte(tags)) || s.present([]byte("<html></html>")) {
+		t.Fatalf("present (inline): %s", tags)
 	}
 }
