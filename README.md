@@ -784,6 +784,42 @@ as is, plus:
 
 A broadcast arriving before `join` is dropped (the join renders fresh).
 
+## Client state
+
+`ui.State` keeps a value in the browser — a menu's open flag, a tab, a
+filter — and the page follows it with no round trip. The runtime (live.js)
+evaluates the bindings and runs the writes, live page or not:
+
+```vuka
+var theme = ui.State("light") // the page's: one value
+
+func Menu() ui.Node {
+	open := ui.State(false) // each Menu's own
+	return <div>
+		<button aria-expanded={open} onClick={open.Toggle()}>Menu</button>
+		<ui.Show when={open}>
+			<ul class="transition data-closed:opacity-0">…</ul>
+		</ui.Show>
+	</div>
+}
+
+func Tabs() ui.Node {
+	tab := ui.State("env")
+	f := ui.State(Filters{Sort: "name"})
+	return <section>
+		<button aria-selected={tab == "env"} onClick={tab.Set("env")}>Env</button>
+		<button onClick={tab.Set("logs").Set(f.Kind, "")}>Logs</button>
+		<div hidden={tab != "logs" || f.Kind == ""}>…</div>
+		<Count kind={f.Kind} /> {/* the same state */}
+	</section>
+}
+```
+
+A live page's renders leave what the browser set alone; a component sets a
+state from the server with `c.PushJS(tab.Set("logs"))`. Guide:
+[client state](https://vuka-lang.github.io/vuka/ui/state); example:
+`examples/live/state.vuka`.
+
 ## Dependency injection
 
 The container holds constructors — `func(deps…) T` or `func(deps…) (T, error)`

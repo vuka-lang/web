@@ -1,0 +1,129 @@
+package main
+
+import (
+	"net/http"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+)
+
+// theme is the page's state: declared at package level, every component on
+// the page reads this one value.
+var theme = ui.State("light")
+
+// Filters is a struct state: each field changes on its own.
+type Filters struct {
+	Kind string
+	Sort string
+}
+
+type pet struct{ Name, Kind string }
+
+var pets = []pet{{"Rex", "dog"}, {"Tom", "cat"}, {"Fido", "dog"}}
+
+// State is a page of client state only — menus, tabs, a filter, a
+// tooltip: the browser keeps their states, and the page never connects.
+@web.Get("/state")
+func State(r *http.Request) ui.Node {
+	return <Shell title="State">
+		<h1>State</h1>
+		<Menu label="First" />
+		<Menu label="Second" />
+		<Tabs />
+		<Filter />
+		<p class={ui.Class{"theme": true, "dark": theme == "dark"}} id="theme">Theme: {theme}</p>
+		<button type="button" id="dark" onClick={theme.Set("dark")}>Dark</button>
+		<Tip />
+	</Shell>
+}
+
+// Menu's open state is its own instance's: the page's two menus open apart.
+func Menu(label string) ui.Node {
+	open := ui.State(false)
+	return <div class="menu-box">
+		<button class="menu-btn" type="button" aria-expanded={open} onClick={open.Toggle()}>
+			{label}
+		</button>
+		<ui.Show when={open}>
+			<ul class="panel">
+				<li>One</li>
+				<li>Two</li>
+			</ul>
+		</ui.Show>
+	</div>
+}
+
+// Tabs picks a panel; one expression may read several states.
+func Tabs() ui.Node {
+	tab := ui.State("env")
+	pinned := ui.State(false)
+	return <section class="tabs">
+		<button type="button" id="tab-env" aria-selected={tab == "env"} onClick={tab.Set("env")}>Environment</button>
+		<button type="button" id="tab-logs" aria-selected={tab == "logs"} onClick={tab.Set("logs").Set(pinned, false)}>Logs</button>
+		<button type="button" id="pin" onClick={pinned.Toggle()}>Pin</button>
+		<div id="env" hidden={tab != "env"}>KEY=value</div>
+		<div id="logs" hidden={tab != "logs"}>started</div>
+		<p id="pinned" hidden={!pinned || tab != "env"}>pinned to the environment</p>
+	</section>
+}
+
+// Filter's state is a struct; a list item reads one field, a server value
+// beside it.
+func Filter() ui.Node {
+	f := ui.State(Filters{Sort: "name"})
+	return <section class="filter">
+		<button type="button" id="dogs" onClick={f.Kind.Set("dog")}>Dogs</button>
+		<button type="button" id="cats" onClick={f.Set(Filters{Kind: "cat", Sort: "age"})}>Cats by age</button>
+		<button type="button" id="all" onClick={f.Reset()}>All</button>
+		<p id="kind">{f.Kind} {f.Sort}</p>
+		<ul>
+			{for _, p := range pets {
+				<li class="pet" hidden={f.Kind != "" && f.Kind != p.Kind}>{p.Name}</li>
+			}}
+		</ul>
+		<Count kind={f.Kind} />
+	</section>
+}
+
+// Count gets its parent's state: the same state, not a copy.
+func Count(kind ui.State[string]) ui.Node {
+	return <p id="count" hidden={kind == ""}>only {kind}s</p>
+}
+
+// Tip is a popover shown by a state, in the browser's top layer.
+func Tip() ui.Node {
+	tip := ui.State(false)
+	return <div>
+		<button type="button" id="tip-btn" onClick={tip.Toggle()}>Tip</button>
+		<ui.Show when={tip}>
+			<div id="tip" popover="manual" class="panel">A tip</div>
+		</ui.Show>
+	</div>
+}
+
+// Board is a live page with client state: what the browser opened stays
+// open when the server renders the board again, and the server sets a
+// state with PushJS.
+@web.Live("/state/live")
+type Board struct {
+	ui.Live
+	tab ui.State[string]
+	n   int
+}
+
+func (b *Board) Mount() { b.tab = ui.State("a") }
+
+func (b *Board) Bump() { b.n++ }
+
+func (b *Board) ToB() { b.PushJS(b.tab.Set("b")) }
+
+func (b *Board) Render() ui.Node {
+	open := ui.State(false)
+	return <div class="board">
+		<button id="open" type="button" onClick={open.Toggle()}>Open</button>
+		<p id="opened" hidden={!open}>opened</p>
+		<button id="bump" type="button" onClick={b.Bump}>{b.n}</button>
+		<button id="tob" type="button" onClick={b.ToB}>To b</button>
+		<p id="tab">{b.tab}</p>
+	</div>
+}

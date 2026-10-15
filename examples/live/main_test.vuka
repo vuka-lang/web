@@ -330,3 +330,76 @@ func TestBrowserNavigation(t *testing.T) {
 		p.Wait(`!window.marker && location.pathname === "/books.json" && document.body.textContent.includes("Things Fall Apart")`)
 	})
 }
+
+func TestStatePage(t *testing.T) {
+	srv := server(t)
+	res, err := http.Get(srv.URL + "/state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	page := string(b)
+	for _, want := range []string{
+		`aria-expanded="false" data-vk-b-aria-expanded=`, // rendered with the initial value
+		`<div id="logs" hidden data-vk-b-hidden=`,
+		`<vk-show data-vk-show=`,
+		`<p id="kind"><vk-t data-vk-b=`,
+		`/_vuka/live.js`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("no %s in\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "data-vk-token=") {
+		t.Error("a page of client state only connects")
+	}
+}
+
+func TestBrowserState(t *testing.T) {
+	srv := server(t)
+	p := chrome.Launch(t).Visit(srv.URL + "/state")
+	panel := `document.querySelectorAll(".menu-box .panel")`
+	p.Click("div.menu-box:first-of-type .menu-btn")
+	p.Wait(panel + `[0].checkVisibility() && !` + panel + `[1].checkVisibility() && document.querySelector(".menu-btn").getAttribute("aria-expanded") === "true"`)
+	p.Wait(`!` + panel + `[0].hasAttribute("data-enter") && !` + panel + `[0].hasAttribute("data-closed")`) // entered
+	p.Click("div.menu-box:first-of-type .menu-btn")
+	p.Wait(panel + `[0].hasAttribute("data-closed") && !` + panel + `[0].checkVisibility()`) // left, then hidden
+
+	p.Click("#pin")
+	p.Wait(`!document.querySelector("#pinned").hidden`)
+	p.Click("#tab-logs")
+	p.Wait(`document.querySelector("#env").hidden && !document.querySelector("#logs").hidden && document.querySelector("#pinned").hidden && document.querySelector("#tab-logs").getAttribute("aria-selected") === "true"`)
+
+	p.Click("#dogs")
+	p.Wait(`[...document.querySelectorAll(".pet")].map((e) => e.hidden).join() === "false,true,false" && document.querySelector("#kind").textContent === "dog name" && document.querySelector("#count").textContent === "only dogs"`)
+	p.Click("#cats")
+	p.Wait(`[...document.querySelectorAll(".pet")].map((e) => e.hidden).join() === "true,false,true" && document.querySelector("#kind").textContent === "cat age"`)
+	p.Click("#all")
+	p.Wait(`document.querySelector("#kind").textContent === " name" && document.querySelector("#count").hidden`)
+
+	p.Click("#dark")
+	p.Wait(`document.querySelector("#theme").className === "theme dark" && document.querySelector("#theme").textContent === "Theme: dark"`)
+
+	p.Click("#tip-btn")
+	p.Wait(`document.querySelector("#tip").matches(":popover-open")`)
+	p.Click("#tip-btn")
+	p.Wait(`!document.querySelector("#tip").matches(":popover-open")`)
+	p.Wait(`window.__wire.sockets.length === 0`)
+}
+
+func TestBrowserStateLive(t *testing.T) {
+	protocols(t, func(t *testing.T, open func(string) *chrome.Page) {
+		p := open("/state/live")
+		p.Click("#open")
+		p.Wait(`!document.querySelector("#opened").hidden`)
+		p.Click("#bump")
+		p.WaitText("#bump", "1")
+		p.Wait(`!document.querySelector("#opened").hidden`) // the server's render left it open
+		p.Click("#tob")
+		p.WaitText("#tab", "b")
+		p.Click("#bump")
+		p.WaitText("#bump", "2")
+		p.WaitText("#tab", "b")
+	})
+}

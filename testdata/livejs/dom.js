@@ -414,6 +414,7 @@ function page(file, body, options = {}) {
   };
   ctx.window = ctx;
   if (options.vuka) ctx.vuka = options.vuka; // what a page's script set up first
+  Object.assign(ctx, options.globals || {}); // what else the browser has (getComputedStyle, matchMedia)
   ctx.listeners = {};
   ctx.addEventListener = (t, fn) => { (ctx.listeners[t] ||= []).push(fn); };
   ctx.dispatchEvent = (e) => { (ctx.listeners[e.type] || []).forEach((fn) => fn(e)); return !e.defaultPrevented; };

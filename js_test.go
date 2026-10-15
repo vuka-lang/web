@@ -32,6 +32,19 @@ func TestLiveJSCommands(t *testing.T) {
 	t.Logf("%s", strings.TrimSpace(string(out)))
 }
 
+// The runtime's client state (ui.State) and ui.Show, in node over a small DOM.
+func TestLiveJSState(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	out, err := exec.Command(node, "testdata/livejs/state.js", "live.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s", out)
+	}
+	t.Logf("%s", strings.TrimSpace(string(out)))
+}
+
 type op = []any
 
 func attrs(kv ...any) []ui.Attr {

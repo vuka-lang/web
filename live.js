@@ -165,6 +165,7 @@
     }
     listenIn(html);
     children(document.body, next);
+    bindIn(document.body, html);
   }
 
   // head takes a page's title, and the elements of its head the document
@@ -193,7 +194,9 @@
     const next = fragment(u.html).firstElementChild;
     listenIn(u.html);
     if (el && next) morph(el, next);
-    return el && el.isConnected ? el : byID(u.id);
+    const now = el && el.isConnected ? el : byID(u.id);
+    bindIn(now, u.html);
+    return now;
   }
 
   function fragment(html) {
@@ -559,15 +562,18 @@
   // predictions; a chain run from inside one (exec) shares its record, and r
   // starts a record of its own (or carries one across a call it waits for).
   function run(el, ops, e, r) {
-    if (rec && !r) return steps(el, ops, e);
-    const outer = rec;
-    rec = r || [];
-    try { return steps(el, ops, e); } finally { rec = outer; }
+    try {
+      if (rec && !r) return steps(el, ops, e);
+      const outer = rec;
+      rec = r || [];
+      try { return steps(el, ops, e); } finally { rec = outer; }
+    } finally { if (dirty.size) flushStates(); }
   }
 
   function steps(el, ops, e) {
     for (let i = 0; i < ops.length; i++) {
       const [name, a = {}] = ops[i];
+      if (dirty.size && !/^state_/.test(name)) flushStates(); // the chain's writes land before its next other step
       if (name === "call") {
         const out = call(el, a, e), rest = ops.slice(i + 1), r = rec;
         if (out === false) return false;
@@ -964,6 +970,184 @@
     });
   }
 
+  // Client state (ui.State): values the browser keeps, by key, each set
+  // up from the initial value its references carry ("i"). The page's parts
+  // bound to them — an attribute (data-vk-b-<name>), a <vk-t>'s text
+  // (data-vk-b), a <vk-show>'s children (data-vk-show) — hold expressions of
+  // states, evaluated again when a state they read changes (a struct
+  // state's field changes only what reads it). A chain's writes are batched:
+  // each binding they reach updates once, before the chain's next other
+  // step and at its end. A morph renders the initial values back; the
+  // bindings then put the browser's back.
+  const store = new Map(), subs = new Map(), dirty = new Set(), bound = new WeakMap();
+  const sinit = (r) => { if (!store.has(r.s)) store.set(r.s, r.i === undefined ? null : r.i); return r; };
+  const at = (v, p) => { for (const k of p || []) v = v == null ? undefined : v[k]; return v; };
+  const sread = (r) => at(store.get(sinit(r).s), r.p);
+  const equal = (a, b) => a === b || a !== null && b !== null && typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b);
+  function swrite(r, v) {
+    if (!r.s || equal(sread(r), v)) return;
+    const p = r.p || [], put = (o, i) => i === p.length ? v : { ...(o && typeof o === "object" ? o : {}), [p[i]]: put(o && o[p[i]], i + 1) };
+    store.set(r.s, put(store.get(r.s), 0));
+    dirty.add([r.s, ...p].join("\0"));
+  }
+  // Paths reach each other when one starts the other: a struct's write
+  // reaches its fields' readers, a field's write the struct's.
+  const reach = (a, b) => a.every((k, i) => i >= b.length || k === b[i]);
+  function flushStates() {
+    const ds = [...dirty].map((d) => d.split("\0")), todo = new Set();
+    dirty.clear();
+    for (const d of ds) (subs.get(d[0]) || []).forEach((b) => { if (b.deps.some((p) => p[0] === d[0] && reach(p, d))) todo.add(b); });
+    todo.forEach((b) => b.el.isConnected ? put(b) : unsub(b));
+  }
+  function ev(x) {
+    if (x === null || typeof x !== "object") return x;
+    if (!Array.isArray(x)) return "s" in x ? sread(x) : x.v;
+    const [op, a, b] = x;
+    switch (op) {
+      case "!": return !ev(a);
+      case "neg": return -ev(a);
+      case "&&": return ev(a) && ev(b);
+      case "||": return ev(a) || ev(b);
+      case "==": return equal(ev(a), ev(b));
+      case "!=": return !equal(ev(a), ev(b));
+      case "<": return ev(a) < ev(b);
+      case "<=": return ev(a) <= ev(b);
+      case ">": return ev(a) > ev(b);
+      case ">=": return ev(a) >= ev(b);
+      case "+": return ev(a) + ev(b);
+      case "-": return ev(a) - ev(b);
+      case "len": return size(ev(a));
+      case "class": { const out = {}; for (const k in a) out[k] = !!ev(a[k]); return out; }
+    }
+    warn("unknown state expression " + op);
+  }
+  // size is Go's len: a string's UTF-8 bytes, a list's items, a map's keys.
+  function size(v) {
+    if (typeof v === "string") { let n = 0; for (const ch of v) { const c = ch.codePointAt(0); n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4; } return n; }
+    return v == null ? 0 : Array.isArray(v) ? v.length : typeof v === "object" ? Object.keys(v).length : 0;
+  }
+  // deps are the state paths an expression reads, each state set up.
+  function deps(x, out = []) {
+    if (Array.isArray(x)) x.slice(1).forEach((y) => deps(y, out));
+    else if (x && typeof x === "object") {
+      if ("s" in x) out.push([sinit(x).s, ...(x.p || [])]);
+      else if (!("v" in x)) for (const k in x) deps(x[k], out);
+    }
+    return out;
+  }
+  const unsub = (b) => b.deps.forEach((d) => { const s = subs.get(d[0]); if (s) s.delete(b); });
+  // bindIn binds every element in root, whose HTML is html, that has
+  // bindings, and unbinds those that lost theirs.
+  function bindIn(root, html) {
+    if (!root || !subs.size && !/ data-vk-(b|show)/.test(html)) return;
+    for (const el of [root, ...root.querySelectorAll("*")]) if (bound.has(el) || Array.from(el.attributes).some((a) => /^data-vk-(b|show)(-|$)/.test(a.name))) bind(el);
+  }
+  function bind(el) {
+    const old = bound.get(el) || [], list = [];
+    for (const a of Array.from(el.attributes)) {
+      const m = /^data-vk-(b|show)(?:-(.+))?$/.exec(a.name);
+      if (!m) continue;
+      let x;
+      try { x = JSON.parse(a.value); } catch (_) { warn("bad binding " + a.name); continue; }
+      const kind = m[1] === "show" ? "show" : m[2] ? "attr" : "text", name = m[2];
+      const b = old.find((o) => o.kind === kind && o.name === name) || { el, kind, name };
+      b.x = x;
+      list.push(b);
+    }
+    old.forEach(unsub);
+    list.forEach((b) => { b.deps = deps(b.x); b.deps.forEach((d) => { if (!subs.has(d[0])) subs.set(d[0], new Set()); subs.get(d[0]).add(b); }); });
+    list.length ? bound.set(el, list) : bound.delete(el);
+    list.forEach((b) => put(b, true));
+  }
+  // put shows a binding's value; again (after a morph or at first) puts
+  // it back whatever the element shows, and a <vk-show> without a transition.
+  function put(b, again) {
+    const v = ev(b.x), el = b.el;
+    if (!again && equal(v, b.last)) return;
+    b.last = v;
+    if (b.kind === "show") return showSet(b, !!v, again);
+    if (b.kind === "text") {
+      const t = v == null ? "" : String(v);
+      if (el.textContent !== t) el.textContent = t;
+      return;
+    }
+    const name = b.name;
+    if (name === "class" && v && typeof v === "object") {
+      for (const k in v) words(k).forEach((c) => el.classList[v[k] ? "add" : "remove"](c));
+      return;
+    }
+    const s = v === true ? (/^aria-/.test(name) ? "true" : "") : v === false ? (/^aria-/.test(name) ? "false" : null) : v == null ? null : String(v);
+    if (!attrOK(name, s)) return;
+    if (s === null) el.removeAttribute(name);
+    else if (el.getAttribute(name) !== s) el.setAttribute(name, s);
+    if (name === "value" && isField(el) && el.value !== (s || "")) el.value = s || "";
+    if (name === "checked" && checkable(el)) el.checked = s !== null;
+  }
+
+  // ui.Show: a <vk-show> (display: contents) around elements shown while
+  // its expression holds. Its children carry the phases for CSS: data-closed
+  // while hidden, data-enter appearing, data-leave disappearing; the
+  // <vk-show> is hidden once their transitions or animations end (or their
+  // longest one's time passes). A child with the popover attribute is shown
+  // with showPopover instead, in the top layer. Reduced motion skips the
+  // wait.
+  const reduced = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function showSet(b, on, now) {
+    const w = b.el, kids = Array.from(w.children), pops = kids.filter((k) => k.hasAttribute("popover"));
+    const mark = (n, v) => kids.forEach((k) => v ? k.setAttribute(n, "") : k.removeAttribute(n));
+    const wrap = (shown) => {
+      const rest = (w.getAttribute("style") || "").replace(displayRe, "$1").replace(/^\s*;|;\s*$/g, "").trim();
+      if (shown) { w.removeAttribute("hidden"); w.setAttribute("style", (rest ? rest + "; " : "") + "display: contents"); }
+      else { w.setAttribute("hidden", ""); rest ? w.setAttribute("style", rest) : w.removeAttribute("style"); }
+    };
+    const pop = (shown) => pops.forEach((p) => { try { shown ? p.showPopover() : p.hidePopover(); } catch (_) {} });
+    const visible = (shown) => { if (pops.length) { wrap(true); pop(shown); } else wrap(shown); };
+    if (b.cancel) b.cancel();
+    const phase = b.phase = {};
+    if (now || reduced()) {
+      mark("data-enter", false);
+      mark("data-leave", false);
+      mark("data-closed", !on);
+      return visible(on);
+    }
+    if (on) {
+      mark("data-leave", false);
+      mark("data-closed", true);
+      mark("data-enter", true);
+      visible(true);
+      frame(() => { if (b.phase === phase) { mark("data-closed", false); ended(b, kids, () => mark("data-enter", false)); } });
+    } else {
+      mark("data-enter", false);
+      mark("data-leave", true);
+      frame(() => { if (b.phase === phase) { mark("data-closed", true); ended(b, kids, () => { mark("data-leave", false); visible(false); }); } });
+    }
+  }
+  // ended calls done once each element's transitions and animations have
+  // ended (or their time has passed), unless the binding moves on first.
+  const ms = (list) => String(list || "0s").split(",").map((t) => parseFloat(t) * (/ms\s*$/.test(t) ? 1 : 1000) || 0);
+  function longest(el) {
+    if (typeof getComputedStyle !== "function") return [0, 0];
+    const cs = getComputedStyle(el), max = (d, l) => Math.max(0, ...ms(d).map((x, i, a) => x + ms(l)[i % ms(l).length] || 0));
+    const dur = (d) => Math.max(0, ...ms(d));
+    return [Math.max(dur(cs.transitionDuration), dur(cs.animationDuration)), Math.max(max(cs.transitionDuration, cs.transitionDelay), max(cs.animationDuration, cs.animationDelay))];
+  }
+  function ended(b, els, done) {
+    const ls = new Map(els.map((el) => [el, longest(el)]).filter(([, t]) => t[1] > 0));
+    if (!ls.size) return done();
+    let timer = 0;
+    const off = () => { clearTimeout(timer); els.forEach((el) => { el.removeEventListener("transitionend", on); el.removeEventListener("animationend", on); }); b.cancel = null; };
+    function on(e) {
+      const el = e.currentTarget || e.target, t = ls.get(el);
+      if (e.target !== el || !t || (e.elapsedTime || 0) * 1000 + 1 < t[0]) return;
+      ls.delete(el);
+      if (!ls.size) { off(); done(); }
+    }
+    els.forEach((el) => { el.addEventListener("transitionend", on); el.addEventListener("animationend", on); });
+    timer = setTimeout(() => { off(); done(); }, Math.max(...[...ls.values()].map((t) => t[1])) + 50);
+    b.cancel = off;
+  }
+
+
   const focusStack = [];
   const focusable = "a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
   const first = (t) => t.querySelector("[autofocus]") || t.querySelector(focusable);
@@ -1081,6 +1265,9 @@
       t.dispatchEvent(new Event("input", { bubbles: true }));
       t.dispatchEvent(new Event("change", { bubbles: true }));
     }),
+    state_set: (el, a) => swrite(a, a.v),
+    state_toggle: (el, a) => swrite(a, !sread(a)),
+    state_inc: (el, a) => swrite(a, (+sread(a) || 0) + (a.by || 0)),
     patch: (el, a) => go(String(a.href), true),
     navigate: (el, a) => go(String(a.href), false),
     // push sends an event to a handler as data-vk-on-<event> would.
@@ -1227,7 +1414,9 @@
   const register = (name, fn) => { fns.set(String(name), fn); };
   ((window.vuka && window.vuka.q) || []).forEach((r) => register(...r));
   window.vuka = { connect, tree, register, push, emit: emitIsland, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
-  listenIn(document.documentElement.outerHTML);
+  const page0 = document.documentElement.outerHTML;
+  listenIn(page0);
+  bindIn(document.body, page0);
   if (!live) return;
   history.replaceState({ ...history.state, vk: pageID }, "");
   document.addEventListener("click", (e) => {

@@ -419,7 +419,7 @@ func (a *App) page(rq *request, n ui.Node) {
 		s.Close()
 	}
 	var script string
-	if live || (s != nil || info.Opaque) && bytes.Contains(html, []byte(" data-vk-js-")) || s == nil && !info.Opaque && info.JS {
+	if live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS {
 		script = a.scriptTag(r, token)
 	}
 	head := a.headTags(r, html)
