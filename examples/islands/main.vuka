@@ -1,0 +1,57 @@
+// Command islands is a live page with a Vue island imported from its file:
+// the compiler reads the island's props from Week.vue, so its tag is
+// type-checked like any component's. Its picked prop is a client state the
+// page shares (two-way), onBook a live view method (an event prop), and
+// booked server state the island follows as the page changes it (a live
+// prop). Run npm install in frontend first.
+package main
+
+import (
+	"embed"
+	"log"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+
+	Week "./frontend/islands/Week.vue"
+)
+
+//go:embed all:frontend/dist
+var dist embed.FS
+
+@web.Live("/")
+type Planner struct {
+	ui.Live
+	booked []string
+	picked ui.State[string]
+}
+
+func (p *Planner) Mount() {
+	p.booked = []string{}
+	p.picked = ui.State("mon")
+}
+
+// Book is the island's onBook: the island calls it with the day.
+func (p *Planner) Book(day string) { p.booked = append(p.booked, day) }
+
+func (p *Planner) Render() ui.Node {
+	return <main>
+		<h1>Planner</h1>
+		<p>Picked: <b>{p.picked}</b> · booked: {len(p.booked)}</p>
+		<button onClick={p.picked.Set("fri")}>Pick Friday</button>
+		<Week
+			days={[]string{"mon", "tue", "wed", "thu", "fri"}}
+			booked={p.booked}
+			picked={p.picked}
+			onBook={p.Book}
+			client:load
+		/>
+	</main>
+}
+
+func main() {
+	app := web.New(web.Frontend(dist, "frontend/dist", web.FrontendRoot("examples/islands/frontend")))
+	if err := app.Run(":" + web.Env("PORT", "8080")); err != nil {
+		log.Fatal(err)
+	}
+}

@@ -180,7 +180,7 @@
     const name = el.getAttribute("data-vk-island");
     const spec = m.i && m.i[name];
     if (!spec) { el.setAttribute("data-vk-error", "unknown island"); return; }
-    const inst = { el, id: scopeOf(el) || name, name, spec, ons: null, state: "armed", handle: null, props: el.getAttribute("data-vk-props") || "" };
+    const inst = { el, id: scopeOf(el) || name, name, spec, ons: null, state: "armed", handle: null, props: {}, refs: {}, fns: new Map(), key: ["", ""] };
     islandInsts.set(el, inst);
     const go = () => hydrateIsland(inst);
     switch (el.getAttribute("data-vk-client") || "visible") {
@@ -201,41 +201,153 @@
     }
   }
 
+  // An island's props are JSON (data-vk-props); tagged values are turned
+  // back into what the component gets: {"$vk":"date"} a Date, {"$vk":"fn"} a
+  // function calling the host's live handler or running its commands, and
+  // {"$vk":"state"} a client state's value, kept current, which ctx.set
+  // writes back (a derived state, "x", is read only).
+  const tag = (v) => v && typeof v === "object" && !Array.isArray(v) && typeof v.$vk === "string" ? v.$vk : "";
+  const clone = (v) => v === undefined ? v : typeof structuredClone === "function" ? structuredClone(v) : JSON.parse(JSON.stringify(v));
+  function revive(v) {
+    if (Array.isArray(v)) return v.map(revive);
+    if (!v || typeof v !== "object") return v;
+    if (tag(v) === "date") return new Date(v.v);
+    const out = {};
+    for (const k in v) out[k] = revive(v[k]);
+    return out;
+  }
+  const states = () => window.vuka && window.vuka.states;
+  function stateRef(v) { return v.x !== undefined ? v.x : v; }
+
+  // islandCall is a function prop: it pushes the host's handler for it
+  // (data-vk-on-<e>) with its first argument, or runs its commands
+  // (data-vk-js-<e>).
+  function islandCall(inst, e) {
+    if (inst.fns.has(e)) return inst.fns.get(e);
+    const fn = (...args) => {
+      const el = inst.el, id = el.getAttribute("data-vk-on-" + e), js = el.getAttribute("data-vk-js-" + e);
+      const payload = args[0] instanceof Event ? undefined : args[0];
+      if (id && window.vuka && window.vuka.emit) return window.vuka.emit(id, payload === undefined ? undefined : clone(payload));
+      if (js && window.vuka && window.vuka.run) {
+        try { return Promise.resolve(window.vuka.run(el, JSON.parse(js), null)); } catch (err) { return Promise.reject(err); }
+      }
+      return Promise.reject(new Error("vuka: island " + inst.name + " has no handler for " + e));
+    };
+    inst.fns.set(e, fn);
+    return fn;
+  }
+
+  // islandProps reads the host's props: what the component gets, and the
+  // state props, each following its state.
+  function islandProps(inst, raw) {
+    let json = {};
+    try { json = JSON.parse(raw || "{}"); } catch (_) {}
+    const props = {}, refs = {};
+    for (const k in json) {
+      const v = json[k];
+      switch (tag(v)) {
+        case "fn": props[k] = islandCall(inst, v.e); break;
+        case "state": refs[k] = v; props[k] = states() ? clone(states().read(stateRef(v))) : v.i; break;
+        default: props[k] = revive(v);
+      }
+    }
+    return { props, refs };
+  }
+
+  // plainKey is the props' JSON without its state and function props: what
+  // a live re-render changes when it changes the server's props.
+  function plainKey(raw) {
+    let json = {};
+    try { json = JSON.parse(raw || "{}"); } catch (_) { return raw; }
+    const out = {}, refs = {};
+    for (const k of Object.keys(json).sort()) {
+      const t = tag(json[k]);
+      if (t === "state") refs[k] = json[k];
+      else if (t !== "fn") out[k] = json[k];
+    }
+    return [JSON.stringify(out), JSON.stringify(refs)];
+  }
+
+  // watchStates follows an island's state props: a change updates the
+  // component (once per batch of writes).
+  function watchStates(inst) {
+    (inst.unwatch || []).forEach((u) => u());
+    inst.unwatch = [];
+    const st = states();
+    if (!st) return;
+    for (const k in inst.refs) {
+      inst.unwatch.push(st.watch(stateRef(inst.refs[k]), (v) => {
+        inst.props[k] = clone(v);
+        if (inst.pending) return;
+        inst.pending = true;
+        Promise.resolve().then(() => { inst.pending = false; pushProps(inst); });
+      }, inst.el));
+    }
+  }
+
+  function pushProps(inst) {
+    if (inst.state !== "mounted" || !inst.handle || typeof inst.handle.update !== "function") return;
+    try { inst.handle.update({ ...inst.props }); } catch (err) { console.error("vuka: island " + inst.name + " update:", err); }
+  }
+
   function hydrateIsland(inst) {
     if (inst.state !== "armed") return;
     inst.state = "loading";
     const [moduleURL, adapterURL] = inst.spec;
-    let props = {};
-    try { props = JSON.parse(inst.el.getAttribute("data-vk-props") || "{}"); } catch (_) {}
     const ctx = context(inst);
+    const raw = inst.el.getAttribute("data-vk-props") || "{}";
+    const go = () => {
+      const { props, refs } = islandProps(inst, raw);
+      inst.props = props;
+      inst.refs = refs;
+      inst.key = plainKey(raw);
+      // set writes a state prop back: the state, and what reads it.
+      ctx.set = (name, v) => {
+        const r = inst.refs[name];
+        if (!r || r.x !== undefined || !states()) return;
+        inst.props[name] = clone(v);
+        states().write(r, clone(v));
+      };
+      ctx.bound = Object.keys(refs).filter((k) => refs[k].x === undefined);
+      return props;
+    };
     const want = adapterURL ? [import(moduleURL), import(adapterURL)] : [import(moduleURL)];
     Promise.all(want).then((mods) => {
       if (!inst.el.isConnected || !islandInsts.has(inst.el)) return;
+      const props = go();
       let handle;
       if (adapterURL) {
         const comp = mods[0].default || mods[0];
         const mount = mods[1].mount || (mods[1].default && mods[1].default.mount);
-        handle = mount(comp, inst.el, props, ctx);
+        handle = mount(comp, inst.el, { ...props }, ctx);
       } else {
         const mount = mods[0].mount || (mods[0].default && mods[0].default.mount);
         if (typeof mount !== "function") throw new Error("island " + inst.name + " has no mount export");
-        handle = mount(inst.el, props, ctx);
+        handle = mount(inst.el, { ...props }, ctx);
       }
       inst.handle = handle || {};
       inst.state = "mounted";
-    }, (err) => { inst.state = "armed"; console.error("vuka: island " + inst.name + ":", err); });
+      watchStates(inst);
+    }, (err) => { inst.state = "armed"; console.error("vuka: island " + inst.name + ":", err); }).catch((err) => console.error("vuka: island " + inst.name + ":", err));
   }
 
-  // updateIslands re-pushes props to a mounted island whose host data-vk-props
-  // changed in a patch (live props); the adapter keeps the component mounted.
+  // updateIslands follows a patch: a mounted island whose server props
+  // changed gets update() with no remount (unless data-vk-once); its state
+  // and function props are the browser's and don't count.
   function updateIslands() {
     for (const [el, inst] of islandInsts) {
-      if (inst.state !== "mounted" || !inst.handle || typeof inst.handle.update !== "function") continue;
-      const now = el.getAttribute("data-vk-props") || "";
-      if (now === inst.props) continue;
-      inst.props = now;
-      let props = {}; try { props = JSON.parse(now || "{}"); } catch (_) {}
-      try { inst.handle.update(props); } catch (err) { console.error("vuka: island " + inst.name + " update:", err); }
+      if (inst.state !== "mounted") continue;
+      const raw = el.getAttribute("data-vk-props") || "";
+      const key = plainKey(raw);
+      if (key[0] === inst.key[0] && key[1] === inst.key[1]) continue;
+      const refsChanged = key[1] !== inst.key[1];
+      inst.key = key;
+      if (el.hasAttribute("data-vk-once") && !refsChanged) continue;
+      const { props, refs } = islandProps(inst, raw);
+      if (el.hasAttribute("data-vk-once")) for (const k in props) if (!(k in refs)) props[k] = inst.props[k];
+      inst.props = props;
+      if (refsChanged) { inst.refs = refs; watchStates(inst); }
+      pushProps(inst);
     }
   }
 
@@ -243,6 +355,8 @@
     islandInsts.delete(inst.el);
     if (inst.obs) inst.obs.disconnect();
     if (inst.mq) inst.mq[0].removeEventListener("change", inst.mq[1]);
+    (inst.unwatch || []).forEach((u) => u());
+    inst.unwatch = [];
     if (inst.handle && typeof inst.handle.unmount === "function") {
       try { inst.handle.unmount(); } catch (err) { console.error("vuka: island " + inst.name + " unmount:", err); }
     }

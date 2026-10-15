@@ -18,6 +18,20 @@ import (
 	"github.com/vuka-lang/web/internal/chrome"
 )
 
+// The island runtime — function, state and live props — in node over a
+// small DOM.
+func TestLiveJSIslands(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	out, err := exec.Command(node, "testdata/livejs/islands.js", "live.js", "loader.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s", out)
+	}
+	t.Logf("%s", strings.TrimSpace(string(out)))
+}
+
 // The loader with live.js, in node over a small DOM: hooks on load, join,
 // patch and navigation, ctx, and JS calls reaching a component's methods.
 func TestLoaderJS(t *testing.T) {

@@ -1065,6 +1065,7 @@
     const v = ev(b.x), el = b.el;
     if (!again && equal(v, b.last)) return;
     b.last = v;
+    if (b.kind === "fn") return b.fn(v);
     if (b.kind === "show") return showSet(b, !!v, again);
     if (b.kind === "text") {
       const t = v == null ? "" : String(v);
@@ -1413,7 +1414,19 @@
   // queues its calls on window.vuka.q.
   const register = (name, fn) => { fns.set(String(name), fn); };
   ((window.vuka && window.vuka.q) || []).forEach((r) => register(...r));
-  window.vuka = { connect, tree, register, push, emit: emitIsland, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
+  // states is client state for islands: an island's state prop reads a
+  // state (or a derived expression), follows it, and writes it back.
+  const states = {
+    read: (x) => ev(x),
+    write: (r, v) => { if (r && r.s && !r.x) { swrite(r, v); flushStates(); } },
+    watch: (x, fn, el) => {
+      const b = { el: el || document.documentElement, kind: "fn", x, fn, deps: deps(x) };
+      b.last = ev(x);
+      b.deps.forEach((d) => { if (!subs.has(d[0])) subs.set(d[0], new Set()); subs.get(d[0]).add(b); });
+      return () => unsub(b);
+    },
+  };
+  window.vuka = { connect, tree, register, push, emit: emitIsland, states, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   const page0 = document.documentElement.outerHTML;
   listenIn(page0);
   bindIn(document.body, page0);
