@@ -304,6 +304,17 @@ func (a *App) build() (http.Handler, error) {
 			specs = append(specs, ls.route())
 		}
 	}
+	for _, p := range a.reg.pages {
+		if !a.take(p.typ.Reflect.PkgPath()) {
+			continue
+		}
+		ps, err := a.pageSpecs(p)
+		if err != nil {
+			a.c.errs = append(a.c.errs, err)
+			continue
+		}
+		specs = append(specs, ps...)
+	}
 	specs = append(specs, a.specs...)
 	errs := slices.Clone(a.c.errs)
 	rec := &recordingRouter{Router: a.router}

@@ -1,0 +1,69 @@
+package auth_test
+
+import (
+	"context"
+	"encoding/json"
+	stdhtml "html"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strings"
+	"testing"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/web/auth/authtest"
+)
+
+type roster struct {
+	Names []string `json:"names"`
+}
+
+func (r *roster) Mount(ctx context.Context) { r.Names = []string{"Ada"} }
+func (r *roster) Add(name string)           { r.Names = append(r.Names, name) }
+
+func init() { ui.Island("components/Roster.vue")(vuka.TypeOf[roster]("auth_test.roster")) }
+
+// A page backed by its island takes its type's gates: its page and every
+// call; its component knows the visitor ($vuka).
+func TestIslandPageGates(t *testing.T) {
+	users := authtest.NewUsers()
+	app := func(id *auth.Identity) http.Handler {
+		return web.New(web.Only("none"), auth.Module(auth.Config{Users: users}), authtest.As(id)).
+			Page("/roster", &roster{}, auth.Requires("staff")).Handler()
+	}
+	serve := func(h http.Handler, method, body string) (int, string) {
+		var r *http.Request
+		if body == "" {
+			r = httptest.NewRequest(method, "/roster", nil)
+		} else {
+			r = httptest.NewRequest(method, "/roster", strings.NewReader(body))
+			r.Header.Set("Content-Type", "application/json")
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code, w.Body.String()
+	}
+	staff := app(&auth.Identity{ID: "1", Perms: []string{"staff"}})
+	code, page := serve(staff, "GET", "")
+	if code != 200 || !strings.Contains(page, `data-vk-viewer="{&#34;perms&#34;:[&#34;staff&#34;],&#34;roles&#34;:[],&#34;user&#34;:{&#34;id&#34;:&#34;1&#34;}}"`) {
+		t.Fatalf("%d: the viewer isn't the identity: %s", code, page)
+	}
+	props := stdhtml.UnescapeString(regexp.MustCompile(`data-vk-props="([^"]*)"`).FindStringSubmatch(page)[1])
+	sig := stdhtml.UnescapeString(regexp.MustCompile(`data-vk-sig="([^"]*)"`).FindStringSubmatch(page)[1])
+	call, _ := json.Marshal(map[string]any{"method": "add", "args": []any{"Bo"}, "props": props, "sig": sig})
+	if code, body := serve(staff, "POST", string(call)); code != 200 || !strings.Contains(body, `Bo`) {
+		t.Errorf("staff's call: %d %s", code, body)
+	}
+	if code, _ := serve(app(&auth.Identity{ID: "2"}), "POST", string(call)); code != http.StatusForbidden {
+		t.Errorf("a call without the perm: %d", code)
+	}
+	if code, _ := serve(app(nil), "POST", string(call)); code == 200 {
+		t.Errorf("an anonymous call: %d", code)
+	}
+	if code, _ := serve(app(&auth.Identity{ID: "2"}), "GET", ""); code != http.StatusForbidden {
+		t.Errorf("the page without the perm: %d", code)
+	}
+}

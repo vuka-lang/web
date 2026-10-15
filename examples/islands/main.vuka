@@ -3,21 +3,19 @@
 // type-checked like any component's. Its picked prop is a client state the
 // page shares (two-way), onBook a live view method (an event prop), and
 // booked server state the island follows as the page changes it (a live
-// prop). Run npm install in frontend first.
+// prop). applicants.vuka is a page backed by a component. As an app of its
+// own module (web is its island root, web.IslandRoot): npm install in web,
+// then vuka run.
 package main
 
 import (
-	"embed"
 	"log"
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/web"
 
-	Week "./frontend/islands/Week.vue"
+	Week "./web/islands/Week.vue"
 )
-
-//go:embed all:frontend/dist
-var dist embed.FS
 
 @web.Live("/")
 type Planner struct {
@@ -50,7 +48,7 @@ func (p *Planner) Render() ui.Node {
 }
 
 func main() {
-	app := web.New(web.Frontend(dist, "frontend/dist", web.FrontendRoot("examples/islands/frontend")))
+	app := web.New(web.IslandRoot("web"), web.Provide(NewRegistry))
 	if err := app.Run(":" + web.Env("PORT", "8080")); err != nil {
 		log.Fatal(err)
 	}

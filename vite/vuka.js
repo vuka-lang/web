@@ -96,6 +96,22 @@ export default function vuka() {
       if (command === 'build') return { build: { manifest: true } }
     },
 
+    // vuka:live — useLive/useVuka for a page-backed island's component — is
+    // the framework's own module, which an island build's spec carries.
+    resolveId(id, importer) {
+      if (id !== 'vuka:live') return
+      const spec = islandSpec()
+      if (!spec || !spec.live) return
+      const fw = /\.vue/.test(importer || '') ? 'vue' : /\.svelte/.test(importer || '') ? 'svelte' : 'react'
+      return '\0vuka-live:' + fw
+    },
+
+    load(id) {
+      if (!id.startsWith('\0vuka-live:')) return
+      const spec = islandSpec()
+      return spec && spec.live ? spec.live[id.slice('\0vuka-live:'.length)] : undefined
+    },
+
     configResolved(resolved) {
       config = resolved
       hotPath = join(resolve(config.root, config.build.outDir), HOT_FILE)

@@ -1,0 +1,57 @@
+package main
+
+import (
+	"context"
+	"strings"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+)
+
+// Applicants is a page backed by a component: its template is
+// Applicants.vue. The exported fields are the component's props, Q kept in
+// the address's ?q=; db is the server's own. Search is what the component
+// calls (useLive). Without ui.Live the page is stateless: a call carries the
+// page's signed props back and gets the new ones.
+@web.Get("/applicants")
+@ui.Island("./web/components/Applicants.vue")
+type Applicants struct {
+	Q    string      `json:"q" url:"q"`
+	Rows []Applicant `json:"rows"`
+	db   *Registry
+}
+
+type Applicant struct {
+	Name string `json:"name"`
+	Role string `json:"role"`
+}
+
+// Registry is the applicants' store, provided to the app.
+type Registry struct{ all []Applicant }
+
+func NewRegistry() *Registry {
+	return &Registry{all: []Applicant{{"Ada", "engineer"}, {"Grace", "admiral"}, {"Alan", "mathematician"}}}
+}
+
+func (a *Applicants) Mount(ctx context.Context) error {
+	a.Rows = a.find(a.Q)
+	return nil
+}
+
+func (a *Applicants) Search(ctx context.Context, q string) error {
+	if q != "" && len(q) < 2 {
+		return web.Invalid{"q": "type at least 2 letters"}
+	}
+	a.Q, a.Rows = q, a.find(q)
+	return nil
+}
+
+func (a *Applicants) find(q string) []Applicant {
+	var out []Applicant
+	for _, x := range a.db.all {
+		if strings.Contains(strings.ToLower(x.Name), strings.ToLower(q)) {
+			out = append(out, x)
+		}
+	}
+	return out
+}

@@ -76,6 +76,7 @@ type liveSpec struct {
 	layout          func(ui.Node) ui.Node
 	mw              []Middleware
 	attrs           []any         // the type's typed attributes
+	island          bool          // a page backed by its island (@web.Get on an @ui.Island type)
 	routeOpts       []RouteOption // App.Live's Attrs and Wrap
 }
 
@@ -156,6 +157,9 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	}
 	pathNames := pathParams(s.path)
 	props, err := a.liveProps(ls.typ, s.where)
+	if ls.island {
+		props, err = a.islandBinds(ls.typ, s.path, s.where)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -174,14 +178,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		layout = a.liveLayout
 	}
 	if layout == nil {
-		title := ls.typ.Name()
-		layout = func(page ui.Node) ui.Node {
-			return ui.El("html", nil,
-				ui.El("head", nil, ui.El("meta", []ui.Attr{{Name: "charset", Value: "utf-8"}}),
-					ui.El("meta", []ui.Attr{{Name: "name", Value: "viewport"}, {Name: "content", Value: "width=device-width, initial-scale=1"}}),
-					ui.El("title", nil, ui.Text(title))),
-				ui.El("body", nil, page))
-		}
+		layout = defaultLayout(ls.typ.Name())
 	}
 	site := "web.Live " + s.path
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -222,10 +219,13 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 // binds per request: a dependency injected, or text from the path segment or
 // query parameter of its name.
 type prop struct {
-	index []int
-	name  string
-	typ   reflect.Type
-	dep   bool
+	index      []int
+	name       string
+	typ        reflect.Type
+	dep        bool
+	unexported bool // a page-backed island's server-only field
+	query      bool // only from the query parameter (url:"name")
+	path       bool // only from the path segment
 }
 
 func (a *App) liveProps(t reflect.Type, where string) ([]prop, error) {
@@ -238,13 +238,13 @@ func (a *App) liveProps(t reflect.Type, where string) ([]prop, error) {
 				return nil, err
 			}
 			a.needs = append(a.needs, f.Type)
-			props = append(props, prop{f.Index, f.Name, f.Type, true})
+			props = append(props, prop{index: f.Index, name: f.Name, typ: f.Type, dep: true})
 		case scalar(f.Type):
 			name := f.Name
 			if n, _, _ := strings.Cut(f.Tag.Get("form"), ","); n != "" && n != "-" {
 				name = n
 			}
-			props = append(props, prop{f.Index, name, f.Type, false})
+			props = append(props, prop{index: f.Index, name: name, typ: f.Type})
 		}
 	}
 	return props, nil
@@ -253,7 +253,7 @@ func (a *App) liveProps(t reflect.Type, where string) ([]prop, error) {
 // bindProps sets v's props for the request r.
 func (a *App) bindProps(v reflect.Value, props []prop, pathNames []string, r *http.Request) error {
 	for _, p := range props {
-		f := v.FieldByIndex(p.index)
+		f := field(v, p.index)
 		if p.dep {
 			d, err := a.c.get(p.typ)
 			if err != nil {
@@ -263,9 +263,9 @@ func (a *App) bindProps(v reflect.Value, props []prop, pathNames []string, r *ht
 			continue
 		}
 		var vals []string
-		if n := matchName(pathNames, p.name); n != "" {
+		if n := matchName(pathNames, p.name); n != "" && !p.query {
 			vals = []string{a.router.Param(r, n)}
-		} else {
+		} else if !p.path {
 			for k, vs := range r.URL.Query() {
 				if strings.EqualFold(k, p.name) {
 					vals = vs

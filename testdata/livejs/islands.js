@@ -34,8 +34,8 @@ function island(log) {
 const host = (props, extra = "") => `<vk-island data-vk-s="p#1" data-vk-island="Pick" data-vk-client="load" data-vk-props='${attr(props)}'${extra}></vk-island>`;
 const info = { m: {}, i: { Pick: ["/pick.js", ""] } };
 
-function joined(body, mod) {
-  const p = page(file, body, { live: true, scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod } });
+function joined(body, mod, o = {}) {
+  const p = page(file, body, { live: true, scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod }, ...o });
   p.ws().onopen();
   p.server({ type: "render", ref: 1, html: body });
   return p;
@@ -131,6 +131,53 @@ test("an island that leaves unmounts and stops following its states", async () =
   p.fire("button", "click");
   await settle();
   eq(log.map((l) => l[0]), ["mount", "unmount"]);
+});
+
+test("a live page's methods: live events with their arguments; pending, error from the re-render", async () => {
+  const log = [], { it, mod } = island(log);
+  const methods = ` data-vk-methods='["search"]' data-vk-on-m-search="c1:4" data-vk-url='{"q":"q"}'`;
+  const p = joined(`<main>${host({ q: "", rows: [] }, methods)}</main>`, mod, { url: "http://test/applicants?x=1" });
+  await settle();
+  const live = it.ctx.live, seen = [];
+  live.subscribe((s) => seen.push(s.pending));
+  const done = live.search("gr", 2);
+  eq(live.pending, true, "pending");
+  const ev = p.ws().sent.find((m) => m.type === "event");
+  eq([ev.target, ev.event, ev.data], ["c1:4", "emit", ["gr", 2]], "sent");
+  p.server({ type: "patch", ref: ev.ref, updates: [{ id: "c0", html: `<main>${host({ q: "gr", rows: ["Grace"] }, methods)}</main>` }] });
+  await done;
+  eq([live.pending, live.error, seen], [false, null, [true, false]], "settled");
+  eq(it.props, { q: "gr", rows: ["Grace"] }, "the new props");
+  eq(p.location.search, "?x=1&q=gr", "the address follows q");
+  const failing = live.search("g");
+  const ev2 = p.ws().sent.filter((m) => m.type === "event")[1];
+  p.server({ type: "patch", ref: ev2.ref, updates: [{ id: "c0", html: `<main>${host({ q: "gr", rows: ["Grace"] }, methods + ` data-vk-err='{"status":422,"message":"invalid","fields":{"q":"too short"}}'`)}</main>` }] });
+  await failing.then(() => { throw new Error("resolved"); }, (err) => eq(err.vuka.fields, { q: "too short" }, "rejected"));
+  eq(live.error.fields.q, "too short", "live.error");
+});
+
+test("a stateless page's methods: posted with the signed props; the answer's props update the island", async () => {
+  const log = [], { it, mod } = island(log), posts = [];
+  const fetch = (url, init) => {
+    posts.push([url, JSON.parse(init.body)]);
+    const body = JSON.parse(init.body);
+    const out = body.method === "fail" ? { error: { status: 422, message: "bad", fields: { q: "no" } } }
+      : body.method === "away" ? { redirect: "/x" } : { props: JSON.stringify({ q: body.args[0] }), sig: "s2" };
+    return Promise.resolve({ status: 200, json: () => Promise.resolve(out) });
+  };
+  const methods = ` data-vk-methods='["search","fail","away"]' data-vk-call="/applicants" data-vk-sig="s1" data-vk-url='{"q":"q"}' data-vk-viewer='{"user":{"id":"7"},"roles":[],"perms":["orders.*"]}'`;
+  const p = page(file, `<main>${host({ q: "" }, methods)}</main>`, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod }, globals: { fetch } });
+  await settle();
+  eq([it.ctx.vuka.user.id, it.ctx.vuka.can("orders.write"), it.ctx.vuka.can("users.read")], ["7", true, false], "the viewer");
+  await it.ctx.live.search("ad");
+  eq(posts[0], ["/applicants", { method: "search", args: ["ad"], props: '{"q":""}', sig: "s1" }], "posted");
+  eq([it.props.q, p.$("vk-island").getAttribute("data-vk-sig"), p.location.search], ["ad", "s2", "?q=ad"], "updated, re-signed, the address");
+  await it.ctx.live.search("b");
+  eq(posts[1][1].sig, "s2", "the next call carries the new signature");
+  await it.ctx.live.fail().then(() => { throw new Error("resolved"); }, () => {});
+  eq(it.ctx.live.error, { status: 422, message: "bad", fields: { q: "no" } }, "the error");
+  await it.ctx.live.away();
+  eq(p.loads, [["assign", "/x"]], "a redirect navigates");
 });
 
 (async () => {

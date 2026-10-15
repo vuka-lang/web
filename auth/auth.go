@@ -32,6 +32,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/web"
 )
 
@@ -257,6 +258,23 @@ type Auth struct {
 // guards every route, live page and live event, binds *auth.Identity
 // parameters, refuses cross-origin form posts (web.CSRF), closes the live
 // connections of revoked users, and provides *auth.Auth.
+// viewer is what an island's component knows of the visitor ($vuka): the
+// signed-in identity's id, roles and perms — never its user record.
+func viewer(ctx context.Context) any {
+	id := Current(ctx)
+	if id == nil {
+		return map[string]any{"user": nil, "roles": []string{}, "perms": []string{}}
+	}
+	return map[string]any{"user": map[string]any{"id": id.ID}, "roles": nonNil(id.Roles), "perms": nonNil(id.Perms)}
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
 func Module(cfg Config) web.Option {
 	a := &Auth{cfg: cfg}
 	a.defaults()
@@ -283,6 +301,7 @@ func Module(cfg Config) web.Option {
 		web.CronContext(System),
 		web.OptionFunc(func(app *web.App) {
 			a.app = app
+			ui.Viewer = viewer
 			if _, ok := cfg.Users.(Users); !ok && cfg.Users != nil {
 				app.Provide(cfg.Users) // a constructor: check finds what it builds
 			}

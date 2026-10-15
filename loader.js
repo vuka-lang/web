@@ -290,6 +290,76 @@
     try { inst.handle.update({ ...inst.props }); } catch (err) { console.error("vuka: island " + inst.name + " update:", err); }
   }
 
+  // A page backed by its island: the component calls the page's methods
+  // (data-vk-methods) through ctx.live — on a live page as live events
+  // (data-vk-on-m-<name>), on a stateless one as calls posted to the page
+  // (data-vk-call) with its signed props (data-vk-sig). live.pending and
+  // live.error follow; subscribe tells the framework.
+  function liveHandle(inst) {
+    const el = inst.el;
+    let names = [];
+    try { names = JSON.parse(el.getAttribute("data-vk-methods") || "[]"); } catch (_) {}
+    let snap = { pending: false, error: null };
+    const subs = new Set(), methods = {};
+    const set = (p) => { snap = { ...snap, ...p }; h.pending = snap.pending; h.error = snap.error; subs.forEach((f) => { try { f(snap); } catch (err) { console.error(err); } }); };
+    const fail = (e) => { const err = new Error(e.message || "error"); err.vuka = e; throw err; };
+    const send = (name, args) => {
+      const call = el.getAttribute("data-vk-call");
+      if (call) {
+        return fetch(call, {
+          method: "POST", credentials: "same-origin",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({ method: name, args: clone(args), props: el.getAttribute("data-vk-props") || "{}", sig: el.getAttribute("data-vk-sig") || "" }),
+        }).then((r) => r.json().catch(() => ({ error: { status: r.status, message: r.statusText || "error" } }))).then((j) => {
+          if (j.redirect) { location.assign(j.redirect); return; }
+          if (j.error) fail(j.error);
+          el.setAttribute("data-vk-props", j.props);
+          el.setAttribute("data-vk-sig", j.sig);
+          updateIslands();
+        });
+      }
+      const id = el.getAttribute("data-vk-on-m-" + name.toLowerCase());
+      if (!id || !window.vuka || !window.vuka.emit) return Promise.reject(new Error("vuka: " + inst.name + " has no method " + name));
+      return window.vuka.emit(id, clone(args)).then(() => {
+        const e = el.getAttribute("data-vk-err");
+        if (e) fail(JSON.parse(e));
+      }, (err) => fail({ message: err && err.message || "error" }));
+    };
+    for (const n of names) {
+      methods[n] = (...args) => {
+        set({ pending: true });
+        return send(n, args).then((r) => { set({ pending: false, error: null }); return r; },
+          (err) => { set({ pending: false, error: err.vuka || { message: err.message } }); throw err; });
+      };
+    }
+    const h = { methods, pending: false, error: null, subscribe: (fn) => { subs.add(fn); return () => subs.delete(fn); }, snapshot: () => snap, ...methods };
+    return h;
+  }
+
+  // viewer is $vuka: the visitor as the server knows them (data-vk-viewer).
+  function viewer(el) {
+    let v = null;
+    try { v = JSON.parse(el.getAttribute("data-vk-viewer") || "null"); } catch (_) {}
+    v = v || { user: null, roles: [], perms: [] };
+    const perms = v.perms || [];
+    v.can = (p) => perms.some((g) => g === "*" || g === p || g.endsWith(".*") && p.startsWith(g.slice(0, -1)));
+    return v;
+  }
+
+  // syncURL keeps the address's query parameters of url:"name" props.
+  function syncURL(inst) {
+    let map = null;
+    try { map = JSON.parse(inst.el.getAttribute("data-vk-url") || "null"); } catch (_) {}
+    if (!map || typeof URL !== "function") return;
+    const u = new URL(location.href);
+    for (const k in map) {
+      const v = inst.props[k];
+      if (v == null || v === "" || v === false) u.searchParams.delete(map[k]);
+      else u.searchParams.set(map[k], String(v));
+    }
+    if (u.href !== location.href) history.replaceState(history.state, "", u.pathname + u.search + u.hash);
+  }
+
   function hydrateIsland(inst) {
     if (inst.state !== "armed") return;
     inst.state = "loading";
@@ -309,6 +379,8 @@
         states().write(r, clone(v));
       };
       ctx.bound = Object.keys(refs).filter((k) => refs[k].x === undefined);
+      ctx.vuka = viewer(inst.el);
+      if (inst.el.hasAttribute("data-vk-methods")) ctx.live = liveHandle(inst);
       return props;
     };
     const want = adapterURL ? [import(moduleURL), import(adapterURL)] : [import(moduleURL)];
@@ -348,6 +420,7 @@
       inst.props = props;
       if (refsChanged) { inst.refs = refs; watchStates(inst); }
       pushProps(inst);
+      syncURL(inst);
     }
   }
 

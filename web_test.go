@@ -81,14 +81,14 @@ func (l *Level) UnmarshalText(b []byte) error {
 
 func TestBindScalars(t *testing.T) {
 	p := pkgOf(t)
-	Get("/pets/{id}")(decl(p, "show", func(id int, verbose bool, tags []string, level Level, limit *int) string {
+	route(Get("/pets/{id}"), decl(p, "show", func(id int, verbose bool, tags []string, level Level, limit *int) string {
 		l := "nil"
 		if limit != nil {
 			l = fmt.Sprint(*limit)
 		}
 		return fmt.Sprintln(id, verbose, tags, level, l)
 	}, "id", "verbose", "tags", "level", "limit"))
-	Get("/files/{path...}")(decl(p, "file", func(path string) string { return path }, "path"))
+	route(Get("/files/{path...}"), decl(p, "file", func(path string) string { return path }, "path"))
 	h := New(Only(p)).Handler()
 	expect(t, h, "GET", "/pets/7?verbose=true&tags=a&tags=b&level=high&limit=3", "", 200, `"7 true [a b] 2 3\n"`)
 	expect(t, h, "GET", "/pets/7", "", 200, `"7 false [] 0 nil\n"`)
@@ -106,11 +106,11 @@ type NewPet struct {
 
 func TestBindStruct(t *testing.T) {
 	p := pkgOf(t)
-	Post("/pets")(decl(p, "create", func(in NewPet) NewPet { return in }, "in"))
-	Put("/owners/{owner}/pets")(decl(p, "put", func(in *NewPet, r *http.Request, ctx context.Context) string {
+	route(Post("/pets"), decl(p, "create", func(in NewPet) NewPet { return in }, "in"))
+	route(Put("/owners/{owner}/pets"), decl(p, "put", func(in *NewPet, r *http.Request, ctx context.Context) string {
 		return fmt.Sprint(in.Name, " ", in.Owner, " ", r.Method, " ", Request(ctx) == r)
 	}, "in", "r", "ctx"))
-	Get("/search")(decl(p, "search", func(q NewPet) NewPet { return q }, "q"))
+	route(Get("/search"), decl(p, "search", func(q NewPet) NewPet { return q }, "q"))
 	h := New(Only(p)).Handler()
 	expect(t, h, "POST", "/pets", `{"name":"Rex","tags":["a"]}`, 200, `"name":"Rex","Age":0,"tags":["a"]`, "Content-Type", "application/json")
 	expect(t, h, "POST", "/pets", `name=Tom&years=3&tags=x&tags=y&owner=ann`, 200, `"name":"Tom","Age":3,"tags":["x","y"],"Owner":"ann"`,
@@ -130,29 +130,29 @@ type Page struct {
 func TestResults(t *testing.T) {
 	p := pkgOf(t)
 	s := NewStore()
-	Get("/none")(decl(p, "none", func() {}))
-	Get("/err")(decl(p, "err", func(fail bool) error {
+	route(Get("/none"), decl(p, "none", func() {}))
+	route(Get("/err"), decl(p, "err", func(fail bool) error {
 		if fail {
 			return BadRequest("nope")
 		}
 		return nil
 	}, "fail"))
-	Get("/pair/{id}")(decl(p, "pair", func(id int) (Pet, error) { return s.Find(id).Get() }, "id"))
-	Get("/result/{id}")(decl(p, "result", func(id int) vuka.Result[Pet] { return s.Find(id) }, "id"))
-	Get("/node")(decl(p, "node", func(r *http.Request) ui.Node { return ui.El("h1", nil, ui.Text("Hi "+r.URL.Query().Get("n"))) }, "r"))
-	Get("/node-err")(decl(p, "nodeErr", func() (ui.Node, error) { return nil, Forbidden }))
-	Get("/go")(decl(p, "goto", func() Redirect { return "/there" }))
-	Post("/go")(decl(p, "post", func() (Pet, error) { return Pet{}, Redirect("/pets/1") }))
-	Get("/maybe")(decl(p, "maybe", func(away bool) ui.Node {
+	route(Get("/pair/{id}"), decl(p, "pair", func(id int) (Pet, error) { return s.Find(id).Get() }, "id"))
+	route(Get("/result/{id}"), decl(p, "result", func(id int) vuka.Result[Pet] { return s.Find(id) }, "id"))
+	route(Get("/node"), decl(p, "node", func(r *http.Request) ui.Node { return ui.El("h1", nil, ui.Text("Hi "+r.URL.Query().Get("n"))) }, "r"))
+	route(Get("/node-err"), decl(p, "nodeErr", func() (ui.Node, error) { return nil, Forbidden }))
+	route(Get("/go"), decl(p, "goto", func() Redirect { return "/there" }))
+	route(Post("/go"), decl(p, "post", func() (Pet, error) { return Pet{}, Redirect("/pets/1") }))
+	route(Get("/maybe"), decl(p, "maybe", func(away bool) ui.Node {
 		if away {
 			return Redirect("/away")
 		}
 		return ui.Text("here")
 	}, "away"))
-	Get("/boom")(decl(p, "boom", func() (int, error) { return 0, errors.New("db password leaked") }))
-	Get("/panic")(decl(p, "panic", func() int { panic("x") }))
-	Get("/wrapped")(decl(p, "wrapped", func() error { return fmt.Errorf("loading: %w", NotFound) }))
-	Get("/custom")(decl(p, "custom", func() error { return Status(http.StatusTeapot, "short and %s", "stout") }))
+	route(Get("/boom"), decl(p, "boom", func() (int, error) { return 0, errors.New("db password leaked") }))
+	route(Get("/panic"), decl(p, "panic", func() int { panic("x") }))
+	route(Get("/wrapped"), decl(p, "wrapped", func() error { return fmt.Errorf("loading: %w", NotFound) }))
+	route(Get("/custom"), decl(p, "custom", func() error { return Status(http.StatusTeapot, "short and %s", "stout") }))
 	h := New(Only(p)).Handler()
 	expect(t, h, "GET", "/none", "", 204, "")
 	expect(t, h, "GET", "/err", "", 204, "")
@@ -188,12 +188,12 @@ func TestHTMLView(t *testing.T) {
 	pets := func() Page { return Page{"All <pets>", []Pet{{1, "Rex"}, {2, "Tom"}}} }
 	d := decl(p, "list", pets)
 	Template(f)(d) // before the route: order doesn't matter
-	Get("/pets")(d)
+	route(Get("/pets"), d)
 	d = decl(p, "count", pets)
-	Get("/count")(d)
+	route(Get("/count"), d)
 	Template(f, "count")(d)
 	d = decl(p, "missing", func() (Page, error) { return Page{}, NotFound })
-	Get("/missing")(d)
+	route(Get("/missing"), d)
 	Template(f)(d)
 	h := New(Only(p)).Handler()
 	expect(t, h, "GET", "/pets", "", 200, `<h1>All &lt;pets&gt;</h1><li>Rex</li><li>Tom</li>`)
@@ -230,15 +230,15 @@ templ footer() {}
 		templx.Component{Name: "Card", Func: func(pet Pet) ui.Node { return templ("card")(pet.Name) }, Params: []string{"pet"}},
 		templx.Component{Name: "footer", Func: func() ui.Node { return templ("footer")() }})
 	page := Page{"Pets", []Pet{{1, "Rex"}}}
-	route := func(path string, fn any, name ...string) {
+	get := func(path string, fn any, name ...string) {
 		d := decl(p, path, fn)
-		Get(path)(d)
+		route(Get(path), d)
 		Template(f, name...)(d)
 	}
-	route("/list", func() Page { return page }, "PetList")
-	route("/list-ptr", func() *Page { return &page }, "PetList")
-	route("/card", func() vuka.Result[Pet] { return vuka.Ok(Pet{1, "Rex"}) }, "Card")
-	route("/footer", func() int { return 1 }, "footer")
+	get("/list", func() Page { return page }, "PetList")
+	get("/list-ptr", func() *Page { return &page }, "PetList")
+	get("/card", func() vuka.Result[Pet] { return vuka.Ok(Pet{1, "Rex"}) }, "Card")
+	get("/footer", func() int { return 1 }, "footer")
 	h := New(Only(p)).Handler()
 	expect(t, h, "GET", "/list", "", 200, "list[Pets 1]")
 	expect(t, h, "GET", "/list-ptr", "", 200, "list[Pets 1]")
@@ -261,7 +261,7 @@ templ footer() {}
 		"/nocomp":    {func() Pet { return Pet{} }, []string{"Nope"}},
 	} {
 		d := decl(bad, path, c.fn)
-		Get(path)(d)
+		route(Get(path), d)
 		Template(f, c.name...)(d)
 	}
 	err := New(Only(bad)).Build()
@@ -289,7 +289,7 @@ type B struct{ a *A }
 func TestDI(t *testing.T) {
 	p := pkgOf(t)
 	built := 0
-	Get("/repo")(decl(p, "repo", func(r *Repo, again *Repo) string { return fmt.Sprintln(r.db.name, r == again, built) }, "r", "again"))
+	route(Get("/repo"), decl(p, "repo", func(r *Repo, again *Repo) string { return fmt.Sprintln(r.db.name, r == again, built) }, "r", "again"))
 	a := New(Only(p), Provide(func(db *DB) *Repo { built++; return &Repo{db} }))
 	a.Provide(&DB{"main"})
 	h := a.Handler()
@@ -341,7 +341,7 @@ type Second struct{ *Life }
 func TestLifecycle(t *testing.T) {
 	p := pkgOf(t)
 	var log []string
-	Get("/")(decl(p, "home", func(s *Second) string { return s.name }, "s"))
+	route(Get("/"), decl(p, "home", func(s *Second) string { return s.name }, "s"))
 	a := New(Only(p), Provide(
 		func(f *First) *Second { return &Second{&Life{"second", &log}} },
 		func() *First { return &First{&Life{"first", &log}} },
@@ -371,10 +371,10 @@ func TestServicesAndControllers(t *testing.T) {
 	method := func(name string, fn any, params ...string) *vuka.Decl {
 		return vuka.MethodDecl(vuka.Decl{Name: "Admin." + name, Pkg: p, File: "t.vuka", Line: int(line.Add(1)), Func: fn}, params...)
 	}
-	Get("/")(method("Index", (*Admin).Index))
-	Get("/{id}")(method("Show", (*Admin).Show, "id"))
-	Get("/value")(method("Value", Admin.Value))
-	Get("/svc")(decl(p, "svc", func(s *PetService) string { return s.db.name }, "s"))
+	route(Get("/"), method("Index", (*Admin).Index))
+	route(Get("/{id}"), method("Show", (*Admin).Show, "id"))
+	route(Get("/value"), method("Value", Admin.Value))
+	route(Get("/svc"), decl(p, "svc", func(s *PetService) string { return s.db.name }, "s"))
 	h := New(Only(p), Provide(&DB{"pg"})).Handler()
 	expect(t, h, "GET", "/admin/pets", "", 200, `"admin pg"`)
 	expect(t, h, "GET", "/admin/pets/3", "", 200, `"pet 3"`)
@@ -403,9 +403,9 @@ func TestMiddleware(t *testing.T) {
 	}
 	d := decl(p, "x", func() string { order = append(order, "handler"); return "ok" })
 	Use(mw("route1"), mw("route2"))(d)
-	Get("/x")(d)
+	route(Get("/x"), d)
 	Use(mw("route3"))(d)
-	Get("/y")(decl(p, "y", func() string { return "y" }))
+	route(Get("/y"), decl(p, "y", func() string { return "y" }))
 	a := New(Only(p), Use(mw("app1")))
 	a.Use(mw("app2"))
 	h := a.Handler()
@@ -473,7 +473,7 @@ next:
 
 func TestRouterSeam(t *testing.T) {
 	p := pkgOf(t)
-	Get("/pets/{id}")(decl(p, "show", func(id int, in struct{ ID int }) string { return fmt.Sprint(id, in.ID) }, "id", "in"))
+	route(Get("/pets/{id}"), decl(p, "show", func(id int, in struct{ ID int }) string { return fmt.Sprint(id, in.ID) }, "id", "in"))
 	a := New(Only(p), WithRouter(&segRouter{}))
 	a.Static("/assets", fstest.MapFS{"app.css": {Data: []byte("body{}")}})
 	h := a.Handler()
@@ -521,14 +521,14 @@ func TestPlainGo(t *testing.T) {
 
 func TestStartupErrors(t *testing.T) {
 	p := pkgOf(t)
-	Get("/a")(decl(p, "a", func(n int) int { return n }))
-	Get("/b")(decl(p, "b", func(x, y NewPet) int { return 0 }, "x", "y"))
-	Get("/c")(decl(p, "c", func(ch chan int) int { return 0 }, "ch"))
-	Get("/d")(decl(p, "d", func() (int, int) { return 0, 0 }))
-	Get("/e")(decl(p, "e", func(c Cache) int { return 0 }, "c"))
-	Get("/a")(decl(p, "a2", func() int { return 0 }))
-	Get("/g")(decl(p, "g", func(m *Opaque) int { return 0 }, "m"))
-	Get("/f")(vuka.MethodDecl(vuka.Decl{Name: "Repo.F", Pkg: p, File: "t.vuka", Line: 99, Func: func(*Repo) int { return 0 }}))
+	route(Get("/a"), decl(p, "a", func(n int) int { return n }))
+	route(Get("/b"), decl(p, "b", func(x, y NewPet) int { return 0 }, "x", "y"))
+	route(Get("/c"), decl(p, "c", func(ch chan int) int { return 0 }, "ch"))
+	route(Get("/d"), decl(p, "d", func() (int, int) { return 0, 0 }))
+	route(Get("/e"), decl(p, "e", func(c Cache) int { return 0 }, "c"))
+	route(Get("/a"), decl(p, "a2", func() int { return 0 }))
+	route(Get("/g"), decl(p, "g", func(m *Opaque) int { return 0 }, "m"))
+	route(Get("/f"), vuka.MethodDecl(vuka.Decl{Name: "Repo.F", Pkg: p, File: "t.vuka", Line: 99, Func: func(*Repo) int { return 0 }}))
 	err := New(Only(p)).Build()
 	if err == nil {
 		t.Fatal("no error")
@@ -558,9 +558,9 @@ func TestStartupErrors(t *testing.T) {
 
 func TestSnapshot(t *testing.T) {
 	p := pkgOf(t)
-	Get("/one")(decl(p, "one", func() int { return 1 }))
+	route(Get("/one"), decl(p, "one", func() int { return 1 }))
 	first := New(Only(p))
-	Get("/two")(decl(p, "two", func() int { return 2 }))
+	route(Get("/two"), decl(p, "two", func() int { return 2 }))
 	expect(t, first.Handler(), "GET", "/two", "", 404, "")
 	expect(t, New(Only(p)).Handler(), "GET", "/two", "", 200, "2")
 }
@@ -586,7 +586,7 @@ func TestDecoratorSeesRequest(t *testing.T) {
 		c.Run()
 		return vuka.As[string](c.Results[0]), vuka.As[error](c.Results[1])
 	}
-	Get("/secret")(decl(p, "secret", decorated, "ctx"))
+	route(Get("/secret"), decl(p, "secret", decorated, "ctx"))
 	h := New(Only(p)).Handler()
 	expect(t, h, "GET", "/secret", "", 401, "unauthorized")
 	expect(t, h, "GET", "/secret", "", 200, "secret for ann", "X-User", "ann")
@@ -611,3 +611,6 @@ type fakeAddr string
 
 func (a fakeAddr) Network() string { return "tcp" }
 func (a fakeAddr) String() string  { return string(a) }
+
+// route runs a route decorator's declarer with d, as decorating a function does.
+func route(b vuka.Bundle, d *vuka.Decl) { vuka.DeclareWith(b, d) }

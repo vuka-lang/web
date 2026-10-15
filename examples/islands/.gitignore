@@ -1,3 +1,5 @@
-/frontend/node_modules/
-/frontend/islands.d.ts
+/web/node_modules/
+/web/package-lock.json
+/web/islands.d.ts
+/web/vuka-live.d.ts
 /islands

@@ -559,3 +559,10 @@ func devPage(page []byte, origin string) []byte {
 		return slices.Concat(sub[1], body, sub[3])
 	})
 }
+
+// IslandRoot names the folder island components build in, for an app that
+// serves no frontend of its own (no Frontend): the one holding package.json
+// and node_modules (vue, react, svelte, esbuild…), where islands.d.ts and
+// vuka-live.d.ts are written. The vuka command reads it; it changes nothing
+// at run time. The module root is the default.
+func IslandRoot(dir string) Option { return OptionFunc(func(*App) {}) }

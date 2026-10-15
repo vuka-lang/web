@@ -46,6 +46,7 @@ type registry struct {
 	services    []*vuka.Type
 	controllers []declController
 	lives       []*liveSpec
+	pages       []typePage
 	crons       []declCron
 }
 
@@ -72,6 +73,7 @@ func snapshot() registry {
 		services:    append([]*vuka.Type(nil), reg.services...),
 		controllers: append([]declController(nil), reg.controllers...),
 		lives:       append([]*liveSpec(nil), reg.lives...),
+		pages:       append([]typePage(nil), reg.pages...),
 		crons:       append([]declCron(nil), reg.crons...),
 		views:       make(map[string]declView, len(reg.views)),
 		uses:        make(map[string][]Middleware, len(reg.uses)),
@@ -88,17 +90,24 @@ func snapshot() registry {
 // Handle declares a route for method and path: @web.Handle("OPTIONS", "/x").
 // Path segments in braces bind parameters of the same name: "/pets/{id}";
 // "{rest...}" matches the rest of the path.
-func Handle(method, path string) func(*vuka.Decl) {
-	return func(d *vuka.Decl) {
+//
+// On a type — an @ui.Island struct, with @web.Get — it declares a page
+// backed by that component (see "Pages backed by a component" in the
+// islands guide): its exported fields are the component's props, its
+// exported methods what the component calls.
+func Handle(method, path string) vuka.Bundle {
+	return vuka.Dual(func(d *vuka.Decl) {
 		record(func(r *registry) { r.routes = append(r.routes, declRoute{method, path, d}) })
-	}
+	}, func(t *vuka.Type) {
+		record(func(r *registry) { r.pages = append(r.pages, typePage{method, path, t}) })
+	})
 }
 
-func Get(path string) func(*vuka.Decl)    { return Handle(http.MethodGet, path) }
-func Post(path string) func(*vuka.Decl)   { return Handle(http.MethodPost, path) }
-func Put(path string) func(*vuka.Decl)    { return Handle(http.MethodPut, path) }
-func Patch(path string) func(*vuka.Decl)  { return Handle(http.MethodPatch, path) }
-func Delete(path string) func(*vuka.Decl) { return Handle(http.MethodDelete, path) }
+func Get(path string) vuka.Bundle    { return Handle(http.MethodGet, path) }
+func Post(path string) vuka.Bundle   { return Handle(http.MethodPost, path) }
+func Put(path string) vuka.Bundle    { return Handle(http.MethodPut, path) }
+func Patch(path string) vuka.Bundle  { return Handle(http.MethodPatch, path) }
+func Delete(path string) vuka.Bundle { return Handle(http.MethodDelete, path) }
 
 // Template renders a route's result with a view: a .templ file of the same
 // package (its one exported component, or the one named) or an html/template

@@ -9,6 +9,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sort"
+	"strings"
 )
 
 // Error is an error with an HTTP status. Returned by a handler (wrapped or
@@ -33,6 +35,40 @@ func (e *Error) Unwrap() error { return e.Err }
 // page's handler returning an *Error shows its message, as an HTTP route's
 // answer does, where any other error's text stays in the log.
 func (e *Error) PublicMessage() string { return e.Error() }
+
+// StatusCode is the error's status.
+func (e *Error) StatusCode() int { return e.Status }
+
+// Invalid is an error naming fields and what is wrong with each: a
+// component's call answering with it shows each field's message
+// (live.error.fields), a route answers 422 with them.
+//
+//	return web.Invalid{"q": "type at least 2 letters"}
+type Invalid map[string]string
+
+func (e Invalid) Error() string {
+	keys := make([]string, 0, len(e))
+	for k := range e {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var b strings.Builder
+	b.WriteString("invalid")
+	for i, k := range keys {
+		if i == 0 {
+			b.WriteString(": ")
+		} else {
+			b.WriteString("; ")
+		}
+		b.WriteString(k + ": " + e[k])
+	}
+	return b.String()
+}
+
+func (e Invalid) PublicMessage() string          { return e.Error() }
+func (Invalid) StatusCode() int                  { return http.StatusUnprocessableEntity }
+func (e Invalid) FieldErrors() map[string]string { return e }
+func (e Invalid) Unwrap() error                  { return nil }
 
 // Is matches another *Error of the same status: errors.Is(err, web.NotFound).
 func (e *Error) Is(target error) bool {
@@ -73,7 +109,12 @@ func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, html
 		return
 	}
 	var e *Error
-	if !errors.As(err, &e) {
+	var sc interface{ StatusCode() int }
+	var pub interface{ PublicMessage() string }
+	if !errors.As(err, &e) && errors.As(err, &sc) && errors.As(err, &pub) {
+		e = &Error{Status: sc.StatusCode(), Message: pub.PublicMessage(), Err: err}
+	}
+	if e == nil {
 		e = &Error{Status: http.StatusInternalServerError, Err: err}
 		if a.dev {
 			e.Message = err.Error()

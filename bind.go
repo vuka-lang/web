@@ -29,9 +29,10 @@ type routeSpec struct {
 	params       []vuka.Param
 	view         *declView
 	mw           []Middleware
-	live         *liveSpec // a Live page
-	attrs        []any     // typed attributes, for WrapRoutes
-	html         bool      // answers with a page; set by compile
+	live         *liveSpec   // a Live page
+	island       *islandPage // a stateless page backed by its island: its GET, or its calls' POST
+	attrs        []any       // typed attributes, for WrapRoutes
+	html         bool        // answers with a page; set by compile
 }
 
 type request struct {
@@ -80,6 +81,12 @@ var (
 )
 
 func (a *App) compile(s *routeSpec) (http.Handler, error) {
+	if s.island != nil {
+		if s.method == http.MethodPost {
+			return a.compileIslandCall(s)
+		}
+		return a.compileIslandPage(s)
+	}
 	if s.live != nil {
 		return a.compileLive(s)
 	}

@@ -52,7 +52,7 @@ func TestLibraryOption(t *testing.T) {
 func TestLifecycleOrder(t *testing.T) {
 	p := pkgOf(t)
 	var log []string
-	Get("/")(decl(p, "home", func(s *Second) string { return s.name }, "s"))
+	route(Get("/"), decl(p, "home", func(s *Second) string { return s.name }, "s"))
 	a := New(Only(p), lib(&log, nil),
 		Provide(
 			func(f *First) *Second { return &Second{&Life{"second", &log}} },

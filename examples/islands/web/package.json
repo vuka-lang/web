@@ -4,6 +4,7 @@
   "devDependencies": {
     "esbuild": "^0.25.0",
     "esbuild-plugin-vue3": "^0.4.2",
-    "vue": "^3.5.0"
+    "vue": "^3.5.0",
+    "typescript": "^5.9.3"
   }
 }
