@@ -432,9 +432,13 @@ func (p *Page) Press(key string) {
 	p.b.t.Helper()
 	p.front()
 	down := map[string]any{"type": "keyDown", "key": key, "code": key}
-	if key == "Enter" {
+	up := map[string]any{"type": "keyUp", "key": key, "code": key}
+	switch key {
+	case "Enter":
 		down["text"], down["windowsVirtualKeyCode"] = "\r", 13
+	case "Escape":
+		down["windowsVirtualKeyCode"], up["windowsVirtualKeyCode"] = 27, 27
 	}
 	p.must("Input.dispatchKeyEvent", down, nil)
-	p.must("Input.dispatchKeyEvent", map[string]any{"type": "keyUp", "key": key, "code": key}, nil)
+	p.must("Input.dispatchKeyEvent", up, nil)
 }

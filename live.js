@@ -1089,9 +1089,12 @@
   // its expression holds. Its children carry the phases for CSS: data-closed
   // while hidden, data-enter appearing, data-leave disappearing; the
   // <vk-show> is hidden once their transitions or animations end (or their
-  // longest one's time passes). A child with the popover attribute is shown
-  // with showPopover instead, in the top layer. Reduced motion skips the
-  // wait.
+  // longest one's time passes) — at once, in the same batch, when they have
+  // none to wait for. A child with the popover attribute is shown with
+  // showPopover instead, in the top layer; when the browser closes it (Escape,
+  // a click outside) the state shown is written back: false, or true for a
+  // negated one (a derived expression stays as it is). Reduced motion skips
+  // the wait.
   const reduced = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
   function showSet(b, on, now) {
     const w = b.el, kids = Array.from(w.children), pops = kids.filter((k) => k.hasAttribute("popover"));
@@ -1105,7 +1108,7 @@
     const visible = (shown) => { if (pops.length) { wrap(true); pop(shown); } else wrap(shown); };
     if (b.cancel) b.cancel();
     const phase = b.phase = {};
-    if (now || reduced()) {
+    if (now || reduced() || !on && pops.length && !pops.some(popOpen)) {
       mark("data-enter", false);
       mark("data-leave", false);
       mark("data-closed", !on);
@@ -1120,9 +1123,36 @@
     } else {
       mark("data-enter", false);
       mark("data-leave", true);
+      if (!kids.some((k) => longest(k)[1] > 0)) {
+        mark("data-leave", false);
+        mark("data-closed", true);
+        return visible(false);
+      }
       frame(() => { if (b.phase === phase) { mark("data-closed", true); ended(b, kids, () => { mark("data-leave", false); visible(false); }); } });
     }
   }
+  const popOpen = (p) => { try { return p.matches(":popover-open"); } catch (_) { return false; } };
+  // A popover the browser closed: the state its <vk-show> shows is written
+  // back. A click that closed it by landing on its trigger (the same pointer
+  // gesture) then doesn't write that state again, whichever comes first: the
+  // close or the click.
+  let gesture = 0, downAt = -Infinity;
+  const dismissed = new Map(); // state key → the gesture that closed its popover
+  document.addEventListener("pointerdown", () => { gesture++; downAt = Date.now(); dismissed.clear(); }, true);
+  document.addEventListener("keydown", () => dismissed.clear(), true);
+  const redismiss = (a, e) => e && e.type === "click" && a.s != null && dismissed.get(a.s) === gesture;
+  document.addEventListener("toggle", (e) => {
+    const p = e.target;
+    if (e.newState !== "closed" || !p || !p.hasAttribute || !p.hasAttribute("popover") || !p.parentElement || popOpen(p)) return;
+    const b = (bound.get(p.parentElement) || []).find((o) => o.kind === "show");
+    if (!b || !b.last) return;
+    const x = b.x, neg = Array.isArray(x) && x[0] === "!" && x.length === 2, r = neg ? x[1] : x;
+    if (!r || typeof r !== "object" || Array.isArray(r) || !("s" in r)) return; // derived: not written
+    swrite(r, neg);
+    if (Date.now() - downAt < 1000) dismissed.set(r.s, gesture); // closed by a pointer, not a key
+    flushStates();
+  }, true);
+
   // ended calls done once each element's transitions and animations have
   // ended (or their time has passed), unless the binding moves on first.
   const ms = (list) => String(list || "0s").split(",").map((t) => parseFloat(t) * (/ms\s*$/.test(t) ? 1 : 1000) || 0);
@@ -1266,8 +1296,8 @@
       t.dispatchEvent(new Event("input", { bubbles: true }));
       t.dispatchEvent(new Event("change", { bubbles: true }));
     }),
-    state_set: (el, a) => swrite(a, a.v),
-    state_toggle: (el, a) => swrite(a, !sread(a)),
+    state_set: (el, a, e) => { if (!redismiss(a, e)) swrite(a, a.v); },
+    state_toggle: (el, a, e) => { if (!redismiss(a, e)) swrite(a, !sread(a)); },
     state_inc: (el, a) => swrite(a, (+sread(a) || 0) + (a.by || 0)),
     patch: (el, a) => go(String(a.href), true),
     navigate: (el, a) => go(String(a.href), false),

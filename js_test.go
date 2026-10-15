@@ -489,3 +489,76 @@ func TestBrowserBusyForm(t *testing.T) {
 	p.Eval(`window.before === true`, &cached)
 	t.Logf("back/forward cache: %v", cached) // either way the form is usable
 }
+
+// A page of client state shown with ui.Show: an auto popover the browser
+// may close, two panels swapped by one state, and a panel with a transition.
+func stateShowPage() ui.Node {
+	tip := ui.NewState("tip", false)
+	a := ui.NewState("a", true)
+	fade := ui.NewState("fade", true)
+	return ui.El("main", nil,
+		ui.El("style", nil, ui.Text(".fade { transition: opacity .3s } .fade[data-closed] { opacity: 0 }")),
+		ui.El("button", attrs("id", "tip-btn", "type", "button", "onClick", ui.On(tip.Toggle()),
+			"aria-expanded", ui.Bind(tip.Get(), `{"$":0}`, tip)), ui.Text("?")),
+		ui.Show(ui.ShowProps{When: tip, Children: ui.El("div", attrs("id", "tip", "popover", "auto", "style", "inset: auto 0 0 auto; margin: 0"), ui.Text("A tip"))}),
+		ui.El("p", attrs("id", "outside", "style", "margin-top: 200px"), ui.Text("outside")),
+		ui.El("button", attrs("id", "swap", "type", "button", "onClick", ui.On(a.Toggle())), ui.Text("swap")),
+		ui.Show(ui.ShowProps{When: a, Children: ui.El("div", attrs("id", "pa"), ui.Text("A"))}),
+		ui.Show(ui.ShowProps{When: ui.Bind(!a.Get(), `["!",{"$":0}]`, a), Children: ui.El("div", attrs("id", "pb"), ui.Text("B"))}),
+		ui.El("button", attrs("id", "fade-btn", "type", "button", "onClick", ui.On(fade.Toggle())), ui.Text("fade")),
+		ui.Show(ui.ShowProps{When: fade, Children: ui.El("div", attrs("id", "pf", "class", "fade"), ui.Text("F"))}),
+	)
+}
+
+func TestBrowserStateShow(t *testing.T) {
+	app := New(Only("none"))
+	app.Get("/state", stateShowPage)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	p := chrome.Launch(t).Visit(srv.URL + "/state")
+	const tipOpen = `document.querySelector("#tip").matches(":popover-open")`
+	const expanded = `document.querySelector("#tip-btn").getAttribute("aria-expanded")`
+
+	// Escape closes the popover; its state follows, so one click opens it.
+	p.Click("#tip-btn")
+	p.Wait(tipOpen + ` && ` + expanded + ` === "true"`)
+	p.Press("Escape")
+	p.Wait(`!` + tipOpen + ` && ` + expanded + ` === "false"`)
+	p.Click("#tip-btn")
+	p.Wait(tipOpen + ` && ` + expanded + ` === "true"`)
+
+	// A click outside closes it too.
+	p.Click("#outside")
+	p.Wait(`!` + tipOpen + ` && ` + expanded + ` === "false"`)
+
+	// A click on its trigger while open closes it and it stays closed.
+	p.Click("#tip-btn")
+	p.Wait(tipOpen)
+	p.Click("#tip-btn")
+	p.Wait(`!` + tipOpen + ` && ` + expanded + ` === "false"`)
+	p.Eval(`new Promise((r) => setTimeout(r, 150))`, nil)
+	p.Wait(`!` + tipOpen + ` && ` + expanded + ` === "false"`)
+	p.Click("#tip-btn")
+	p.Wait(tipOpen)
+
+	// Two panels swapped by one state are never shown together, even for a
+	// frame: the old one has no transition, so it hides in the same batch.
+	p.Eval(`(() => {
+		const shown = (id) => !document.querySelector(id).parentElement.hidden;
+		window.both = 0;
+		new MutationObserver(() => { if (shown("#pa") && shown("#pb")) window.both++; }).observe(document.querySelector("main"), { attributes: true, subtree: true });
+		const tick = () => { if (shown("#pa") && shown("#pb")) window.both++; requestAnimationFrame(tick); };
+		requestAnimationFrame(tick);
+	})()`, nil)
+	for _, want := range []string{"#pb", "#pa", "#pb"} {
+		p.Click("#swap")
+		p.Wait(fmt.Sprintf(`!document.querySelector(%q).parentElement.hidden`, want))
+	}
+	p.Eval(`new Promise((r) => setTimeout(r, 100))`, nil)
+	p.Wait(`window.both === 0 && document.querySelector("#pa").parentElement.hidden`)
+
+	// A panel with a transition still animates out.
+	p.Click("#fade-btn")
+	p.Wait(`document.querySelector("#pf").hasAttribute("data-leave") && !document.querySelector("#pf").parentElement.hidden`)
+	p.Wait(`document.querySelector("#pf").parentElement.hidden && !document.querySelector("#pf").hasAttribute("data-leave")`)
+}

@@ -156,6 +156,7 @@ const shown = s("c1:shown:1", false);
 const showPage = (o, kid = `<div id="k" class="fade"></div>`) => open(`<div>
   <button id="t" data-vk-js-click='${j([["state_toggle", shown]])}'></button>
   <vk-show id="w" data-vk-show='${j(shown)}' hidden>${kid}</vk-show></div>`, o);
+const document_ = (p) => p.doc;
 const styled = (dur) => ({ getComputedStyle: () => ({ transitionDuration: dur, transitionDelay: "0s", animationDuration: "0s", animationDelay: "0s" }) });
 const state = (p) => [p.$("#w").hasAttribute("hidden"), p.$("#w").getAttribute("style"),
   ["data-closed", "data-enter", "data-leave"].filter((a) => p.$("#k").hasAttribute(a)).join(" ")];
@@ -217,6 +218,86 @@ test("show: a popover is shown in the top layer", () => {
   p.fire("#t", "click");
   p.tick(32);
   eq([calls, p.$("#w").hasAttribute("hidden")], [["show", "hide"], false]);
+});
+
+// popPage is a Show around a popover whose showPopover and hidePopover act
+// as the browser's do; dismiss closes it as a light dismiss does.
+function popPage(when, o = {}) {
+  const p = open(`<div>
+    <button id="t" data-vk-js-click='${j([["state_toggle", shown]])}'></button>
+    <i id="v" data-vk-b-aria-label='${j(shown)}' aria-label="false"></i>
+    <vk-show id="w" data-vk-show='${j(when)}' hidden><div id="k" popover></div></vk-show></div>`, { globals: styled("0s"), ...o });
+  const k = p.$("#k");
+  let on = false;
+  k.showPopover = () => { on = true; };
+  k.hidePopover = () => { on = false; };
+  const m = k.matches;
+  k.matches = (sel) => sel === ":popover-open" ? on : m.call(k, sel);
+  const dismiss = () => { on = false; p.fire(k, "toggle", { bubbles: false, newState: "closed", oldState: "open" }); };
+  return { p, k, isOpen: () => on, dismiss };
+}
+
+test("show: a popover the browser closes writes its state back", () => {
+  const { p, isOpen, dismiss } = popPage(shown);
+  p.fire("#t", "click");
+  p.tick(32);
+  eq([isOpen(), p.$("#v").getAttribute("aria-label")], [true, "true"], "opened");
+  p.fire(document_(p), "keydown", { key: "Escape" });
+  dismiss();
+  eq([isOpen(), p.$("#v").getAttribute("aria-label"), state(p)[2]], [false, "false", "data-closed"], "closed by Escape: the state is false");
+  p.fire("#t", "click");
+  p.tick(32);
+  eq(isOpen(), true, "and opens again");
+});
+
+test("show: a negated state is written true; a derived one stays", () => {
+  let { p, isOpen, dismiss } = popPage(["!", shown]);
+  p.fire("#t", "click");
+  p.fire("#t", "click");
+  eq([isOpen(), p.$("#v").getAttribute("aria-label")], [true, "false"], "shown while false");
+  dismiss();
+  eq(p.$("#v").getAttribute("aria-label"), "true", "written true");
+  ({ p, isOpen, dismiss } = popPage(["&&", ["!", shown], true]));
+  dismiss();
+  eq(p.$("#v").getAttribute("aria-label"), "false", "a derived expression isn't written");
+});
+
+test("show: a click on the trigger while open ends closed, whichever comes first", () => {
+  // the close first, then the click
+  let { p, isOpen, dismiss } = popPage(shown);
+  p.fire("#t", "click");
+  p.tick(32);
+  p.fire("#t", "pointerdown");
+  dismiss();
+  p.fire("#t", "click");
+  p.tick(32);
+  eq([isOpen(), p.$("#v").getAttribute("aria-label")], [false, "false"], "close, then click");
+  p.fire("#t", "pointerdown");
+  p.fire("#t", "click");
+  p.tick(32);
+  eq(isOpen(), true, "the next click opens it");
+  // the click first, then the close
+  ({ p, isOpen, dismiss } = popPage(shown));
+  p.fire("#t", "click");
+  p.tick(32);
+  p.fire("#t", "pointerdown");
+  p.fire("#t", "click");
+  dismiss();
+  p.tick(32);
+  eq([isOpen(), p.$("#v").getAttribute("aria-label")], [false, "false"], "click, then close");
+});
+
+test("show: with no transition the old content is hidden at once; two swapped never both show", () => {
+  const a = s("c1:a:1", true);
+  const p = open(`<div>
+    <button id="sw" data-vk-js-click='${j([["state_toggle", a]])}'></button>
+    <vk-show id="wa" data-vk-show='${j(a)}' style="display: contents"><div id="ka"></div></vk-show>
+    <vk-show id="wb" data-vk-show='${j(["!", a])}' hidden><div id="kb" data-closed></div></vk-show></div>`, { globals: styled("0s") });
+  const both = () => !p.$("#wa").hasAttribute("hidden") && !p.$("#wb").hasAttribute("hidden");
+  p.fire("#sw", "click");
+  eq([both(), p.$("#wa").hasAttribute("hidden"), p.$("#wb").hasAttribute("hidden"), p.$("#ka").hasAttribute("data-closed")], [false, true, false, true], "swapped in the same batch");
+  p.fire("#sw", "click");
+  eq([both(), p.$("#wa").hasAttribute("hidden"), p.$("#wb").hasAttribute("hidden")], [false, false, true], "and back");
 });
 
 test("show: a morph keeps it open, with no transition", () => {
