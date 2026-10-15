@@ -4,10 +4,10 @@ github.com/coder/websocket v1.8.15 h1:6B2JPeOGlpff2Uz6vOEH1Vzpi0iUz20A+lPVhPHtNU
 github.com/coder/websocket v1.8.15/go.mod h1:NX3SzP+inril6yawo5CQXx8+fk145lPDC6pumgx0mVg=
 github.com/google/go-cmp v0.6.0 h1:ofyhxvXcZhMsU5ulbFiLKl/XBFqE1GSq7atu8tAmTRI=
 github.com/google/go-cmp v0.6.0/go.mod h1:17dUlkBOakJ0+DkrSSNjCkIjxS6bF9zb3elmeNGIjoY=
-github.com/vuka-lang/ui v0.24.0 h1:D0kYcx8Q94SbR0tEX2jSX6/SX+sQwLJ4PvmZMMYCVFc=
-github.com/vuka-lang/ui v0.24.0/go.mod h1:Z8oeW6UIRkv2nWiymFiViLvzp7m8ythLyB1lDTMPEZ0=
-github.com/vuka-lang/vuka v0.16.0 h1:IalEDs8UJDht8O7kLAY9fptoIdJRQyfWjaxrmpz/d34=
-github.com/vuka-lang/vuka v0.16.0/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
+github.com/vuka-lang/ui v0.25.0 h1:QBx+VkTPvO6irHsGh0A7yanxv/MHipqnwEM645vzN28=
+github.com/vuka-lang/ui v0.25.0/go.mod h1:Z8oeW6UIRkv2nWiymFiViLvzp7m8ythLyB1lDTMPEZ0=
+github.com/vuka-lang/vuka v0.30.0 h1:v0e1H1ZB8aWhWqEJ7HsU4il17dzz2WpN163VNfih/EY=
+github.com/vuka-lang/vuka v0.30.0/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
 golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
 golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=

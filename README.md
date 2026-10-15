@@ -55,7 +55,7 @@ go get github.com/vuka-lang/web
 
 | | |
 |---|---|
-| `@web.Get(path)`, `Post`, `Put`, `Patch`, `Delete`, `Handle(method, path)` | a route; works on functions and controller methods |
+| `@web.Get(path)`, `Post`, `Put`, `Patch`, `Delete`, `Handle(method, path)` | a route; works on functions and controller methods — on an `@ui.Island` type, a page backed by that component (below) |
 | `@web.Template(file [, name])` | render the result with a view (below); before or after the route decorator |
 | `@web.Use(mw…)` | HTTP middleware for this route, `func(http.Handler) http.Handler` |
 | `@web.Service` | a struct becomes a dependency |
@@ -70,8 +70,9 @@ query kept), unless something else the app serves answers that path
 (`web.ExactPaths()` turns this off). Under a controller, `"/"` is the prefix
 itself.
 
-Route decorators are Vuka *declarers* (`func(*vuka.Decl)`): they run once at
-init and record the function with its parameter names. Other decorators on
+Route decorators are Vuka declarers for a function and type decorators for a
+type (a `vuka.Bundle` made with `vuka.Dual`): they run once at init and record
+the function with its parameter names, or the type. Other decorators on
 the same function still wrap it — `@audited` below runs on every call.
 
 ## The app
@@ -1288,6 +1289,40 @@ frontend's Vite (and installs its dependencies first), `vuka build` runs
 `frontend/vuka/vite.js`. A frontend without a `package.json` is served as it
 is. The development toolbar is added to the page; the app's Tailwind
 stylesheet isn't. An example is in [`examples/spa`](examples/spa).
+
+## Islands
+
+A Vue, React or Svelte component placed in a server-rendered page hydrates
+on its own; the rest of the page ships no JavaScript. Import the component
+into a `.vuka` file and its props, read from its TypeScript, are type-checked
+like any component's; a function prop takes a live view method:
+
+```vuka
+import Week "./web/islands/Week.vue"
+
+<Week days={p.days} onBook={p.Book} client:visible />
+```
+
+A page can be a component: `@web.Get` on an `@ui.Island` type serves the
+component as the page, its exported fields the props and its exported
+methods what the component calls (`useLive` from `vuka:live`, typed from the
+Go struct). Embedding `ui.Live` makes it a live page; without it each call
+is a signed POST that carries the page's props back.
+
+```vuka
+@web.Get("/orders")
+@ui.Island("./web/components/Orders.vue")
+type Orders struct {
+	Q    string  `json:"q" url:"q"`
+	Rows []Order `json:"rows"`
+	db   *Store
+}
+
+func (o *Orders) Search(ctx context.Context, q string) error { … }
+```
+
+The guide: [Islands](https://vuka-lang.github.io/vuka/web/islands). An
+example is in [`examples/islands`](examples/islands).
 
 ## Static files
 
