@@ -89,3 +89,23 @@ test('import.meta.env reads the values the app passes', () => {
   assert.equal(p.transform('import.meta.env.API_URL', '/p/src/a.css'), undefined)
   assert.match(p.transform('<script setup>const u = import.meta.env.API_URL</script>', '/p/src/App.vue').code, /__VUKA_ENV__\?\.API_URL/)
 })
+
+test('an island build has a relative base: lazy chunks load beside the chunk importing them', () => {
+  const root = mkdtempSync(join(tmpdir(), 'vuka-isl-'))
+  const spec = join(root, 'islands.json')
+  writeFileSync(spec, JSON.stringify({ outDir: join(root, 'o'), input: { vue: 'a.ts' } }))
+  const prev = process.env.VUKA_ISLAND_BUILD
+  process.env.VUKA_ISLAND_BUILD = spec
+  try {
+    const cfg = { base: '/app/', experimental: { renderBuiltUrl: () => 'x' } }
+    vuka().config(cfg, { command: 'build' })
+    assert.equal(cfg.base, './')
+    assert.equal(cfg.experimental.renderBuiltUrl, undefined)
+    assert.equal(cfg.build.manifest, true)
+    assert.deepEqual(cfg.build.rollupOptions.input, { vue: 'a.ts' })
+  } finally {
+    if (prev === undefined) delete process.env.VUKA_ISLAND_BUILD
+    else process.env.VUKA_ISLAND_BUILD = prev
+    rmSync(root, { recursive: true })
+  }
+})

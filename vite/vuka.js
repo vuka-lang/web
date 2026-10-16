@@ -28,9 +28,10 @@
 // `export {default}` entry per @ui.Island component, and a Tailwind/UI CSS
 // entry), redirects the output to vuka's own temp directory, and forces the
 // manifest on. vuka then reads that manifest and serves the island chunks and
-// CSS from /_vuka/i/. This is how an island reaches a Vite-plugin UI library
-// (e.g. Nuxt UI) whose components and Tailwind v4 CSS only exist after its
-// Vite plugin runs. The spec is {outDir, input:{key:relPath}}.
+// CSS from /_vuka/i/ (built with a relative base, so the chunks a dynamic
+// import loads resolve beside the chunk importing them). This is how an
+// island reaches a Vite-plugin UI library (e.g. Nuxt UI) whose components
+// and Tailwind v4 CSS only exist after its Vite plugin runs. The spec is {outDir, input:{key:relPath}}.
 //
 // No dependencies but Node's own modules.
 
@@ -81,6 +82,11 @@ export default function vuka() {
         cfg.build.outDir = spec.outDir
         cfg.build.emptyOutDir = true
         cfg.build.copyPublicDir = false
+        // The chunks are served flat under the app's island prefix: a
+        // relative base makes the preload helper resolve a dynamic import's
+        // deps (JS and CSS chunks) against the importing chunk's URL.
+        cfg.base = './'
+        if (cfg.experimental) delete cfg.experimental.renderBuiltUrl
         const ro = (cfg.build.rollupOptions = cfg.build.rollupOptions || {})
         ro.input = spec.input
         if (ro.preserveEntrySignatures == null) ro.preserveEntrySignatures = 'allow-extension'

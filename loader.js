@@ -18,6 +18,8 @@
   let islandIO = null; // shared IntersectionObserver for client:visible
   const islandCSS = new Set(); // island stylesheet URLs already linked
   const missing = new Set(); // hosts of islands the build doesn't have
+  const failed = new Map(); // hosts of islands that failed to load → the module that did
+  const hosted = new WeakMap(); // host element → the mounted island's handle
   let global = null;
 
   const load = (url) => {
@@ -165,6 +167,7 @@
       else if (vid) inst.vid = vid;
     }
     for (const el of islandRoots()) if (!islandInsts.has(el)) armIsland(el);
+    for (const el of missing) if (islandInsts.has(el) || !el.isConnected) missing.delete(el);
     if (d) updateIslands();
   }
 
@@ -183,11 +186,15 @@
     }
   }
 
+  // A host has one island at a time: arming it again drops the one there.
   function armIsland(el) {
     ensureIslandCSS();
     const name = el.getAttribute("data-vk-island");
+    const old = islandInsts.get(el);
+    if (old) unmountIsland(old);
     const spec = m.i && m.i[name];
     if (!spec) { missingIsland(el, name); return; }
+    if (missing.delete(el) | failed.delete(el)) clearBox(el);
     const inst = { el, id: scopeOf(el) || name, name, vid: el.getAttribute("data-vk-id") || "", spec, ons: null, state: "armed", handle: null, props: {}, refs: {}, fns: new Map(), key: ["", ""] };
     islandInsts.set(el, inst);
     const go = () => hydrateIsland(inst);
@@ -211,11 +218,31 @@
 
   // Under vuka run an island the build doesn't have says so on the page —
   // its build failed, or it isn't built yet — and mounts once a build has it.
+  // One that failed to load says why, and is tried again once a build
+  // brings another module for it.
   const boxOf = (el) => [...el.children].find((c) => c.hasAttribute("data-vk-missing"));
+  function clearBox(el) {
+    const box = boxOf(el);
+    if (box) box.remove();
+    el.removeAttribute("data-vk-error");
+  }
   function missingIsland(el, name) {
     el.setAttribute("data-vk-error", "unknown island");
     if (!m.d) return;
     missing.add(el);
+    showBox(el, "Island " + name + " isn't built" + (m.x ? ": the island build failed — see the toolbar or the terminal" : " yet"));
+  }
+  function failIsland(inst, err) {
+    console.error("vuka: island " + inst.name + ":", err);
+    inst.state = "failed";
+    const el = inst.el;
+    if (islandInsts.get(el) !== inst || !el.isConnected) return;
+    el.setAttribute("data-vk-error", "failed");
+    if (!m.d) return;
+    failed.set(el, inst.spec[0]);
+    showBox(el, "Island " + inst.name + " failed to load: " + (err && err.message || err) + " — see the console");
+  }
+  function showBox(el, text) {
     let box = boxOf(el);
     if (!box) {
       box = document.createElement("div");
@@ -224,21 +251,19 @@
         "background:#fef2f2;color:#991b1b;font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace");
       el.insertBefore(box, el.firstChild);
     }
-    const text = "Island " + name + " isn't built" + (m.x ? ": the island build failed — see the toolbar or the terminal" : " yet");
     if (box.textContent !== text) box.textContent = text;
   }
   function recheckMissing() {
+    for (const [el, url] of failed) {
+      const inst = islandInsts.get(el), spec = inst && m.i[inst.name];
+      if (!el.isConnected || !inst || inst.state !== "failed") failed.delete(el);
+      else if (spec && spec[0] !== url) armIsland(el);
+    }
     for (const el of missing) {
       const name = el.getAttribute("data-vk-island");
-      if (!el.isConnected) missing.delete(el);
+      if (!el.isConnected || islandInsts.has(el)) missing.delete(el);
       else if (!m.i[name]) missingIsland(el, name);
-      else {
-        missing.delete(el);
-        const box = boxOf(el);
-        if (box) box.remove();
-        el.removeAttribute("data-vk-error");
-        armIsland(el);
-      }
+      else armIsland(el);
     }
   }
 
@@ -590,6 +615,8 @@
     Promise.all(want).then((mods) => {
       if (!inst.el.isConnected || islandInsts.get(inst.el) !== inst) return;
       const props = go();
+      const prev = hosted.get(inst.el);
+      if (prev) unmountHandle(inst.name, inst.el, prev);
       let handle;
       if (adapterURL) {
         const comp = mods[0].default || mods[0];
@@ -601,11 +628,12 @@
         handle = mount(inst.el, { ...props }, ctx);
       }
       inst.handle = handle || {};
+      hosted.set(inst.el, inst.handle);
       inst.state = "mounted";
       inst.dkey = inst.el.getAttribute("data-vk-defer") || "";
       watchStates(inst);
       if (inst.loadDeferred) inst.loadDeferred();
-    }, (err) => { inst.state = "armed"; console.error("vuka: island " + inst.name + ":", err); }).catch((err) => console.error("vuka: island " + inst.name + ":", err));
+    }).catch((err) => failIsland(inst, err));
   }
 
   // updateIslands follows a patch: a mounted island whose server props
@@ -640,9 +668,14 @@
     if (inst.mq) inst.mq[0].removeEventListener("change", inst.mq[1]);
     (inst.unwatch || []).forEach((u) => u());
     inst.unwatch = [];
-    if (inst.handle && typeof inst.handle.unmount === "function") {
-      try { inst.handle.unmount(); } catch (err) { console.error("vuka: island " + inst.name + " unmount:", err); }
-    }
+    inst.state = "gone";
+    if (inst.handle) unmountHandle(inst.name, inst.el, inst.handle);
+  }
+
+  function unmountHandle(name, el, handle) {
+    if (hosted.get(el) === handle) hosted.delete(el);
+    if (typeof handle.unmount !== "function") return;
+    try { handle.unmount(); } catch (err) { console.error("vuka: island " + name + " unmount:", err); }
   }
 
   function update(next) {

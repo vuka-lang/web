@@ -419,6 +419,98 @@ test("an invalid set and an invalid call, stateless: kept and shown; the call re
   eq([live.q.value, live.q.error], ["ab", null], "a good set clears it");
 });
 
+// strict is an island module that, like Vue's createApp().mount, refuses a
+// host that already has an app.
+function strict(name, log) {
+  return {
+    mount(el, props) {
+      if (el.__app) { log.push("double " + name); throw new Error("already an app on the host: " + el.__app); }
+      el.__app = name;
+      log.push("mount " + name);
+      return { update() { log.push("update " + name); }, unmount() { delete el.__app; log.push("unmount " + name); } };
+    },
+  };
+}
+const isl = (name, id, props = {}) => `<main><vk-island data-vk-s="p#1" data-vk-island="${name}" data-vk-client="load" data-vk-id="${id}" data-vk-props='${attr(props)}'></vk-island></main>`;
+const deferred = () => { let resolve, reject; const p = new Promise((r, j) => { resolve = r; reject = j; }); return { p, resolve, reject }; };
+function navTo(p, html) {
+  p.window.vuka.navigate("/x" + Math.random());
+  const nav = p.ws().sent.filter((m) => m.type === "navigate").pop();
+  p.server({ type: "patch", ref: nav.ref, updates: [{ id: "c0", html }] });
+}
+
+test("vuka run: a host whose island wasn't built, then another island by a navigation, then a new build: one app on it", async () => {
+  const streams = [], log = [];
+  class EventSource { constructor() { streams.push(this); } }
+  const info = { m: {}, i: { A: ["/a.js", ""] }, e: "/_vuka/events", d: true };
+  const p = page(file, isl("B", "c1"), { live: true, url: "http://test/b", scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/a.js": strict("A", log), "/b.js": strict("B", log) }, globals: { EventSource } });
+  p.ws().onopen();
+  p.server({ type: "render", ref: 1, html: isl("B", "c1") });
+  await settle();
+  eq(!!p.$("vk-island [data-vk-missing]"), true, "B isn't built");
+  navTo(p, isl("A", "c2"));
+  await settle();
+  eq([log, !!p.$("vk-island [data-vk-missing]"), p.$("vk-island").getAttribute("data-vk-error")], [["mount A"], false, null], "A mounts, B's box gone");
+  streams[0].onmessage({ data: JSON.stringify({ ...info, i: { A: ["/a.js", ""], B: ["/b.js", ""] } }) });
+  await settle();
+  eq(log, ["mount A"], "a new build doesn't mount A again");
+});
+
+test("a join's render while the island's module loads: mounted once, with the join's props", async () => {
+  const log = [], slow = deferred();
+  const two = { m: {}, i: { A: ["/a.js", ""] } };
+  const p = page(file, isl("A", "c1", { t: "http" }), { live: true, scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(two))], modules: { "/a.js": slow.p } });
+  await settle();
+  p.ws().onopen();
+  p.server({ type: "render", ref: 1, html: isl("A", "c1", { t: "joined" }) });
+  await settle();
+  slow.resolve(strict("A", log));
+  await settle();
+  eq(log, ["mount A"], "once");
+});
+
+test("moving between two pages' islands in one host, while their modules load, and back: one app at a time, the last page's", async () => {
+  const log = [], a = deferred(), b = deferred();
+  const two = { m: {}, i: { A: ["/a.js", ""], B: ["/b.js", ""] } };
+  const p = page(file, isl("A", "c1"), { live: true, url: "http://test/a", scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(two))], modules: { "/a.js": a.p, "/b.js": b.p } });
+  p.ws().onopen();
+  p.server({ type: "render", ref: 1, html: isl("A", "c1") });
+  await settle();
+  navTo(p, isl("B", "c2"));
+  await settle();
+  navTo(p, isl("A", "c3"));
+  await settle();
+  b.resolve(strict("B", log));
+  a.resolve(strict("A", log));
+  await settle();
+  eq([log, p.$("vk-island").__app], [["mount A"], "A"], "only the page shown mounts");
+  navTo(p, isl("B", "c4"));
+  await settle();
+  navTo(p, isl("A", "c5"));
+  await settle();
+  navTo(p, isl("A", "c5", { t: "patched" }));
+  await settle();
+  eq([log, p.$("vk-island").__app], [["mount A", "unmount A", "mount B", "unmount B", "mount A", "update A"], "A"], "back and forth, then a patch");
+});
+
+test("an island whose module fails to load: the error on the host (a box under vuka run), no second mount; a build with another module mounts it", async () => {
+  const streams = [], log = [];
+  class EventSource { constructor() { streams.push(this); } }
+  const info = { m: {}, i: { A: ["/a.js", ""] }, e: "/_vuka/events", d: true };
+  const errs = [];
+  const p = page(file, isl("A", "c1"), { live: true, scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/a2.js": strict("A", log) }, globals: { EventSource, console: { ...console, error: (...a) => errs.push(a.join(" ")) } } });
+  p.ws().onopen();
+  p.server({ type: "render", ref: 1, html: isl("A", "c1") });
+  await settle();
+  eq([p.$("vk-island").getAttribute("data-vk-error"), /Island A failed to load: no module \/a\.js/.test(p.$("vk-island [data-vk-missing]").textContent), errs.length], ["failed", true, 1], "flagged and shown");
+  p.server({ type: "patch", ref: 0, updates: [{ id: "c0", html: isl("A", "c1", { t: "x" }) }] });
+  await settle();
+  eq(log, [], "a patch doesn't retry it");
+  streams[0].onmessage({ data: JSON.stringify({ ...info, i: { A: ["/a2.js", ""] } }) });
+  await settle();
+  eq([log, !!p.$("vk-island [data-vk-missing]")], [["mount A"], false], "the next build's module mounts");
+});
+
 let current = null;
 process.on("beforeExit", () => { if (current) { console.log("FAIL " + current + ": never finished"); process.exit(1); } });
 // unbuilt opens a page whose island Levels the build doesn't have; the
