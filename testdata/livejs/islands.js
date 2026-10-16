@@ -139,7 +139,7 @@ test("a live page's methods: live events with their arguments; pending, error fr
   const p = joined(`<main>${host({ q: "", rows: [] }, methods)}</main>`, mod, { url: "http://test/applicants?x=1" });
   await settle();
   const live = it.ctx.live, seen = [];
-  live.subscribe((s) => seen.push(s.pending));
+  live.subscribe((s) => { if (seen[seen.length - 1] !== s.pending) seen.push(s.pending); });
   const done = live.search("gr", 2);
   eq(live.pending, true, "pending");
   const ev = p.ws().sent.find((m) => m.type === "event");
@@ -180,9 +180,101 @@ test("a stateless page's methods: posted with the signed props; the answer's pro
   eq(p.loads, [["assign", "/x"]], "a redirect navigates");
 });
 
+const lfields = ` data-vk-fields='${attr({ q: { w: "Q", d: 30 }, page: { w: "page", d: 30 }, sort: { w: "sort", d: 0 }, rows: { w: "rows" }, error: { w: "Error" } })}'`;
+
+test("a live page's fields: handles; sets debounced into one update; read-only refused; the browser's value until the answer", async () => {
+  const log = [], { it, mod } = island(log);
+  const attrs = ` data-vk-methods='["remove"]' data-vk-on-m-remove="c1:4" data-vk-on-m-_set="c1:5"` + lfields;
+  const props = (q, rows, page = 1) => ({ Q: q, page, sort: "", rows, Error: "" });
+  const p = joined(`<main>${host(props("", ["Ada"]), attrs)}</main>`, mod);
+  await settle();
+  const reads = [];
+  const live = it.ctx.live.view(() => reads.push(1));
+  eq([live.q.get(), live.q.value, live.rows.value, typeof live.rows.set, typeof live.error], ["", "", ["Ada"], "undefined", "object"], "handles");
+  eq(reads.length, 4, "each read tracked");
+  eq(Object.getOwnPropertyDescriptor(live.rows, "value").set, undefined, "a read-only value has no setter");
+  let threw = false;
+  try { (() => { "use strict"; live.rows.value = []; })(); } catch (_) { threw = true; }
+  eq(threw, true, "assigning a read-only value throws");
+  const events = () => p.ws().sent.filter((m) => m.type === "event");
+  live.q.value = "g";
+  live.q.set("gr");
+  live.page.set(2);
+  eq([live.q.value, live.page.value, live.pending, events().length], ["gr", 2, false, 0], "the browser's values, nothing sent yet");
+  p.tick(50);
+  await settle();
+  eq(events().map((m) => [m.target, m.data]), [["c1:5", { Q: "gr", page: 2 }]], "one update");
+  eq(live.pending, true, "pending while it runs");
+  live.q.set("gra");
+  const ev = events()[0];
+  p.server({ type: "patch", ref: ev.ref, updates: [{ id: "c0", html: `<main>${host(props("gr", ["Grace"], 2), attrs)}</main>` }] });
+  await settle();
+  eq([live.rows.value, live.q.value, live.page.value], [["Grace"], "gra", 2], "server props; the newer typing kept");
+  const nowDone = live.q.set("grac", { now: true });
+  await settle();
+  eq(events().slice(1).map((m) => m.data), [{ Q: "grac" }], "now: sent at once, with what was waiting");
+  const ev2 = events()[1];
+  p.server({ type: "patch", ref: ev2.ref, updates: [{ id: "c0", html: `<main>${host(props("GRAC", [], 2), attrs)}</main>` }] });
+  await nowDone;
+  eq(live.q.value, "GRAC", "the server's answer wins once nothing newer is waiting");
+  live.sort.set("name");
+  await settle();
+  eq(events().slice(2).map((m) => m.data), [{ sort: "name" }], "debounce=0 sends at once");
+  const ev3 = events()[2];
+  p.server({ type: "patch", ref: ev3.ref, updates: [{ id: "c0", html: `<main>${host(props("GRAC", [], 2), attrs + ` data-vk-err='{"status":403,"message":"sort: refused"}'`)}</main>` }] });
+  await settle();
+  eq([live.error && live.error.status, live.sort.value], [403, ""], "a refused set: the error, and the server's value back");
+});
+
+test("a method sends the sets waiting first, and has its own pending and error", async () => {
+  const log = [], { it, mod } = island(log);
+  const attrs = ` data-vk-methods='["remove","other"]' data-vk-on-m-remove="c1:4" data-vk-on-m-other="c1:6" data-vk-on-m-_set="c1:5"` + lfields;
+  const p = joined(`<main>${host({ Q: "", page: 1, rows: [] }, attrs)}</main>`, mod);
+  await settle();
+  const live = it.ctx.live;
+  live.q.set("x");
+  const done = live.remove(7);
+  eq([live.remove.pending, live.other.pending, live.pending], [true, false, true], "the method's pending");
+  await settle();
+  const events = () => p.ws().sent.filter((m) => m.type === "event");
+  eq(events().map((m) => [m.target, m.data]), [["c1:5", { Q: "x" }]], "the set first; the method waits for it");
+  p.server({ type: "patch", ref: events()[0].ref, updates: [{ id: "c0", html: `<main>${host({ Q: "x", page: 1, rows: [] }, attrs)}</main>` }] });
+  await settle();
+  eq(events().map((m) => [m.target, m.data]), [["c1:5", { Q: "x" }], ["c1:4", [7]]], "then the method");
+  p.server({ type: "patch", ref: events()[1].ref, updates: [{ id: "c0", html: `<main>${host({ Q: "x", page: 1, rows: [] }, attrs + ` data-vk-err='{"status":422,"message":"in use"}'`)}</main>` }] });
+  await done.then(() => { throw new Error("resolved"); }, () => {});
+  eq([live.remove.pending, live.remove.error, live.other.error, live.error], [false, { status: 422, message: "in use" }, null, { status: 422, message: "in use" }], "the error, the method's and the page's");
+});
+
+test("a stateless page's fields: the set posted with the signed props, answered with new ones", async () => {
+  const log = [], { it, mod } = island(log), posts = [];
+  const fetch = (url, init) => {
+    const body = JSON.parse(init.body);
+    posts.push(body);
+    const q = body.set ? body.set.Q : "";
+    const out = body.set && body.set.rows ? { error: { status: 403, message: "rows: can't be set" } } : { props: JSON.stringify({ Q: q, rows: [q.toUpperCase()] }), sig: "s" + (posts.length + 1) };
+    return Promise.resolve({ status: 200, json: () => Promise.resolve(out) });
+  };
+  const attrs = ` data-vk-methods='[]' data-vk-call="/levels" data-vk-sig="s1" data-vk-url='{"Q":"q"}'` + lfields;
+  const p = page(file, `<main>${host({ Q: "", rows: [] }, attrs)}</main>`, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod }, globals: { fetch } });
+  await settle();
+  const live = it.ctx.live;
+  live.q.set("a");
+  live.q.set("ab");
+  p.tick(50);
+  await settle();
+  eq(posts, [{ method: "", set: { Q: "ab" }, props: '{"Q":"","rows":[]}', sig: "s1" }], "one post");
+  eq([live.rows.value, it.props.rows, p.$("vk-island").getAttribute("data-vk-sig"), p.location.search], [["AB"], ["AB"], "s2", "?q=ab"], "re-signed props, the component's and the address");
+  await live.q.set("c", { now: true });
+  eq(posts[1].sig, "s2", "the next set carries the new signature");
+});
+
+let current = null;
+process.on("beforeExit", () => { if (current) { console.log("FAIL " + current + ": never finished"); process.exit(1); } });
 (async () => {
   let failed = 0;
   for (const t of tests) {
+    current = t.name;
     try {
       await t.fn();
     } catch (err) {
@@ -190,6 +282,7 @@ test("a stateless page's methods: posted with the signed props; the answer's pro
       console.log("FAIL " + t.name + ": " + err.message);
     }
   }
+  current = null;
   console.log(`${tests.length} tests, ${failed} failed`);
   process.exit(failed ? 1 : 0);
 })();

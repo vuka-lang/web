@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"html"
 	"net/http"
+	"net/http/httptest"
 	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/vuka"
 )
 
@@ -229,6 +231,123 @@ func TestIslandPageLive(t *testing.T) {
 func TestIslandPageNeedsIsland(t *testing.T) {
 	type plain struct{ X int }
 	if err := New(Only("none")).Page("/p", &plain{}).Build(); err == nil || !strings.Contains(err.Error(), "add @ui.Island") {
+		t.Errorf("got %v", err)
+	}
+}
+
+// levels is a stateless page whose Q the component sets (bind:); Changed
+// runs after.
+type levels struct {
+	Q       string   `json:"q" url:"q" bind:"q"`
+	Rows    []string `json:"rows"`
+	Changes int      `json:"changes"`
+	db      *applicantDB
+}
+
+func (l *levels) Mount() { l.Rows = l.db.find(l.Q) }
+
+func (l *levels) Changed(ctx context.Context) error {
+	if l.Q == "x" {
+		return Invalid{"q": "no x"}
+	}
+	l.Changes++
+	l.Rows = l.db.find(l.Q)
+	return nil
+}
+
+func (l *levels) Clear() { l.Q, l.Rows = "", nil }
+
+type liveLevels struct {
+	ui.Live
+	Q       string   `json:"q" url:"q" bind:"q"`
+	Rows    []string `json:"rows"`
+	Changes int      `json:"changes"`
+	db      *applicantDB
+}
+
+func (l *liveLevels) Render() ui.Node { return ui.IslandPage(l) }
+func (l *liveLevels) Mount()          { l.Rows = l.db.find(l.Q) }
+func (l *liveLevels) Changed()        { l.Changes++; l.Rows = l.db.find(l.Q) }
+
+type clashing struct {
+	List []string `json:"search"`
+}
+
+func (c *clashing) Search() {}
+
+func init() {
+	ui.Island("components/Levels.vue")(vuka.TypeOf[levels]("web.levels"))
+	ui.Island("components/Levels.vue")(vuka.TypeOf[liveLevels]("web.liveLevels"))
+	ui.Island("components/Levels.vue")(vuka.TypeOf[clashing]("web.clashing"))
+}
+
+func setBody(set map[string]any, method string, props, sig string) string {
+	b, _ := json.Marshal(map[string]any{"method": method, "set": set, "props": props, "sig": sig})
+	return string(b)
+}
+
+func TestIslandPageBoundStateless(t *testing.T) {
+	h := pageApp().Page("/levels", &levels{}).Handler()
+	_, body, _ := do(t, h, "GET", "/levels?q=a", "")
+	_, raw, sig := rendered(t, body)
+	if !strings.Contains(body, `data-vk-fields="{&#34;changes&#34;:{&#34;w&#34;:&#34;changes&#34;},&#34;q&#34;:{&#34;d&#34;:300,&#34;w&#34;:&#34;q&#34;},&#34;rows&#34;:{&#34;w&#34;:&#34;rows&#34;}}"`) {
+		t.Errorf("no data-vk-fields: %s", body)
+	}
+	code, resp, _ := do(t, h, "POST", "/levels", setBody(map[string]any{"q": "gr"}, "", raw, sig), "Content-Type", "application/json")
+	var out struct{ Props, Sig string }
+	if code != 200 || json.Unmarshal([]byte(resp), &out) != nil {
+		t.Fatalf("set: %d %s", code, resp)
+	}
+	var np map[string]any
+	json.Unmarshal([]byte(out.Props), &np)
+	if np["q"] != "gr" || np["changes"] != 1.0 || len(np["rows"].([]any)) != 1 || out.Sig == sig {
+		t.Errorf("after the set: %v %s", np, out.Sig)
+	}
+	// The new props, re-signed, make the next call; a set before a method
+	// is applied first.
+	code, resp, _ = do(t, h, "POST", "/levels", setBody(map[string]any{"q": "al"}, "clear", out.Props, out.Sig), "Content-Type", "application/json")
+	if code != 200 || !strings.Contains(resp, `\"q\":\"\"`) || !strings.Contains(resp, `\"changes\":2`) {
+		t.Errorf("set + clear: %d %s", code, resp)
+	}
+
+	// A field that isn't bound is refused; so is a set with forged props,
+	// and Changed's error is the component's.
+	expect(t, h, "POST", "/levels", setBody(map[string]any{"rows": []string{"Eve"}}, "", raw, sig), 403, `"fields":{"rows":"can't be set"}`, "Content-Type", "application/json")
+	expect(t, h, "POST", "/levels", setBody(map[string]any{"changes": 9, "q": "b"}, "", raw, sig), 403, `can't be set`, "Content-Type", "application/json")
+	expect(t, h, "POST", "/levels", setBody(map[string]any{"q": 7}, "", raw, sig), 422, `"fields":{"q":"not a string"}`, "Content-Type", "application/json")
+	expect(t, h, "POST", "/levels", setBody(map[string]any{"q": "gr"}, "", strings.Replace(raw, `"changes":0`, `"changes":5`, 1), sig), 403, "aren't the server's", "Content-Type", "application/json")
+	expect(t, h, "POST", "/levels", setBody(map[string]any{"q": "x"}, "", raw, sig), 422, `"fields":{"q":"no x"}`, "Content-Type", "application/json")
+	expect(t, h, "POST", "/levels", setBody(nil, "", raw, sig), 400, `has no method`, "Content-Type", "application/json")
+	expect(t, h, "POST", "/levels", setBody(map[string]any{"q": "gr"}, "", raw, sig), 403, "cross-origin", "Content-Type", "application/json", "Sec-Fetch-Site", "cross-site")
+}
+
+func TestIslandPageBoundLive(t *testing.T) {
+	srv := httptest.NewServer(pageApp().Page("/live/levels", &liveLevels{}).Handler())
+	defer srv.Close()
+	c, html := joined(t, srv, "/live/levels?q=a")
+	set := handlerOf(t, html, "m-_set", 0)
+	send(t, c, map[string]any{"type": "event", "ref": 2, "target": set, "event": "emit", "data": map[string]any{"q": "gr"}})
+	m := must(t, c)
+	if m.Type != live.PatchMsg || m.Ref != 2 || len(m.Updates) != 1 {
+		t.Fatalf("set: %+v", m)
+	}
+	props, _, _ := rendered(t, m.Updates[0].HTML)
+	if props["q"] != "gr" || props["changes"] != 1.0 || len(props["rows"].([]any)) != 1 || strings.Contains(m.Updates[0].HTML, "data-vk-err") {
+		t.Errorf("after the set: %v\n%s", props, m.Updates[0].HTML)
+	}
+	send(t, c, map[string]any{"type": "event", "ref": 3, "target": set, "event": "emit", "data": map[string]any{"rows": []string{"Eve"}}})
+	m = must(t, c)
+	if len(m.Updates) != 1 || !strings.Contains(m.Updates[0].HTML, `data-vk-err="{&#34;status&#34;:403,&#34;message&#34;:&#34;rows: can&#39;t be set&#34;`) {
+		t.Fatalf("a set of a field that isn't bound: %+v", m)
+	}
+	if props, _, _ := rendered(t, m.Updates[0].HTML); props["q"] != "gr" || len(props["rows"].([]any)) != 1 {
+		t.Errorf("a refused set changed the page: %v", props)
+	}
+}
+
+func TestIslandPageNameClash(t *testing.T) {
+	err := New(Only("none")).Page("/c", &clashing{}).Build()
+	if err == nil || !strings.Contains(err.Error(), "the method Search and the field List are both live.search") {
 		t.Errorf("got %v", err)
 	}
 }

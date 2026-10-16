@@ -9,14 +9,15 @@ import (
 )
 
 // Applicants is a page backed by a component: its template is
-// Applicants.vue. The exported fields are the component's props, Q kept in
-// the address's ?q=; db is the server's own. Search is what the component
-// calls (useLive). Without ui.Live the page is stateless: a call carries the
-// page's signed props back and gets the new ones.
+// Applicants.vue. The exported fields are what the component reads
+// (useLive: live.rows.value); Q, bound, is one it sets as the visitor types,
+// kept in the address's ?q=, and Changed runs after. db is the server's own.
+// Without ui.Live the page is stateless: each update carries the page's
+// signed props back and gets the new ones.
 @web.Get("/applicants")
 @ui.Island("./web/components/Applicants.vue")
 type Applicants struct {
-	Q    string      `json:"q" url:"q"`
+	Q    string      `json:"q" url:"q" bind:"q"`
 	Rows []Applicant `json:"rows"`
 	db   *Registry
 }
@@ -38,11 +39,11 @@ func (a *Applicants) Mount(ctx context.Context) error {
 	return nil
 }
 
-func (a *Applicants) Search(ctx context.Context, q string) error {
-	if q != "" && len(q) < 2 {
+func (a *Applicants) Changed(ctx context.Context) error {
+	if a.Q != "" && len(a.Q) < 2 {
 		return web.Invalid{"q": "type at least 2 letters"}
 	}
-	a.Q, a.Rows = q, a.find(q)
+	a.Rows = a.find(a.Q)
 	return nil
 }
 

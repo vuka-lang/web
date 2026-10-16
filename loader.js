@@ -290,49 +290,134 @@
     try { inst.handle.update({ ...inst.props }); } catch (err) { console.error("vuka: island " + inst.name + " update:", err); }
   }
 
-  // A page backed by its island: the component calls the page's methods
-  // (data-vk-methods) through ctx.live — on a live page as live events
-  // (data-vk-on-m-<name>), on a stateless one as calls posted to the page
-  // (data-vk-call) with its signed props (data-vk-sig). live.pending and
-  // live.error follow; subscribe tells the framework.
+  // A page backed by its island: ctx.live, what the component's useLive()
+  // reads. Each method (data-vk-methods) is a function returning a promise,
+  // with its own pending and error — on a live page a live event
+  // (data-vk-on-m-<name>), on a stateless one a call posted to the page
+  // (data-vk-call) with its signed props (data-vk-sig). Each field
+  // (data-vk-fields: handle → {w: wire name, d: debounce ms when bound}) is
+  // a handle: get(), value and, when bound, set(v[, {now}]) — debounced, the
+  // sets of one wait sent as one update (data-vk-on-m-_set, or the call's
+  // set), the value the browser's until the server's answer to it. Calls go
+  // one at a time, in order; a method sends the sets waiting first.
+  // pending and error are the page's; subscribe tells the framework of any
+  // change; view(read) is the object for its hook, read called on each read.
   function liveHandle(inst) {
     const el = inst.el;
-    let names = [];
-    try { names = JSON.parse(el.getAttribute("data-vk-methods") || "[]"); } catch (_) {}
-    let snap = { pending: false, error: null };
-    const subs = new Set(), methods = {};
-    const set = (p) => { snap = { ...snap, ...p }; h.pending = snap.pending; h.error = snap.error; subs.forEach((f) => { try { f(snap); } catch (err) { console.error(err); } }); };
+    const attr = (a, d) => { try { return JSON.parse(el.getAttribute(a) || d); } catch (_) { return JSON.parse(d); } };
+    const names = attr("data-vk-methods", "[]"), fields = attr("data-vk-fields", "{}");
+    const own = new Set(["pending", "error", "subscribe", "methods", "snapshot", "version", "view", "update"]);
+    let snap = { pending: false, error: null }, ver = 0, busy = 0, lastErr = null, chain = null;
+    let queued = null, batch = null, timer = null;
+    const subs = new Set(), per = {}, local = {}, methods = {};
+    const notify = () => {
+      ver++;
+      snap = { pending: busy > 0, error: lastErr };
+      subs.forEach((f) => { try { f(snap); } catch (err) { console.error(err); } });
+    };
     const fail = (e) => { const err = new Error(e.message || "error"); err.vuka = e; throw err; };
-    const send = (name, args) => {
-      const call = el.getAttribute("data-vk-call");
-      if (call) {
-        return fetch(call, {
-          method: "POST", credentials: "same-origin",
-          headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify({ method: name, args: clone(args), props: el.getAttribute("data-vk-props") || "{}", sig: el.getAttribute("data-vk-sig") || "" }),
-        }).then((r) => r.json().catch(() => ({ error: { status: r.status, message: r.statusText || "error" } }))).then((j) => {
-          if (j.redirect) { location.assign(j.redirect); return; }
-          if (j.error) fail(j.error);
-          el.setAttribute("data-vk-props", j.props);
-          el.setAttribute("data-vk-sig", j.sig);
-          updateIslands();
-        });
-      }
-      const id = el.getAttribute("data-vk-on-m-" + name.toLowerCase());
-      if (!id || !window.vuka || !window.vuka.emit) return Promise.reject(new Error("vuka: " + inst.name + " has no method " + name));
-      return window.vuka.emit(id, clone(args)).then(() => {
+    const post = (body) => fetch(el.getAttribute("data-vk-call"), {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ ...body, props: el.getAttribute("data-vk-props") || "{}", sig: el.getAttribute("data-vk-sig") || "" }),
+    }).then((r) => r.json().catch(() => ({ error: { status: r.status, message: r.statusText || "error" } }))).then((j) => {
+      if (j.redirect) { location.assign(j.redirect); return; }
+      if (j.error) fail(j.error);
+      el.setAttribute("data-vk-props", j.props);
+      el.setAttribute("data-vk-sig", j.sig);
+      updateIslands();
+    });
+    const emit = (key, data) => {
+      const id = el.getAttribute("data-vk-on-m-" + key);
+      if (!id || !window.vuka || !window.vuka.emit) return Promise.reject(new Error("vuka: " + inst.name + " has no method " + key));
+      return window.vuka.emit(id, data).then(() => {
         const e = el.getAttribute("data-vk-err");
         if (e) fail(JSON.parse(e));
       }, (err) => fail({ message: err && err.message || "error" }));
     };
+    const send = (name, args, set) => el.getAttribute("data-vk-call")
+      ? post(set ? { method: "", set } : { method: name, args: clone(args) })
+      : set ? emit("_set", set) : emit(name.toLowerCase(), clone(args));
+    let calls = 0; // sent or waiting to be
+    const run = (fn) => {
+      const go = () => { try { return Promise.resolve(fn()); } catch (err) { return Promise.reject(err); } };
+      const p = calls++ ? chain.then(go) : go();
+      chain = p.then(() => { calls--; }, () => { calls--; });
+      return p;
+    };
+    const follow = (st, p) => {
+      busy++;
+      if (st) st.pending = true;
+      notify();
+      return p.then((r) => {
+        busy--; lastErr = null;
+        if (st) { st.pending = false; st.error = null; }
+        notify();
+        return r;
+      }, (err) => {
+        busy--; lastErr = err.vuka || { message: err.message };
+        if (st) { st.pending = false; st.error = lastErr; }
+        notify();
+        throw err;
+      });
+    };
+    const flush = () => {
+      if (timer) { clearTimeout(timer); timer = null; }
+      if (!queued) return;
+      const set = queued, b = batch;
+      queued = batch = null;
+      const p = follow(null, run(() => send("", null, set)));
+      const settle = () => { for (const w in set) if (local[w] === set[w]) delete local[w]; notify(); };
+      p.then(settle, settle);
+      p.then(b.res, b.rej);
+    };
+    const setField = (w, d, v, o) => {
+      local[w] = v;
+      (queued = queued || {})[w] = v;
+      if (!batch) {
+        batch = {};
+        batch.p = new Promise((res, rej) => { batch.res = res; batch.rej = rej; });
+        batch.p.catch(() => {});
+      }
+      const p = batch.p;
+      notify();
+      if (timer) clearTimeout(timer);
+      if ((o && o.now) || !d) flush();
+      else timer = setTimeout(flush, d);
+      return p;
+    };
+    const cur = (w) => w in local ? local[w] : inst.props[w];
     for (const n of names) {
-      methods[n] = (...args) => {
-        set({ pending: true });
-        return send(n, args).then((r) => { set({ pending: false, error: null }); return r; },
-          (err) => { set({ pending: false, error: err.vuka || { message: err.message } }); throw err; });
-      };
+      per[n] = { pending: false, error: null };
+      methods[n] = (...args) => { flush(); return follow(per[n], run(() => send(n, args))); };
     }
-    const h = { methods, pending: false, error: null, subscribe: (fn) => { subs.add(fn); return () => subs.delete(fn); }, snapshot: () => snap, ...methods };
+    const view = (read) => {
+      const r = read || (() => {});
+      const v = {};
+      for (const n of names) {
+        const fn = (...args) => methods[n](...args);
+        Object.defineProperty(fn, "pending", { get: () => (r(), per[n].pending) });
+        Object.defineProperty(fn, "error", { get: () => (r(), per[n].error) });
+        v[n] = fn;
+      }
+      for (const k in fields) {
+        if (own.has(k) || k in v) continue;
+        const w = fields[k].w, d = fields[k].d, bound = typeof d === "number";
+        const f = { get: () => (r(), cur(w)) };
+        Object.defineProperty(f, "value", { enumerable: true, get: f.get, set: bound ? (x) => { setField(w, d, x); } : undefined });
+        if (bound) f.set = (x, o) => setField(w, d, x, o);
+        v[k] = f;
+      }
+      Object.defineProperty(v, "pending", { enumerable: true, get: () => (r(), snap.pending) });
+      Object.defineProperty(v, "error", { enumerable: true, get: () => (r(), snap.error) });
+      return v;
+    };
+    const h = view(null);
+    Object.assign(h, {
+      methods, view, update: notify,
+      subscribe: (fn) => { subs.add(fn); return () => subs.delete(fn); },
+      snapshot: () => snap, version: () => ver,
+    });
     return h;
   }
 
@@ -380,7 +465,7 @@
       };
       ctx.bound = Object.keys(refs).filter((k) => refs[k].x === undefined);
       ctx.vuka = viewer(inst.el);
-      if (inst.el.hasAttribute("data-vk-methods")) ctx.live = liveHandle(inst);
+      if (inst.el.hasAttribute("data-vk-methods")) ctx.live = inst.live = liveHandle(inst);
       return props;
     };
     const want = adapterURL ? [import(moduleURL), import(adapterURL)] : [import(moduleURL)];
@@ -419,6 +504,7 @@
       if (el.hasAttribute("data-vk-once")) for (const k in props) if (!(k in refs)) props[k] = inst.props[k];
       inst.props = props;
       if (refsChanged) { inst.refs = refs; watchStates(inst); }
+      if (inst.live) inst.live.update();
       pushProps(inst);
       syncURL(inst);
     }

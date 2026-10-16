@@ -27,7 +27,7 @@ import (
 //	@ui.Island("components/Applicants.vue")
 //	type Applicants struct {
 //		ui.Live                  // optional: a live page; without it, stateless
-//		Q    string `url:"q"`    // a prop, kept in the address's ?q=
+//		Q    string `url:"q" bind:"q"` // a prop, kept in the address's ?q=; the component may set it
 //		Rows []Applicant         // a prop
 //		db   *DB                 // the server's own: injected, never sent
 //	}
@@ -37,10 +37,12 @@ import (
 //
 // The page renders the component, mounted on load, with the exported fields
 // as its props. The component calls the exported methods (useLive<T>() in
-// it). A live page (ui.Live embedded) is a live view whose markup is the
+// it), and sets the fields tagged bind: (live.q.set(v)), after which the
+// server runs Changed. A live page (ui.Live embedded) is a live view whose markup is the
 // island: a method runs as a live event on the server's instance, and the
 // fields it changes reach the component as new props, with no remount. A
-// stateless page keeps nothing: a call posts the method, its arguments and
+// stateless page keeps nothing: a call posts the method and its arguments
+// (or the fields set) and
 // the props the page was rendered with — signed for the page and the
 // visitor, so they can't be forged or replayed by someone else — to the
 // page's URL; the server builds the struct again from them, injects
@@ -71,6 +73,9 @@ func (a *App) pageSpecs(p typePage) ([]*routeSpec, error) {
 	}
 	if t.Kind() != reflect.Struct || !ui.IsIsland(t) {
 		return nil, fmt.Errorf("web: GET %s (%s): @web.Get on a type serves its component: add @ui.Island(\"path/to/Component.vue\")", p.path, where)
+	}
+	if err := ui.CheckIsland(t); err != nil {
+		return nil, fmt.Errorf("web: GET %s (%s): %w", p.path, where, err)
 	}
 	attrs := flattenAttrs(p.typ.Attrs)
 	if reflect.PointerTo(t).Implements(statefulType) {
@@ -195,6 +200,7 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 type pageCall struct {
 	Method string          `json:"method"`
 	Args   json.RawMessage `json:"args"`
+	Set    json.RawMessage `json:"set"` // the bound fields the component set
 	Props  string          `json:"props"`
 	Sig    string          `json:"sig"`
 }
@@ -240,11 +246,16 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 			return
 		}
 		m, ok := methods[call.Method]
-		if !ok {
+		set := len(call.Set) > 0 && string(call.Set) != "null"
+		if !ok && (call.Method != "" || !set) {
 			a.writeError(w, r, BadRequest(fmt.Sprintf("%s has no method %q", ip.name, call.Method)), false)
 			return
 		}
-		end := a.span(rq.ctx, "handler", s.where+"."+m.Method.Name)
+		what := m.Method.Name
+		if !ok {
+			what = "set"
+		}
+		end := a.span(rq.ctx, "handler", s.where+"."+what)
 		x := reflect.New(ip.typ)
 		raw, err := ui.UntagProps([]byte(call.Props))
 		if err == nil {
@@ -256,7 +267,10 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 		if err == nil {
 			err = mountPage(rq.ctx, x)
 		}
-		if err == nil {
+		if err == nil && set {
+			err = ui.SetBound(rq.ctx, x, call.Set)
+		}
+		if err == nil && ok {
 			err = m.Call(rq.ctx, x, call.Args)
 		}
 		end()
@@ -274,7 +288,7 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 				}
 			}
 			if e.Status >= 500 {
-				log.Printf("web: %d POST %s %s: %v", e.Status, r.URL.Path, m.Name, err)
+				log.Printf("web: %d POST %s %s: %v", e.Status, r.URL.Path, what, err)
 			}
 			writeJSON(w, e.Status, map[string]any{"error": e})
 			return

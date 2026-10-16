@@ -1304,22 +1304,25 @@ import Week "./web/islands/Week.vue"
 ```
 
 A page can be a component: `@web.Get` on an `@ui.Island` type serves the
-component as the page, its exported fields the props and its exported
-methods what the component calls (`useLive` from `vuka:live`, typed from the
-Go struct). Embedding `ui.Live` makes it a live page; without it each call
-is a signed POST that carries the page's props back — signed for the page
-and the visitor's sign-in, so no one else can replay them.
+component as the page. Through `useLive` (from `vuka:live`, typed from the Go
+struct) the component reads the exported fields (`live.rows.value`), sets
+the ones tagged `bind:` (`v-model="live.q.value"`, debounced; the server
+runs `Changed` after) and calls the exported methods (`live.cancel(id)`).
+Embedding `ui.Live` makes it a live page; without it each update is a
+signed POST that carries the page's props back — signed for the page and
+the visitor's sign-in, so no one else can replay them.
 
 ```vuka
 @web.Get("/orders")
 @ui.Island("./web/components/Orders.vue")
 type Orders struct {
-	Q    string  `json:"q" url:"q"`
+	Q    string  `json:"q" url:"q" bind:"q"`
 	Rows []Order `json:"rows"`
 	db   *Store
 }
 
-func (o *Orders) Search(ctx context.Context, q string) error { … }
+func (o *Orders) Changed(ctx context.Context) error           { … }
+func (o *Orders) Cancel(ctx context.Context, id int64) error { … }
 ```
 
 The guide: [Islands](https://vuka-lang.github.io/vuka/web/islands). An
