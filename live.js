@@ -324,29 +324,32 @@
   // so the nodes after — a field with focus — stay the same elements.
   function ahead(cur, n) {
     if (keyOf(cur) || (n.nextSibling && same(cur, n.nextSibling))) return null;
-    for (let c = cur.nextSibling; c && !keyOf(c); c = c.nextSibling) if (same(c, n)) return c;
+    for (let c = cur.nextSibling; c && !keyOf(c); c = c.nextSibling) if (!foreign.has(c) && same(c, n)) return c;
     return null;
   }
 
   function children(el, next) {
-    let cur = el.firstChild;
+    const body = el === document.body;
+    if (body) adoptForeign();
+    const skip = (c) => { while (c && foreign.has(c)) c = c.nextSibling; return c; };
+    let cur = skip(el.firstChild);
     for (const n of Array.from(next.childNodes)) {
       let match = null;
       const k = keyOf(n);
-      if (k) match = Array.from(el.children).find((c) => keyOf(c) === k && c.tagName === n.tagName) || null;
+      if (k) match = Array.from(el.children).find((c) => !foreign.has(c) && keyOf(c) === k && c.tagName === n.tagName) || null;
       if (!match && cur && same(cur, n)) match = cur;
       if (!match && cur && !k && (match = ahead(cur, n))) {
         while (cur !== match) {
           const gone = cur;
           cur = cur.nextSibling;
-          el.removeChild(gone);
+          if (!foreign.has(gone)) el.removeChild(gone);
         }
       }
       if (match) {
         if (match !== cur) el.insertBefore(match, cur);
         if (n.nodeType === 1) morph(match, n);
         else if (match.nodeValue !== n.nodeValue) match.nodeValue = n.nodeValue;
-        cur = match.nextSibling;
+        cur = skip(match.nextSibling);
       } else {
         el.insertBefore(document.importNode(n, true), cur);
       }
@@ -354,9 +357,19 @@
     while (cur) {
       const gone = cur;
       cur = cur.nextSibling;
-      el.removeChild(gone);
+      if (!foreign.has(gone)) el.removeChild(gone);
     }
+    if (body && bodyWatch) bodyWatch.takeRecords();
   }
+
+  // foreign holds the body's children the page's scripts put there — a
+  // component's teleported content and its anchors, a date picker's
+  // calendar: a morph of the body leaves them where they are, so the
+  // component that owns them can still take them out.
+  const foreign = new WeakSet();
+  const markForeign = (ms) => ms.forEach((r) => r.addedNodes.forEach((n) => foreign.add(n)));
+  const bodyWatch = typeof MutationObserver === "function" ? new MutationObserver(markForeign) : null;
+  const adoptForeign = () => bodyWatch && markForeign(bodyWatch.takeRecords());
 
   function attrs(el, next) {
     let waiting = false;
@@ -1483,6 +1496,7 @@
     },
   };
   window.vuka = { connect, tree, register, push, emit: emitIsland, states, navigate, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
+  if (bodyWatch) bodyWatch.observe(document.body, { childList: true });
   const page0 = document.documentElement.outerHTML;
   listenIn(page0);
   bindIn(document.body, page0);

@@ -213,3 +213,45 @@ func TestBrowserIslandLayoutNavigate(t *testing.T) {
 		t.Error("the layout's elements weren't kept on the way back")
 	}
 }
+
+// What the page's scripts put in the body — a component's teleported
+// content and its anchors — outlives a navigation morphing the body, so the
+// component can still take it out (Vue's unmount walks a teleported
+// fragment from its first anchor to its last).
+func TestBrowserNavigateKeepsForeignBody(t *testing.T) {
+	a := New(Only("none"))
+	a.Live("/a", &navA{})
+	a.Live("/b", &navB{})
+	srv := httptest.NewServer(a.Handler())
+	t.Cleanup(srv.Close)
+
+	b := chrome.Launch(t)
+	p := b.Open(srv.URL + "/a")
+	p.Wait(`document.documentElement.getAttribute("data-vk-state") === "connected"`)
+	p.Eval(`(() => {
+		window.__start = document.createTextNode("");
+		window.__end = document.createTextNode("");
+		const portal = document.createElement("div");
+		portal.id = "portal";
+		document.body.append(window.__start, portal, document.createComment("teleport"), window.__end);
+		return true;
+	})()`, nil)
+	inBody := `window.__start.parentNode === document.body && window.__end.parentNode === document.body &&
+		window.__start.nextSibling === document.querySelector("#portal") && document.querySelector("#portal").nextSibling.nodeType === 8 &&
+		document.querySelector("#portal").nextSibling.nextSibling === window.__end`
+	p.Click("#to-b")
+	p.Wait(`location.pathname === "/b" && document.querySelector('vk-island[data-vk-island="navB"]') !== null`)
+	var ok bool
+	p.Eval(inBody, &ok)
+	if !ok {
+		var h string
+		p.Eval(`document.body.innerHTML`, &h)
+		t.Fatalf("the scripts' nodes in the body didn't outlive the navigation: %s", h)
+	}
+	p.Click("#to-a")
+	p.Wait(`location.pathname === "/a" && document.querySelector('vk-island[data-vk-island="navA"]') !== null`)
+	p.Eval(inBody+` && document.querySelectorAll("#side").length === 1`, &ok)
+	if !ok {
+		t.Error("the scripts' nodes in the body didn't outlive the way back")
+	}
+}
