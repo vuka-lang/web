@@ -136,7 +136,12 @@ func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, html
 			e.Status, http.StatusText(e.Status), http.StatusText(e.Status), html.EscapeString(e.Error()))
 		return
 	}
-	writeJSON(w, e.Status, map[string]any{"status": e.Status, "error": e.Error()})
+	body := map[string]any{"status": e.Status, "error": e.Error()}
+	var fe interface{ FieldErrors() map[string]string }
+	if errors.As(err, &fe) && len(fe.FieldErrors()) > 0 {
+		body["fields"] = fe.FieldErrors()
+	}
+	writeJSON(w, e.Status, body)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

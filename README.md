@@ -237,8 +237,20 @@ Each parameter binds by its type and name:
 | one struct, or pointer to a struct that isn't provided (with exported fields; else it is a missing dependency) | the body: JSON for `application/json`, else the form (urlencoded, multipart) or query; then path segments into fields of the same name |
 
 Struct fields bind by their `form` tag, else `json` tag, else name, matched
-case-insensitively; `validate:"required"` rejects a zero value. A malformed
-value answers 400 with a message (`id: "x" is not an integer`).
+case-insensitively. A malformed value answers 400 with a message (`id: "x"
+is not an integer`). Then the struct's `validate:` tags are checked, nested
+structs and slices of them included — `required`, `omitempty`,
+`min=n`/`max=n`/`len=n`, `oneof=a b`, `email`, the rules of a page backed
+by a component — and a failure answers 422 with each field's message, keyed
+by its path as the request named it (json names for a JSON body, else form
+names):
+
+```json
+{"error":"invalid: address.city: required; email: an email address","fields":{"address.city":"required","email":"an email address"},"status":422}
+```
+
+The error is a `web.Invalid`, so an `OnError` handler reads the fields with
+`errors.As`. A rule that isn't one of these fails `Build`.
 
 A request body is at most 32 MiB (`web.MaxRequestBody(n)`; negative for
 none), uploads included — a multipart form spills to temporary files past

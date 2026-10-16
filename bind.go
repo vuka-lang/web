@@ -339,6 +339,9 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 			return nil, errors.New("a handler binds one struct from the request, and this is the second")
 		}
 		*body = true
+		if err := ui.CheckValidate(t); err != nil {
+			return nil, err
+		}
 		return structBinder(t, pathNames, a.router), nil
 	case t.Kind() == reflect.Pointer || t.Kind() == reflect.Interface:
 		return nil, fmt.Errorf("no provider for %s, needed by %s", t, s.where)
@@ -431,7 +434,6 @@ func setText(v reflect.Value, vals []string) error {
 type formField struct {
 	key, name string
 	index     []int
-	required  bool
 	settable  bool
 }
 
@@ -454,8 +456,7 @@ func fieldsOf(t reflect.Type) []formField {
 		if key == "" {
 			continue
 		}
-		fs = append(fs, formField{key: key, name: f.Name, index: f.Index,
-			required: slices.Contains(strings.Split(f.Tag.Get("validate"), ","), "required"), settable: scalar(f.Type)})
+		fs = append(fs, formField{key: key, name: f.Name, index: f.Index, settable: scalar(f.Type)})
 	}
 	return fs
 }
@@ -473,7 +474,8 @@ func structBinder(t reflect.Type, pathNames []string, router Router) binder {
 		ptr := reflect.New(st)
 		v := ptr.Elem()
 		ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
-		if ct == "application/json" || strings.HasSuffix(ct, "+json") {
+		isJSON := ct == "application/json" || strings.HasSuffix(ct, "+json")
+		if isJSON {
 			if err := json.NewDecoder(http.MaxBytesReader(rq.w, r.Body, maxBody)).Decode(ptr.Interface()); err != nil {
 				return v, bodyError(err, "invalid JSON: ")
 			}
@@ -508,16 +510,30 @@ func structBinder(t reflect.Type, pathNames []string, router Router) binder {
 				}
 			}
 		}
-		for _, f := range fields {
-			if f.required && v.FieldByIndex(f.index).IsZero() {
-				return v, BadRequest(f.key + " is required")
-			}
+		if err := validateBound(ptr.Interface(), isJSON); err != nil {
+			return v, err
 		}
 		if t.Kind() == reflect.Pointer {
 			return ptr, nil
 		}
 		return v, nil
 	}
+}
+
+// validateBound checks a bound struct's validate: tags, naming each field
+// as the request did: by its json names for a JSON body, else as a form
+// binds it.
+func validateBound(v any, isJSON bool) error {
+	var err error
+	if isJSON {
+		err = ui.Validate(v)
+	} else {
+		err = ui.ValidateTags(v, "form", "json")
+	}
+	if bad, ok := err.(ui.Invalid); ok {
+		return Invalid(bad)
+	}
+	return err
 }
 
 // trackingWriter notes whether the handler wrote the response itself, so

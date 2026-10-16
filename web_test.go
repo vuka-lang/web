@@ -116,7 +116,7 @@ func TestBindStruct(t *testing.T) {
 	expect(t, h, "POST", "/pets", `name=Tom&years=3&tags=x&tags=y&owner=ann`, 200, `"name":"Tom","Age":3,"tags":["x","y"],"Owner":"ann"`,
 		"Content-Type", "application/x-www-form-urlencoded")
 	expect(t, h, "POST", "/pets", `{"name":`, 400, "invalid JSON", "Content-Type", "application/json")
-	expect(t, h, "POST", "/pets", `{}`, 400, "name is required", "Content-Type", "application/json")
+	expect(t, h, "POST", "/pets", `{}`, 422, `{"error":"invalid: name: required","fields":{"name":"required"},"status":422}`, "Content-Type", "application/json")
 	expect(t, h, "POST", "/pets", `name=a&years=old`, 400, `years: \"old\" is not an integer`, "Content-Type", "application/x-www-form-urlencoded")
 	expect(t, h, "PUT", "/owners/bob/pets", `{"name":"Rex","Owner":"evil"}`, 200, `"Rex bob PUT true"`, "Content-Type", "application/json")
 	expect(t, h, "GET", "/search?NAME=z", "", 200, `"name":"z"`)

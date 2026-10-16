@@ -46,7 +46,7 @@ func TestPets(t *testing.T) {
 		{"GET", "/pets/x", "", nil, 400, "is not an integer"},
 		{"GET", "/api/pets", "", nil, 200, `{"id":1,"name":"Rex","kind":"dog"}`},
 		{"POST", "/api/pets", `{"name":"Bo","kind":"parrot"}`, []string{"Content-Type", "application/json"}, 200, `{"id":3,"name":"Bo","kind":"parrot"}`},
-		{"POST", "/api/pets", `{"kind":"parrot"}`, []string{"Content-Type", "application/json"}, 400, `"name is required"`},
+		{"POST", "/api/pets", `{"kind":"parrot"}`, []string{"Content-Type", "application/json"}, 422, `"fields":{"name":"required"}`},
 		{"POST", "/pets", `name=Kit&kind=cat`, []string{"Content-Type", "application/x-www-form-urlencoded"}, 303, "/pets/4"},
 		{"POST", "/pets", `name=+&kind=cat`, []string{"Content-Type", "application/x-www-form-urlencoded"}, 400, "<p>a pet needs a name</p>"},
 		{"GET", "/admin/pets", "", nil, 200, `"name":"Kit"`},
