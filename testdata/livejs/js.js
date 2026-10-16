@@ -865,6 +865,79 @@ test("navigation: a URL that isn't http or https is refused", () => {
   }
 });
 
+// window.vuka.navigate: what an island's live.navigate / live.patch and
+// VukaLink use.
+const settled = (pr) => { const s = { v: "pending" }; pr.then((r) => { s.v = r; }, (err) => { s.v = "rejected " + err.message; }); return s; };
+const flushed = () => new Promise((r) => setImmediate(r));
+
+test("navigate: over the connection as a link; the promise settles once applied", async () => {
+  const p = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  const seen = [];
+  p.window.addEventListener("vk:navigate", (e) => seen.push(e.detail.patch));
+  const pr = settled(p.window.vuka.navigate("/shelf?page=2", { patch: true }));
+  eq(navs(p), [{ type: "navigate", url: "/shelf?page=2", patch: true }], "sent as a patch link");
+  await flushed();
+  eq(pr.v, "pending", "not before the reply");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c1", html: shelf(2).slice(6, -7) }], url: "/shelf?page=2" });
+  await flushed();
+  eq([pr.v, p.location.href, p.entries, seen], [{ url: "http://test/shelf?page=2", patch: true }, "http://test/shelf?page=2", ["http://test/shelf?page=2"], [true]], "applied");
+  const nv = settled(p.window.vuka.navigate("/books/7"));
+  eq(navs(p).pop(), { type: "navigate", url: "/books/7" }, "a navigate");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c0", html: book(7) }], url: "/books/7" });
+  await flushed();
+  eq([nv.v, p.scrolls], [{ url: "http://test/books/7", patch: false }, [[0, 0]]], "a new page: the top");
+});
+
+test("navigate: replace takes the current entry's place; a later move supersedes", async () => {
+  const p = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  const first = settled(p.window.vuka.navigate("/shelf?page=2", { patch: true, replace: true }));
+  const second = settled(p.window.vuka.navigate("/shelf?page=3", { patch: true, replace: true }));
+  await flushed();
+  eq(first.v, "rejected live: another navigation took its place", "superseded");
+  p.server({ type: "patch", ref: lastRef(p) - 1, updates: [{ id: "c1", html: shelf(2).slice(6, -7) }], url: "/shelf?page=2" });
+  eq(p.location.href, "http://test/shelf?page=1", "the old reply moves nothing");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c1", html: shelf(3).slice(6, -7) }], url: "/shelf?page=3" });
+  await flushed();
+  eq([second.v.url, p.location.href, p.entries, p.history.state.vk !== undefined], ["http://test/shelf?page=3", "http://test/shelf?page=3", [], true], "replaced, no entry added");
+  p.$("#next").setAttribute("data-vk-replace", "");
+  p.fire("#next", "click");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c1", html: shelf(4).slice(6, -7) }], url: "/shelf?page=4" });
+  eq([p.location.href, p.entries], ["http://test/shelf?page=4", []], "a link with data-vk-replace");
+  const lost = settled(p.window.vuka.navigate("/books/7", { replace: true }));
+  p.ws().onclose({ code: 1006 });
+  await flushed();
+  eq([p.loads, lost.v], [[["replace", "http://test/books/7"]], "pending"], "a lost connection: a page load, replacing");
+});
+
+test("navigate: no connection, not joined or another origin is a page load", async () => {
+  const off = open(shelf(1), { url: "http://test/shelf?page=1" });
+  const a = settled(off.window.vuka.navigate("/books/7"));
+  off.window.vuka.navigate("/books/8", { replace: true, patch: true });
+  off.$("#next").setAttribute("data-vk-replace", "");
+  eq(off.fire("#next", "click").defaultPrevented, true, "a replace link on a page that isn't live");
+  await flushed();
+  eq([off.loads, a.v], [[["assign", "http://test/books/7"], ["replace", "http://test/books/8"], ["replace", "http://test/shelf?page=2"]], "pending"], "loads; the page leaves");
+  const p = open(shelf(1), { live: true, url: "http://test/shelf?page=1" });
+  p.window.vuka.navigate("/books/7");
+  const q = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  q.window.vuka.navigate("https://elsewhere.test/x");
+  const h = settled(q.window.vuka.navigate("/shelf?page=1#at"));
+  await flushed();
+  eq([p.loads, q.loads, navs(q), q.location.hash, h.v], [[["assign", "http://test/books/7"]], [["assign", "https://elsewhere.test/x"]], [], "#at", { url: "http://test/shelf?page=1#at", patch: true }], "not joined, elsewhere, a #hash");
+});
+
+test("navigate: a URL that isn't http or https is refused and rejects", async () => {
+  for (const href of ["javascript:void(window.pwned=1)", " JavaScript:alert(1)", "data:text/html,x", "vbscript:x"]) {
+    for (const p of [joined(shelf(1), { url: "http://test/shelf?page=1" }), open(shelf(1))]) {
+      const errors = [];
+      p.doc.addEventListener("vk:error", (e) => errors.push(e.detail.message));
+      const a = settled(p.window.vuka.navigate(href)), b = settled(p.window.vuka.navigate(href, { patch: true, replace: true }));
+      await flushed();
+      eq([a.v, b.v, p.loads, errors.length, p.window.pwned], ["rejected live: refused to load a URL that isn't http or https", "rejected live: refused to load a URL that isn't http or https", [], 2, undefined], href);
+    }
+  }
+});
+
 test("attributes: no event handlers, srcdoc or script URLs", () => {
   const p = open(`<button data-vk-js-click='${js([
     ["set_attr", { to: { sel: "#a" }, name: "onmouseover", value: "window.pwned=1" }],

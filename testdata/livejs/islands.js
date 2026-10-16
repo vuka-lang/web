@@ -133,6 +133,67 @@ test("an island that leaves unmounts and stops following its states", async () =
   eq(log.map((l) => l[0]), ["mount", "unmount"]);
 });
 
+test("live.navigate / live.patch and vuka.navigate / vuka.patch go over the connection; the old page's islands unmount, the new page's mount", async () => {
+  const log = [], { it, mod } = island(log);
+  const methods = ` data-vk-methods='["search"]' data-vk-on-m-search="c1:4"`;
+  const p = joined(`<main>${host({ q: "" }, methods)}</main>`, mod, { url: "http://test/a" });
+  await settle();
+  const { live, vuka } = it.ctx;
+  eq([typeof live.navigate, typeof live.patch, typeof live.view().navigate, typeof vuka.navigate, typeof vuka.patch], ["function", "function", "function", "function", "function"], "there");
+  const patched = live.patch("/a?q=x", { replace: true });
+  const nav = p.ws().sent.filter((m) => m.type === "navigate");
+  eq(nav.map(({ ref, ...m }) => m), [{ type: "navigate", url: "/a?q=x", patch: true }], "a patch");
+  p.server({ type: "patch", ref: nav[0].ref, updates: [{ id: "c0", html: `<main>${host({ q: "x" }, methods)}</main>` }] });
+  eq(await patched, { url: "http://test/a?q=x", patch: true }, "resolved");
+  await settle();
+  eq([log.map((l) => l[0]), it.props.q, p.entries], [["mount", "update"], "x", []], "the same island updated, the entry replaced");
+  const moved = vuka.navigate("/b");
+  const nav2 = p.ws().sent.filter((m) => m.type === "navigate")[1];
+  p.server({ type: "patch", ref: nav2.ref, updates: [{ id: "c0", html: `<main><section>${host({ q: "b" })}</section></main>` }] });
+  await moved;
+  await settle();
+  eq([log.map((l) => l[0]), it.props, p.location.pathname], [["mount", "update", "unmount", "mount"], { q: "b" }, "/b"], "a new page's island");
+  await vuka.navigate("javascript:alert(1)").then(() => { throw new Error("resolved"); }, (err) => eq(/refused/.test(err.message), true, "refused"));
+});
+
+test("a navigation morphing an island's host into another island's (name or live id): the old unmounts, the new mounts", async () => {
+  const log = [], a = island(log), b = island(log);
+  const at = (name, id, props) => `<main><vk-island data-vk-s="p#1" data-vk-island="${name}" data-vk-client="load" data-vk-id="${id}" data-vk-props='${attr(props)}'></vk-island></main>`;
+  const two = { m: {}, i: { Pick: ["/pick.js", ""], Other: ["/other.js", ""] } };
+  const p = page(file, at("Pick", "c1", { q: "a" }), { live: true, url: "http://test/a", scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(two))], modules: { "/pick.js": a.mod, "/other.js": b.mod } });
+  p.ws().onopen();
+  p.server({ type: "render", ref: 1, html: at("Pick", "c1", { q: "a" }) });
+  await settle();
+  const host = p.$("vk-island");
+  p.window.vuka.navigate("/b");
+  let nav = p.ws().sent.filter((m) => m.type === "navigate").pop();
+  p.server({ type: "patch", ref: nav.ref, updates: [{ id: "c0", html: at("Other", "c2", { t: "b" }) }] });
+  await settle();
+  eq([p.$("vk-island") === host, log.map((l) => l[0]), b.it.props], [true, ["mount", "unmount", "mount"], { t: "b" }], "another island in the same host");
+  p.window.vuka.navigate("/b2");
+  nav = p.ws().sent.filter((m) => m.type === "navigate").pop();
+  p.server({ type: "patch", ref: nav.ref, updates: [{ id: "c0", html: at("Other", "c3", { t: "c" }) }] });
+  await settle();
+  eq([log.map((l) => l[0]), b.it.props], [["mount", "unmount", "mount", "unmount", "mount"], { t: "c" }], "the same island, another instance: mounts afresh");
+  p.window.vuka.navigate("/b2?x=1", { patch: true });
+  nav = p.ws().sent.filter((m) => m.type === "navigate").pop();
+  p.server({ type: "patch", ref: nav.ref, updates: [{ id: "c0", html: at("Other", "c3", { t: "d" }) }] });
+  await settle();
+  eq([log.map((l) => l[0]).length, log[log.length - 1][0], b.it.props], [6, "update", { t: "d" }], "a patch keeping the instance: updated");
+});
+
+test("without the live runtime's navigate, live.navigate and vuka.navigate load the page", async () => {
+  const log = [], { it, mod } = island(log);
+  const p = page(file, `<main>${host({ q: "" }, ` data-vk-call="/a/_call"`)}</main>`, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod } });
+  await settle();
+  delete p.window.vuka.navigate;
+  it.ctx.live.navigate("/b");
+  it.ctx.vuka.patch("/c", { replace: true });
+  let refused = "";
+  await it.ctx.vuka.navigate("data:text/html,x").catch((err) => { refused = err.message; });
+  eq([p.loads, /refused/.test(refused)], [[["assign", "http://test/b"], ["replace", "http://test/c"]], true]);
+});
+
 test("a live page's methods: live events with their arguments; pending, error from the re-render", async () => {
   const log = [], { it, mod } = island(log);
   const methods = ` data-vk-methods='["search"]' data-vk-on-m-search="c1:4" data-vk-url='{"q":"q"}'`;

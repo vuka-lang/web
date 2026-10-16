@@ -34,7 +34,7 @@
     ws.onclose = (e) => {
       ws = null;
       joined = false;
-      if (nav) return load(nav.href, nav.pop); // the page it was going to, the long way
+      if (nav) return load(nav.href, nav.pop || nav.replace); // the page it was going to, the long way
       pending.forEach((p) => clearTimeout(p.timer));
       pending.clear();
       busy.forEach((b) => release(b.el));
@@ -102,7 +102,7 @@
             ups = m.trees.map((e) => ({ id: e.id, html: html[e.id] }));
           } catch (err) { // out of step with the server: start over
             fail("live: " + err.message);
-            if (n) return load(n.href, n.pop);
+            if (n) return load(n.href, n.pop || n.replace);
             joined = false;
             join();
             break;
@@ -118,11 +118,11 @@
         break;
       }
       case "error":
-        if (n) return load(n.href, n.pop);
+        if (n) return load(n.href, n.pop || n.replace);
         fail(m.error, m.ref);
         break;
       case "redirect":
-        load(m.url, n && n.pop);
+        load(m.url, n && (n.pop || n.replace));
         break;
     }
     if (b) {
@@ -1299,8 +1299,8 @@
     state_set: (el, a, e) => { if (!redismiss(a, e)) swrite(a, a.v); },
     state_toggle: (el, a, e) => { if (!redismiss(a, e)) swrite(a, !sread(a)); },
     state_inc: (el, a) => swrite(a, (+sread(a) || 0) + (a.by || 0)),
-    patch: (el, a) => go(String(a.href), true),
-    navigate: (el, a) => go(String(a.href), false),
+    patch: (el, a) => { move(String(a.href), true); },
+    navigate: (el, a) => { move(String(a.href), false); },
     // push sends an event to a handler as data-vk-on-<event> would.
     // Its predictions are what the chain changed since its last push.
     push: (el, a, e) => {
@@ -1344,28 +1344,52 @@
     try { u = new URL(String(href), location.href); } catch (_) { return null; }
     return u.protocol === "http:" || u.protocol === "https:" ? u : null;
   }
-  function load(href, pop) {
+  function load(href, replace) {
     const u = httpURL(href);
     if (!u) return fail("live: refused to load a URL that isn't http or https");
-    pop ? location.replace(u.href) : location.assign(u.href);
+    replace ? location.replace(u.href) : location.assign(u.href);
   }
   const save = () => history.replaceState({ ...history.state, x: scrollX, y: scrollY }, "");
 
   // go moves the page to href; pop is the history state back or forward
-  // brought, the address being href already.
-  function go(href, patch, pop) {
+  // brought, the address being href already; replace takes the place of
+  // the current entry instead of adding one. It returns a promise settled
+  // when the move is applied: rejected for a refused URL or when another
+  // move takes its place; a page load leaves it unsettled.
+  function go(href, patch, pop, replace) {
     const u = httpURL(href);
-    if (!u) return fail("live: refused to load a URL that isn't http or https");
-    const at = u.pathname + u.search;
-    if (!pop && at === here && u.hash) return void (location.hash = u.hash);
-    if (!live || !joined || u.origin !== location.origin) return load(u.href, pop);
+    if (!u) {
+      const msg = "live: refused to load a URL that isn't http or https";
+      fail(msg);
+      return Promise.reject(new Error(msg));
+    }
+    const at = u.pathname + u.search, again = !!(pop || replace);
+    if (!pop && at === here && u.hash) {
+      replace ? location.replace(u.href) : location.hash = u.hash;
+      return Promise.resolve({ url: u.href, patch: true });
+    }
+    if (!live || !joined || u.origin !== location.origin) {
+      load(u.href, again);
+      return new Promise(() => {});
+    }
     if (!pop) save();
     flush();
-    if (nav) clearTimeout(nav.timer);
-    nav = { ref: ++ref, href: u.href, patch, pop, timer: setTimeout(() => load(u.href, pop), 10000) };
-    document.documentElement.setAttribute("data-vk-navigating", at); // where to, for the development toolbar
-    ws.send(JSON.stringify({ type: "navigate", ref: nav.ref, url: at, patch: patch || undefined }));
+    if (nav) {
+      clearTimeout(nav.timer);
+      nav.reject(Object.assign(new Error("live: another navigation took its place"), { name: "AbortError" }));
+    }
+    return new Promise((resolve, reject) => {
+      nav = { ref: ++ref, href: u.href, patch, pop, replace, resolve, reject, timer: setTimeout(() => load(u.href, again), 10000) };
+      document.documentElement.setAttribute("data-vk-navigating", at); // where to, for the development toolbar
+      ws.send(JSON.stringify({ type: "navigate", ref: nav.ref, url: at, patch: patch || undefined }));
+    });
   }
+
+  // move is go for the runtime's own callers, who don't wait for it.
+  const move = (href, patch, pop, replace) => { go(href, patch, pop, replace).catch(() => {}); };
+  // navigate is window.vuka.navigate: go for a script or an island,
+  // opts {patch, replace}.
+  const navigate = (href, opts) => go(href, !!(opts && opts.patch), null, !!(opts && opts.replace));
 
   // arrived follows a navigation's applied reply: the next token, the
   // address, scroll (the top, the #hash, or where the entry was) and focus
@@ -1385,6 +1409,7 @@
       pageID = n.pop && n.pop.vk || newPage();
     }
     if (n.pop) history.replaceState({ ...history.state, vk: pageID }, "");
+    else if (n.replace) history.replaceState({ vk: pageID }, "", u.href);
     else history.pushState({ vk: pageID }, "", u.href);
     const t = u.hash && document.getElementById(decodeURIComponent(u.hash.slice(1)));
     if (n.pop && n.pop.y != null) scrollTo(n.pop.x || 0, n.pop.y);
@@ -1396,6 +1421,7 @@
       f.focus({ preventScroll: true });
     }
     window.dispatchEvent(new CustomEvent("vk:navigate", { detail: { url: u.href, patch: !!n.patch } }));
+    n.resolve({ url: u.href, patch: !!n.patch });
   }
 
   // push sends an event to a method of el's live component by name (a
@@ -1456,26 +1482,28 @@
       return () => unsub(b);
     },
   };
-  window.vuka = { connect, tree, register, push, emit: emitIsland, states, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
+  window.vuka = { connect, tree, register, push, emit: emitIsland, states, navigate, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   const page0 = document.documentElement.outerHTML;
   listenIn(page0);
   bindIn(document.body, page0);
-  if (!live) return;
-  history.replaceState({ ...history.state, vk: pageID }, "");
+  // A link moves over the connection; data-vk-replace (VukaLink's replace)
+  // also takes the place of the current history entry when it loads.
   document.addEventListener("click", (e) => {
     const t = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
     const a = t && t.closest("a[data-vk-link]"), href = a && a.getAttribute("href");
-    if (!href || !joined || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey ||
+    if (!href || !joined && !a.hasAttribute("data-vk-replace") || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey ||
       /^(?!_self$)./.test(a.getAttribute("target") || "") || a.hasAttribute("download")) return;
     const u = new URL(href, location.href);
     if (u.origin !== location.origin || u.pathname + u.search === here && u.hash) return;
     e.preventDefault();
-    go(u.href, a.getAttribute("data-vk-link") === "patch");
+    move(u.href, a.getAttribute("data-vk-link") === "patch", null, a.hasAttribute("data-vk-replace"));
   });
+  if (!live) return;
+  history.replaceState({ ...history.state, vk: pageID }, "");
   window.addEventListener("popstate", (e) => {
     const st = e.state || {};
     if (location.pathname + location.search === here && (!st.vk || st.vk === pageID)) return; // a #hash
-    go(location.href, st.vk === pageID, st);
+    move(location.href, st.vk === pageID, st);
   });
   window.addEventListener("scroll", () => { clearTimeout(saving); saving = setTimeout(save, 200); }, { passive: true });
   window.addEventListener("online", () => { if (!ws) { attempt = 0; connect(); } });

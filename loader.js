@@ -155,8 +155,15 @@
     return m.i ? [...document.querySelectorAll("[data-vk-island]")] : [];
   }
 
+  // An island whose host left, or now hosts another island (a navigation
+  // morphed it into the new page's: another name, or another live
+  // instance's id), unmounts; the new one mounts.
   function syncIslands(d) {
-    for (const [el, inst] of islandInsts) if (!el.isConnected) unmountIsland(inst);
+    for (const [el, inst] of islandInsts) {
+      const vid = el.getAttribute("data-vk-id") || "";
+      if (!el.isConnected || el.getAttribute("data-vk-island") !== inst.name || vid && inst.vid && vid !== inst.vid) unmountIsland(inst);
+      else if (vid) inst.vid = vid;
+    }
     for (const el of islandRoots()) if (!islandInsts.has(el)) armIsland(el);
     if (d && !d.join) updateIslands();
   }
@@ -181,7 +188,7 @@
     const name = el.getAttribute("data-vk-island");
     const spec = m.i && m.i[name];
     if (!spec) { missingIsland(el, name); return; }
-    const inst = { el, id: scopeOf(el) || name, name, spec, ons: null, state: "armed", handle: null, props: {}, refs: {}, fns: new Map(), key: ["", ""] };
+    const inst = { el, id: scopeOf(el) || name, name, vid: el.getAttribute("data-vk-id") || "", spec, ons: null, state: "armed", handle: null, props: {}, refs: {}, fns: new Map(), key: ["", ""] };
     islandInsts.set(el, inst);
     const go = () => hydrateIsland(inst);
     switch (el.getAttribute("data-vk-client") || "visible") {
@@ -346,7 +353,7 @@
     const el = inst.el;
     const attr = (a, d) => { try { return JSON.parse(el.getAttribute(a) || d); } catch (_) { return JSON.parse(d); } };
     const names = attr("data-vk-methods", "[]"), fields = attr("data-vk-fields", "{}");
-    const own = new Set(["pending", "error", "subscribe", "methods", "snapshot", "version", "view", "update"]);
+    const own = new Set(["pending", "error", "subscribe", "methods", "snapshot", "version", "view", "update", "navigate", "patch"]);
     let snap = { pending: false, error: null }, ver = 0, busy = 0, lastErr = null, chain = null;
     let queued = null, batch = null, timer = null;
     const subs = new Set(), per = {}, local = {}, methods = {}, ferr = {}, held = {};
@@ -475,6 +482,7 @@
         }
         v[k] = f;
       }
+      for (const k in navigation) if (!(k in v)) v[k] = navigation[k];
       Object.defineProperty(v, "pending", { enumerable: true, get: () => (r(), snap.pending) });
       Object.defineProperty(v, "error", { enumerable: true, get: () => (r(), snap.error) });
       return v;
@@ -488,14 +496,30 @@
     return h;
   }
 
-  // viewer is $vuka: the visitor as the server knows them (data-vk-viewer).
+  // go moves the page to href for an island (live.navigate / live.patch,
+  // vuka.navigate / vuka.patch): over the live connection as a
+  // data-vk-link would, else a page load; opts.replace takes the place of
+  // the current history entry. Only http and https URLs are followed.
+  function go(href, patch, opts) {
+    const o = { ...(opts || {}), patch };
+    if (window.vuka && window.vuka.navigate) return window.vuka.navigate(href, o);
+    let u = null;
+    try { u = new URL(String(href), location.href); } catch (_) {}
+    if (!u || (u.protocol !== "http:" && u.protocol !== "https:")) return Promise.reject(new Error("vuka: refused to load a URL that isn't http or https"));
+    o.replace ? location.replace(u.href) : location.assign(u.href);
+    return new Promise(() => {});
+  }
+  const navigation = { navigate: (href, opts) => go(href, false, opts), patch: (href, opts) => go(href, true, opts) };
+
+  // viewer is $vuka: the visitor as the server knows them (data-vk-viewer),
+  // and navigate / patch.
   function viewer(el) {
     let v = null;
     try { v = JSON.parse(el.getAttribute("data-vk-viewer") || "null"); } catch (_) {}
     v = v || { user: null, roles: [], perms: [] };
     const perms = v.perms || [];
     v.can = (p) => perms.some((g) => g === "*" || g === p || g.endsWith(".*") && p.startsWith(g.slice(0, -1)));
-    return v;
+    return Object.assign(v, navigation);
   }
 
   // syncURL keeps the address's query parameters of url:"name" props.
@@ -537,7 +561,7 @@
     };
     const want = adapterURL ? [import(moduleURL), import(adapterURL)] : [import(moduleURL)];
     Promise.all(want).then((mods) => {
-      if (!inst.el.isConnected || !islandInsts.has(inst.el)) return;
+      if (!inst.el.isConnected || islandInsts.get(inst.el) !== inst) return;
       const props = go();
       let handle;
       if (adapterURL) {
