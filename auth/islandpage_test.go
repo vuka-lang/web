@@ -67,3 +67,36 @@ func TestIslandPageGates(t *testing.T) {
 		t.Errorf("the page without the perm: %d", code)
 	}
 }
+
+// A stateless page's signed props are the visitor's: replayed by another
+// user, anonymously, or after a sign-out and in again, they don't verify.
+func TestIslandPagePropsAreTheVisitors(t *testing.T) {
+	app := newApp(t, users(), nil)
+	app.Page("/roster", &roster{}, auth.Public())
+	ada1, bob, anon := serve(t, app), serve(t, app), serve(t, app)
+	ada1.login("ada@example.com", "correct horse", "")
+	bob.login("bob@example.com", "hunter22", "")
+	page := ada1.page("/roster").body
+	props := stdhtml.UnescapeString(regexp.MustCompile(`data-vk-props="([^"]*)"`).FindStringSubmatch(page)[1])
+	sig := stdhtml.UnescapeString(regexp.MustCompile(`data-vk-sig="([^"]*)"`).FindStringSubmatch(page)[1])
+	body, _ := json.Marshal(map[string]any{"method": "add", "args": []any{"Bo"}, "props": props, "sig": sig})
+	call := func(c *client) answer {
+		return c.do("POST", "/roster", string(body), "Content-Type", "application/json", "Origin", c.srv.URL)
+	}
+	if r := call(ada1); r.status != 200 || !strings.Contains(r.body, "Bo") {
+		t.Errorf("ada's own call: %d %s", r.status, r.body)
+	}
+	for name, c := range map[string]*client{"bob": bob, "anonymous": anon} {
+		if r := call(c); r.status != http.StatusForbidden || strings.Contains(r.body, "Bo") {
+			t.Errorf("%s replaying ada's props: %d %s", name, r.status, r.body)
+		}
+	}
+	ada1.do("POST", "/auth/logout", "", "Origin", ada1.srv.URL)
+	if r := call(ada1); r.status != http.StatusForbidden {
+		t.Errorf("after ada signed out: %d %s", r.status, r.body)
+	}
+	ada1.login("ada@example.com", "correct horse", "")
+	if r := call(ada1); r.status != http.StatusForbidden {
+		t.Errorf("ada signed in again: %d %s", r.status, r.body)
+	}
+}

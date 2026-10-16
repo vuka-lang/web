@@ -41,8 +41,9 @@ import (
 // island: a method runs as a live event on the server's instance, and the
 // fields it changes reach the component as new props, with no remount. A
 // stateless page keeps nothing: a call posts the method, its arguments and
-// the props the page was rendered with — signed, so they can't be forged —
-// to the page's URL; the server builds the struct again from them, injects
+// the props the page was rendered with — signed for the page and the
+// visitor, so they can't be forged or replayed by someone else — to the
+// page's URL; the server builds the struct again from them, injects
 // its dependencies, runs Mount and the method, and answers with the new
 // props. Calls are refused cross-origin and pass the type's gates.
 
@@ -186,7 +187,7 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 			return
 		}
 		end()
-		a.page(rq, layout(ui.IslandPage(x.Interface(), ui.CallAt(r.URL.Path, a.signProps(r.URL.Path, props)))))
+		a.page(rq, layout(ui.IslandPage(x.Interface(), ui.CallAt(r.URL.Path, a.signProps(rq.ctx, ip, r.URL.Path, props)))))
 	}), nil
 }
 
@@ -234,7 +235,7 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 			a.writeError(w, r, BadRequest("invalid call: "+err.Error()), false)
 			return
 		}
-		if err := a.verifyProps(r.URL.Path, call.Props, call.Sig); err != nil {
+		if err := a.verifyProps(rq.ctx, ip, r.URL.Path, call.Props, call.Sig); err != nil {
 			a.writeError(w, r, err, false)
 			return
 		}
@@ -283,7 +284,7 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 			a.writeError(w, r, err, false)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"props": string(props), "sig": a.signProps(r.URL.Path, props)})
+		writeJSON(w, http.StatusOK, map[string]any{"props": string(props), "sig": a.signProps(rq.ctx, ip, r.URL.Path, props)})
 	})
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, r, errCrossOrigin, false)
@@ -294,31 +295,38 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 func slicesClone(p []prop) []prop { return append([]prop(nil), p...) }
 
 // A stateless page's props are signed with the app's key (LiveKey), bound
-// to the page's path and an expiry (LiveTokenTTL):
+// to the page's type and path, the visitor (LiveIdentity: their user and
+// sign-in, or no one) and an expiry (LiveTokenTTL):
 //
-//	base64url(expiry, 8 bytes big-endian) "." base64url(HMAC-SHA256("page" 0 path 0 expiry props))
-func (a *App) signProps(path string, props []byte) string {
+//	base64url(expiry, 8 bytes big-endian) "." base64url(HMAC-SHA256("page" type path visitor expiry props))
+//
+// each of type, path and visitor length-prefixed. Props replayed by another
+// visitor, after a sign-out or to another page don't verify.
+func (a *App) signProps(ctx context.Context, ip *islandPage, path string, props []byte) string {
 	exp := binary.BigEndian.AppendUint64(nil, uint64(time.Now().Add(a.liveTTL).Unix()))
-	return base64.RawURLEncoding.EncodeToString(exp) + "." + base64.RawURLEncoding.EncodeToString(a.propsMAC(path, exp, props))
+	return base64.RawURLEncoding.EncodeToString(exp) + "." + base64.RawURLEncoding.EncodeToString(a.propsMAC(ctx, ip, path, exp, props))
 }
 
-func (a *App) propsMAC(path string, exp, props []byte) []byte {
+func (a *App) propsMAC(ctx context.Context, ip *islandPage, path string, exp, props []byte) []byte {
 	mac := hmac.New(sha256.New, a.liveKey)
-	io.WriteString(mac, "page\x00"+path+"\x00")
+	io.WriteString(mac, "page\x00")
+	for _, s := range []string{ip.typ.PkgPath() + "." + ip.typ.Name(), path, a.liveWho(ctx)} {
+		mac.Write(binary.AppendUvarint(nil, uint64(len(s))))
+		io.WriteString(mac, s)
+	}
 	mac.Write(exp)
-	mac.Write([]byte{0})
 	mac.Write(props)
 	return mac.Sum(nil)
 }
 
-func (a *App) verifyProps(path, props, sig string) error {
+func (a *App) verifyProps(ctx context.Context, ip *islandPage, path, props, sig string) error {
 	e, m, ok := strings.Cut(sig, ".")
 	exp, err1 := base64.RawURLEncoding.DecodeString(e)
 	mac, err2 := base64.RawURLEncoding.DecodeString(m)
 	if !ok || err1 != nil || err2 != nil || len(exp) != 8 {
 		return errPageSig
 	}
-	if !hmac.Equal(mac, a.propsMAC(path, exp, []byte(props))) {
+	if !hmac.Equal(mac, a.propsMAC(ctx, ip, path, exp, []byte(props))) {
 		return errPageSig
 	}
 	if time.Now().Unix() > int64(binary.BigEndian.Uint64(exp)) {

@@ -36,12 +36,14 @@ func LiveAdopt(window time.Duration) Option {
 	return OptionFunc(func(a *App) { a.adoptWindow = window })
 }
 
-// LiveIdentity tells live adoption who a context is signed in as: a stable
-// key for the identity ("" for no one). A join adopts a parked session only
-// when every registered function returns for the join's context what it
-// returned for the render's — the same user, or anonymous both times. A
-// library that signs visitors in registers one, so one visitor's page is
-// never adopted by another's connection.
+// LiveIdentity tells live adoption and stateless pages' signed props who a
+// context is signed in as: a stable key for the identity and its sign-in
+// ("" for no one). A join adopts a parked session only when every
+// registered function returns for the join's context what it returned for
+// the render's — the same sign-in, or anonymous both times — and a
+// stateless page's call verifies only for the visitor its props were
+// signed for. A library that signs visitors in registers one, so one
+// visitor's page is never adopted, or its props replayed, by another.
 func LiveIdentity(f func(ctx context.Context) string) Option {
 	return OptionFunc(func(a *App) {
 		a.mutable("LiveIdentity")

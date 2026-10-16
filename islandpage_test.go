@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
@@ -176,6 +177,36 @@ func TestIslandPageTampering(t *testing.T) {
 	expect(t, pageApp().Handler(), "POST", "/applicants", callBody("clear", nil, raw, sig), 403, "aren't the server's", "Content-Type", "application/json")
 	// A cross-site call is refused.
 	expect(t, h, "POST", "/applicants", callBody("clear", nil, raw, sig), 403, "cross-origin", "Content-Type", "application/json", "Sec-Fetch-Site", "cross-site")
+}
+
+// A stateless page's props verify only for the visitor they were signed
+// for, at the page they were signed at, until they expire.
+func TestIslandPageSignedForTheVisitor(t *testing.T) {
+	who := LiveIdentity(func(ctx context.Context) string {
+		if r := Request(ctx); r != nil {
+			return r.Header.Get("X-Who")
+		}
+		return ""
+	})
+	key := LiveKey([]byte(strings.Repeat("k", 32)))
+	h := pageApp(who, key).Page("/elsewhere", &applicants{}).Handler()
+	_, body, _ := do(t, h, "GET", "/applicants?q=a", "", "X-Who", "ada")
+	_, raw, sig := rendered(t, body)
+	call := callBody("clear", nil, raw, sig)
+	expect(t, h, "POST", "/applicants", call, 200, `"props"`, "Content-Type", "application/json", "X-Who", "ada")
+	expect(t, h, "POST", "/applicants", call, 403, "aren't the server's", "Content-Type", "application/json", "X-Who", "bob")
+	expect(t, h, "POST", "/applicants", call, 403, "aren't the server's", "Content-Type", "application/json")
+	expect(t, h, "POST", "/elsewhere", call, 403, "aren't the server's", "Content-Type", "application/json", "X-Who", "ada")
+
+	_, body, _ = do(t, h, "GET", "/applicants?q=a", "")
+	_, raw, sig = rendered(t, body)
+	expect(t, h, "POST", "/applicants", callBody("clear", nil, raw, sig), 200, `"props"`, "Content-Type", "application/json")
+	expect(t, h, "POST", "/applicants", callBody("clear", nil, raw, sig), 403, "aren't the server's", "Content-Type", "application/json", "X-Who", "ada")
+
+	expired := pageApp(who, key, LiveTokenTTL(-time.Second)).Handler()
+	_, body, _ = do(t, expired, "GET", "/applicants?q=a", "", "X-Who", "ada")
+	_, raw, sig = rendered(t, body)
+	expect(t, expired, "POST", "/applicants", callBody("clear", nil, raw, sig), 403, "expired", "Content-Type", "application/json", "X-Who", "ada")
 }
 
 func TestIslandPageLive(t *testing.T) {

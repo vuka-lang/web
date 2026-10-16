@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -268,6 +269,20 @@ func viewer(ctx context.Context) any {
 	return map[string]any{"user": map[string]any{"id": id.ID}, "roles": nonNil(id.Roles), "perms": nonNil(id.Perms)}
 }
 
+// signedIn is the key of ctx's sign-in: the user and the session, token or
+// JWT they signed in with; "" for no one.
+func signedIn(ctx context.Context) string {
+	st := stateOf(ctx)
+	if st == nil || st.id == nil {
+		return ""
+	}
+	key := st.key
+	if key == "" && !st.iat.IsZero() {
+		key = strconv.FormatInt(st.iat.UnixNano(), 10)
+	}
+	return st.id.ID + "\x00" + st.via + "\x00" + key
+}
+
 func nonNil(s []string) []string {
 	if s == nil {
 		return []string{}
@@ -290,12 +305,7 @@ func Module(cfg Config) web.Option {
 			return Identity{}, web.Unauthorized
 		}),
 		web.LiveCheck(a.liveCheck),
-		web.LiveIdentity(func(ctx context.Context) string {
-			if id := Current(ctx); id != nil {
-				return id.ID
-			}
-			return ""
-		}),
+		web.LiveIdentity(signedIn),
 		web.GuardLiveEvents(a.guardEvent),
 		web.TrackRequests(),
 		web.CronContext(System),

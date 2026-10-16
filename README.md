@@ -1307,7 +1307,8 @@ A page can be a component: `@web.Get` on an `@ui.Island` type serves the
 component as the page, its exported fields the props and its exported
 methods what the component calls (`useLive` from `vuka:live`, typed from the
 Go struct). Embedding `ui.Live` makes it a live page; without it each call
-is a signed POST that carries the page's props back.
+is a signed POST that carries the page's props back — signed for the page
+and the visitor's sign-in, so no one else can replay them.
 
 ```vuka
 @web.Get("/orders")
