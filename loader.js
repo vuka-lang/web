@@ -347,6 +347,11 @@
   // the server's value back. A failed call rejects with an Error carrying
   // status and fields. Calls go one at a time, in order; a method sends the
   // sets waiting first.
+  // A deferred field (data-vk-fields' p: defer: on the server) isn't in the
+  // first render: its value is undefined, its pending true, until the server
+  // sends it — after a live page joins, or the answer to the load a
+  // stateless page posts once it mounts — and its error is its loader's
+  // (data-vk-defer: {p: [wire names pending], e: {wire name: error}}).
   // pending and error are the page's; subscribe tells the framework of any
   // change; view(read) is the object for its hook, read called on each read.
   function liveHandle(inst) {
@@ -357,6 +362,13 @@
     let snap = { pending: false, error: null }, ver = 0, busy = 0, lastErr = null, chain = null;
     let queued = null, batch = null, timer = null;
     const subs = new Set(), per = {}, local = {}, methods = {}, ferr = {}, held = {};
+    let dpend = new Set(), derr = {};
+    const readDefer = () => {
+      const d = attr("data-vk-defer", "{}");
+      dpend = new Set(d.p || []);
+      derr = d.e || {};
+    };
+    readDefer();
     const notify = () => {
       ver++;
       snap = { pending: busy > 0, error: lastErr };
@@ -382,7 +394,17 @@
       if (j.error) fail(j.error);
       el.setAttribute("data-vk-props", j.props);
       el.setAttribute("data-vk-sig", j.sig);
+      if (j.defer) el.setAttribute("data-vk-defer", JSON.stringify(j.defer));
       updateIslands();
+    });
+    // load asks a stateless page's server for its deferred fields, first
+    // of its calls; a refused load is each pending field's error.
+    const load = () => run(() => post({ method: "", load: true })).catch((err) => {
+      const e = err && err.vuka || { message: err && err.message || "error" }, d = { p: [], e: { ...derr } };
+      dpend.forEach((w) => { d.e[w] = e; });
+      el.setAttribute("data-vk-defer", JSON.stringify(d));
+      readDefer();
+      notify();
     });
     const emit = (key, data) => {
       const id = el.getAttribute("data-vk-on-m-" + key);
@@ -479,6 +501,9 @@
         if (bound) {
           f.set = (x, o) => setField(w, d, x, o);
           Object.defineProperty(f, "error", { enumerable: true, get: () => (r(), w in ferr ? ferr[w] : null) });
+        } else if (fields[k].p) {
+          Object.defineProperty(f, "pending", { enumerable: true, get: () => (r(), dpend.has(w) && !(w in derr)) });
+          Object.defineProperty(f, "error", { enumerable: true, get: () => (r(), derr[w] || null) });
         }
         v[k] = f;
       }
@@ -487,9 +512,10 @@
       Object.defineProperty(v, "error", { enumerable: true, get: () => (r(), snap.error) });
       return v;
     };
+    inst.loadDeferred = () => { if (el.getAttribute("data-vk-call") && dpend.size > 0) load(); };
     const h = view(null);
     Object.assign(h, {
-      methods, view, update: notify,
+      methods, view, update: () => { readDefer(); notify(); },
       subscribe: (fn) => { subs.add(fn); return () => subs.delete(fn); },
       snapshot: () => snap, version: () => ver,
     });
@@ -575,7 +601,9 @@
       }
       inst.handle = handle || {};
       inst.state = "mounted";
+      inst.dkey = inst.el.getAttribute("data-vk-defer") || "";
       watchStates(inst);
+      if (inst.loadDeferred) inst.loadDeferred();
     }, (err) => { inst.state = "armed"; console.error("vuka: island " + inst.name + ":", err); }).catch((err) => console.error("vuka: island " + inst.name + ":", err));
   }
 
@@ -586,7 +614,11 @@
     for (const [el, inst] of islandInsts) {
       if (inst.state !== "mounted") continue;
       const raw = el.getAttribute("data-vk-props") || "";
-      const key = plainKey(raw);
+      const key = plainKey(raw), dkey = el.getAttribute("data-vk-defer") || "";
+      if (dkey !== inst.dkey) {
+        inst.dkey = dkey;
+        if (inst.live && key[0] === inst.key[0] && key[1] === inst.key[1]) inst.live.update();
+      }
       if (key[0] === inst.key[0] && key[1] === inst.key[1]) continue;
       const refsChanged = key[1] !== inst.key[1];
       inst.key = key;

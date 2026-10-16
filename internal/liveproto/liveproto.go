@@ -101,6 +101,23 @@ func (x native) Component(target string) ui.Stateful {
 // (live.Session.SetErrorText).
 func (x native) SetErrorText(text func(error) string) { x.s.SetErrorText(text) }
 
+// Deferred starts the deferred loads of the session's pages backed by their
+// islands (live.Session.Deferred).
+func (x native) Deferred() []*ui.DeferredLoad { return x.s.Deferred() }
+
+// Loaded is what a deferred load changed (live.Session.Loaded); nil when
+// nothing.
+func (x native) Loaded(d *ui.DeferredLoad) any {
+	p, err := x.s.Loaded(d)
+	switch {
+	case err != nil:
+		return live.ServerMessage{Type: live.Error, Error: x.s.ErrorText(err)}
+	case !empty(p):
+		return live.PatchMessage(0, p)
+	}
+	return nil
+}
+
 func (x native) Topics() []string { return x.s.Topics() }
 func (x native) Close()           { x.s.Close() }
 

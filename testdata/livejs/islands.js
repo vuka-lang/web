@@ -432,6 +432,64 @@ function unbuilt(info) {
   return { p, log, streams, box: () => p.$("vk-island [data-vk-missing]") };
 }
 
+const dfields = ` data-vk-fields='${attr({ title: { w: "title" }, stats: { w: "stats", p: 1 }, rows: { w: "rows", p: 1 } })}'`;
+const dstate = (p, e = {}) => ` data-vk-defer='${attr({ p, e })}'`;
+
+test("deferred fields, live: pending and undefined until a patch brings them; a loader's error is the field's", async () => {
+  const log = [], { it, mod } = island(log);
+  const p = joined(`<main>${host({ title: "Orders" }, dfields + dstate(["stats", "rows"]))}</main>`, mod);
+  await settle();
+  const live = it.ctx.live, seen = [];
+  live.subscribe(() => seen.push([live.stats.pending, live.rows.pending]));
+  eq([live.stats.value, live.stats.pending, live.stats.error, live.rows.pending, "pending" in live.title], [undefined, true, null, true, false], "pending");
+  p.server({ type: "patch", ref: 0, updates: [{ id: "c0", html: `<main>${host({ title: "Orders", stats: { open: 3 } }, dfields + dstate(["rows"]))}</main>` }] });
+  await settle();
+  eq([live.stats.value, live.stats.pending, live.rows.value, live.rows.pending], [{ open: 3 }, false, undefined, true], "stats arrived");
+  eq(it.props.stats, { open: 3 }, "and reached the component's props");
+  p.server({ type: "patch", ref: 0, updates: [{ id: "c0", html: `<main>${host({ title: "Orders", stats: { open: 3 } }, dfields + dstate([], { rows: { message: "rows are down" } }))}</main>` }] });
+  await settle();
+  eq([live.rows.pending, live.rows.error, live.rows.value, live.error], [false, { message: "rows are down" }, undefined, null], "rows failed, the page didn't");
+  eq(seen, [[false, true], [false, false]], "the component told each time");
+  eq(log.filter((l) => l[0] === "mount").length, 1, "no remount");
+});
+
+test("deferred fields, stateless: loaded by a signed post once mounted, first of its calls", async () => {
+  const log = [], { it, mod } = island(log), posts = [];
+  let release;
+  const fetch = (url, init) => {
+    const body = JSON.parse(init.body);
+    posts.push(body);
+    const out = body.load ? { props: JSON.stringify({ title: "Orders", stats: { open: 3 } }), sig: "s2", defer: { p: [], e: { rows: { status: 500, message: "error" } } } }
+      : { props: JSON.stringify({ title: body.args[0], stats: { open: 3 } }), sig: "s3" };
+    return new Promise((r) => { const go = () => r({ status: 200, json: () => Promise.resolve(out) }); body.load ? (release = go) : go(); });
+  };
+  const attrs = ` data-vk-methods='["rename"]' data-vk-call="/orders" data-vk-sig="s1"` + dfields + dstate(["stats", "rows"]);
+  const p = page(file, `<main>${host({ title: "Orders" }, attrs)}</main>`, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod }, globals: { fetch } });
+  await settle();
+  const live = it.ctx.live;
+  eq(posts, [{ method: "", load: true, props: '{"title":"Orders"}', sig: "s1" }], "the load, posted with the signed props");
+  eq([live.stats.pending, live.stats.value, live.pending], [true, undefined, false], "pending, not the page's");
+  const renamed = live.rename("Sales");
+  await settle();
+  eq(posts.length, 1, "a call waits for the load");
+  release();
+  await renamed;
+  eq([live.stats.value, live.stats.pending, live.rows.pending, live.rows.error], [{ open: 3 }, false, false, { status: 500, message: "error" }], "loaded");
+  eq(posts[1].sig, "s2", "the call carries the load's signature");
+  eq([live.title.value, live.stats.value], ["Sales", { open: 3 }], "after the call");
+});
+
+test("deferred fields, stateless: a refused load is each pending field's error", async () => {
+  const log = [], { it, mod } = island(log);
+  const fetch = () => Promise.resolve({ status: 403, json: () => Promise.resolve({ error: { status: 403, message: "the page expired: reload it" } }) });
+  const attrs = ` data-vk-call="/orders" data-vk-sig="s1"` + dfields + dstate(["stats", "rows"]);
+  page(file, `<main>${host({ title: "Orders" }, attrs)}</main>`, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod }, globals: { fetch } });
+  await settle();
+  await settle();
+  const live = it.ctx.live;
+  eq([live.stats.pending, live.stats.error, live.rows.error.status], [false, { status: 403, message: "the page expired: reload it" }, 403], "errors");
+});
+
 test("vuka run: an island the build doesn't have says its build failed", async () => {
   const { p, box } = unbuilt({ m: {}, i: { Pick: ["/pick.js", ""] }, e: "/_vuka/events", d: true, x: true });
   await settle();

@@ -90,6 +90,7 @@ func pageApp(opts ...Option) *App {
 var (
 	propsAttr = regexp.MustCompile(`data-vk-props="([^"]*)"`)
 	sigAttr   = regexp.MustCompile(`data-vk-sig="([^"]*)"`)
+	deferAttr = regexp.MustCompile(`data-vk-defer="([^"]*)"`)
 )
 
 // rendered is a page's island props and signature.

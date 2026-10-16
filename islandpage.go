@@ -201,7 +201,8 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 type pageCall struct {
 	Method string          `json:"method"`
 	Args   json.RawMessage `json:"args"`
-	Set    json.RawMessage `json:"set"` // the bound fields the component set
+	Set    json.RawMessage `json:"set"`  // the bound fields the component set
+	Load   bool            `json:"load"` // its deferred fields, asked for once it mounts
 	Props  string          `json:"props"`
 	Sig    string          `json:"sig"`
 }
@@ -248,16 +249,20 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 		}
 		m, ok := methods[call.Method]
 		set := len(call.Set) > 0 && string(call.Set) != "null"
-		if !ok && (call.Method != "" || !set) {
+		if !ok && (call.Method != "" || !set && !call.Load) {
 			a.writeError(w, r, BadRequest(fmt.Sprintf("%s has no method %q", ip.name, call.Method)), false)
 			return
 		}
 		what := m.Method.Name
-		if !ok {
+		switch {
+		case call.Load:
+			what = "load"
+		case !ok:
 			what = "set"
 		}
 		end := a.span(rq.ctx, "handler", s.where+"."+what)
 		x := reflect.New(ip.typ)
+		loads := ui.LoadsFrom(ip.typ, []byte(call.Props))
 		raw, err := ui.UntagProps([]byte(call.Props))
 		if err == nil {
 			err = json.Unmarshal(raw, x.Interface())
@@ -267,6 +272,9 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 		}
 		if err == nil {
 			err = mountPage(rq.ctx, x)
+		}
+		if err == nil && call.Load {
+			loads.Load(rq.ctx, x, func(err error) string { return a.loadErrorText(r, ip, err) })
 		}
 		if err == nil && set {
 			err = ui.SetBound(rq.ctx, x, call.Set)
@@ -294,17 +302,35 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 			writeJSON(w, e.Status, map[string]any{"error": e})
 			return
 		}
-		props, err := ui.PropsJSON(rq.ctx, x.Elem().Interface())
+		props, err := ui.PropsJSON(rq.ctx, x.Elem().Interface(), ui.WithLoads(loads))
 		if err != nil {
 			a.writeError(w, r, err, false)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"props": string(props), "sig": a.signProps(rq.ctx, ip, r.URL.Path, props)})
+		res := map[string]any{"props": string(props), "sig": a.signProps(rq.ctx, ip, r.URL.Path, props)}
+		if call.Load {
+			res["defer"] = loads.JSON(ip.typ)
+		}
+		writeJSON(w, http.StatusOK, res)
 	})
 	cop.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.writeError(w, r, errCrossOrigin, false)
 	}))
 	return cop.Handler(h), nil
+}
+
+// loadErrorText is a stateless page's failed loader's error as its
+// component reads it (live.stats.error): a public error's message, in
+// development any error's, else "error", the error logged.
+func (a *App) loadErrorText(r *http.Request, ip *islandPage, err error) string {
+	if e := ui.ErrorOf(err); e.Message != "error" {
+		return e.Message
+	}
+	if a.dev {
+		return err.Error()
+	}
+	log.Printf("web: POST %s load (%s): %v", r.URL.Path, ip.name, err)
+	return "error"
 }
 
 func slicesClone(p []prop) []prop { return append([]prop(nil), p...) }

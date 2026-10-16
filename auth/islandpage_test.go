@@ -24,7 +24,54 @@ type roster struct {
 func (r *roster) Mount(ctx context.Context) { r.Names = []string{"Ada"} }
 func (r *roster) Add(name string)           { r.Names = append(r.Names, name) }
 
-func init() { ui.Island("components/Roster.vue")(vuka.TypeOf[roster]("auth_test.roster")) }
+// tally defers its counts: their load is a call, gated as the page is.
+type tally struct {
+	Counts map[string]int `json:"counts" defer:""`
+}
+
+func (b *tally) LoadCounts(ctx context.Context) error {
+	b.Counts = map[string]int{"open": 2}
+	return nil
+}
+
+func init() {
+	ui.Island("components/Roster.vue")(vuka.TypeOf[roster]("auth_test.roster"))
+	ui.Island("components/Tally.vue")(vuka.TypeOf[tally]("auth_test.tally"))
+}
+
+func TestIslandPageDeferredGates(t *testing.T) {
+	users := authtest.NewUsers()
+	app := func(id *auth.Identity) http.Handler {
+		return web.New(web.Only("none"), auth.Module(auth.Config{Users: users}), authtest.As(id)).
+			Page("/tally", &tally{}, auth.Requires("staff")).Handler()
+	}
+	serve := func(h http.Handler, method, body string) (int, string) {
+		r := httptest.NewRequest(method, "/tally", strings.NewReader(body))
+		if body != "" {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w.Code, w.Body.String()
+	}
+	staff := app(&auth.Identity{ID: "1", Perms: []string{"staff"}})
+	_, page := serve(staff, "GET", "")
+	props := stdhtml.UnescapeString(regexp.MustCompile(`data-vk-props="([^"]*)"`).FindStringSubmatch(page)[1])
+	sig := stdhtml.UnescapeString(regexp.MustCompile(`data-vk-sig="([^"]*)"`).FindStringSubmatch(page)[1])
+	if props != "{}" {
+		t.Errorf("first render's props: %s", props)
+	}
+	load, _ := json.Marshal(map[string]any{"load": true, "props": props, "sig": sig})
+	if code, body := serve(staff, "POST", string(load)); code != 200 || !strings.Contains(body, `\"open\":2`) {
+		t.Errorf("staff's load: %d %s", code, body)
+	}
+	if code, body := serve(app(&auth.Identity{ID: "2"}), "POST", string(load)); code != http.StatusForbidden || strings.Contains(body, "open") {
+		t.Errorf("a load without the perm: %d %s", code, body)
+	}
+	if code, body := serve(app(nil), "POST", string(load)); code == 200 || strings.Contains(body, "open") {
+		t.Errorf("an anonymous load: %d %s", code, body)
+	}
+}
 
 // A page backed by its island takes its type's gates: its page and every
 // call; its component knows the visitor ($vuka).

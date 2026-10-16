@@ -258,6 +258,8 @@ type conn struct {
 	doing  string                          // what the session runs, for its errors' log: a handler's name, "join", …
 	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
+	loads context.CancelFunc // ends the deferred loads of the page joined or navigated to
+
 	mu     sync.Mutex
 	inbox  []delivery
 	wake   chan struct{}
@@ -458,15 +460,20 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 			c.ws.Close(code, reply.(live.ServerMessage).Error)
 			return false
 		}
+		c.startDeferred()
 	case c.s == nil:
 		c.write(ctx, live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: "live: join first"})
 	case m.Type == live.Navigate:
 		reply, patch := c.navigate(ctx, m.ClientMessage)
-		if _, moved := reply.(withToken); moved && c.tb != nil {
+		_, moved := reply.(withToken)
+		if moved && c.tb != nil {
 			// before the reply: the toolbar asks for the page once it lands
 			c.tb.navigated(c.tb.cur.Load(), c.uri, patch, c.r.Header)
 		}
 		c.write(ctx, reply)
+		if moved {
+			c.startDeferred()
+		}
 	default:
 		c.write(ctx, c.event(m.ClientMessage))
 	}
@@ -766,6 +773,44 @@ func (w withToken) MarshalJSON() ([]byte, error) {
 	return append(append(append(b[:len(b)-1:len(b)-1], `,"token":`...), t...), '}'), nil
 }
 
+// deferredSession is a session whose pages backed by their islands have
+// deferred fields (live.Session.Deferred).
+type deferredSession interface {
+	Deferred() []*ui.DeferredLoad
+	Loaded(d *ui.DeferredLoad) any
+}
+
+// loaded is a deferred load done, waiting in the inbox to be applied.
+type loaded struct{ d *ui.DeferredLoad }
+
+// startDeferred runs the deferred loads of the page just joined or
+// navigated to, each on its own goroutine with the page's context, ended
+// when the page is left; each, done, is applied as a broadcast is.
+func (c *conn) startDeferred() {
+	ds, ok := c.s.(deferredSession)
+	if !ok {
+		return
+	}
+	loads := ds.Deferred()
+	if c.loads != nil {
+		c.loads()
+		c.loads = nil
+	}
+	if len(loads) == 0 {
+		return
+	}
+	ctx, cancel := context.WithCancel(c.page)
+	c.loads = cancel
+	for _, d := range loads {
+		go func() {
+			d.Run(ctx)
+			if ctx.Err() == nil {
+				c.post("", loaded{d})
+			}
+		}()
+	}
+}
+
 // drain delivers the broadcasts waiting for the page; before a join there is
 // nothing to deliver them to, and the join renders the page fresh.
 func (c *conn) drain(ctx context.Context) bool {
@@ -777,6 +822,22 @@ func (c *conn) drain(ctx context.Context) bool {
 		return true
 	}
 	for _, d := range batch {
+		if l, ok := d.msg.(loaded); ok {
+			ds, _ := c.s.(deferredSession)
+			if ds == nil {
+				continue
+			}
+			c.doing = "load " + l.d.Group
+			end := noop
+			if c.tb != nil {
+				end = c.recording("load", l.d.Group, 0, nil)
+			}
+			if m := ds.Loaded(l.d); m != nil {
+				c.write(ctx, m)
+			}
+			end()
+			continue
+		}
 		c.doing = "broadcast " + cmp.Or(d.topic, `""`)
 		end := noop
 		if c.tb != nil {
