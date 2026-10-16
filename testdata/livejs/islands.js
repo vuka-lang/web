@@ -303,6 +303,61 @@ test("a page with fields and no methods: live is there, reads and sets (live and
   }
 });
 
+test("an invalid set: the field's error, what was typed kept; cleared by the next good set (live)", async () => {
+  const log = [], { it, mod } = island(log);
+  const attrs = ` data-vk-methods='["remove"]' data-vk-on-m-remove="c1:4" data-vk-on-m-_set="c1:5"` + lfields;
+  const props = (q, page = 1) => ({ Q: q, page, sort: "", rows: [], Error: "" });
+  const p = joined(`<main>${host(props(""), attrs)}</main>`, mod);
+  await settle();
+  const live = it.ctx.live, events = () => p.ws().sent.filter((m) => m.type === "event");
+  eq([live.q.error, live.rows.error], [null, undefined], "no error; a read-only field has none");
+  live.q.set("toolong");
+  const bad = live.page.set(0, { now: true });
+  await settle();
+  const err = '{"status":422,"message":"invalid: Q: at most 5 characters","fields":{"Q":"at most 5 characters"}}';
+  p.server({ type: "patch", ref: events()[0].ref, updates: [{ id: "c0", html: `<main>${host(props(""), attrs + ` data-vk-err='${err}'`)}</main>` }] });
+  await bad.then(() => { throw new Error("resolved"); }, (e) => eq([e.status, e.fields], [422, { Q: "at most 5 characters" }], "rejected with status and fields"));
+  eq([events()[0].data, live.q.value, live.q.error, live.page.value, live.page.error], [{ Q: "toolong", page: 0 }, "toolong", "at most 5 characters", 0, null], "nothing applied: both kept, the error shown");
+  live.q.set("ok", { now: true });
+  await settle();
+  eq(events().slice(1).map((m) => m.data), [{ Q: "ok" }], "the next set");
+  p.server({ type: "patch", ref: events()[1].ref, updates: [{ id: "c0", html: `<main>${host(props("ok"), attrs)}</main>` }] });
+  await settle();
+  eq([live.q.value, live.q.error], ["ok", null], "cleared by a good set");
+  const nested = live.q.set("x", { now: true });
+  await settle();
+  p.server({ type: "patch", ref: events()[2].ref, updates: [{ id: "c0", html: `<main>${host(props("ok"), attrs + ` data-vk-err='{"status":422,"message":"invalid","fields":{"Q.code":"required"}}'`)}</main>` }] });
+  await nested.catch(() => {});
+  eq([live.q.value, live.q.error], ["x", "code: required"], "a field inside it");
+  const rm = live.remove(1);
+  await settle();
+  p.server({ type: "patch", ref: events()[3].ref, updates: [{ id: "c0", html: `<main>${host(props("ok"), attrs)}</main>` }] });
+  await rm;
+  eq([live.q.value, live.q.error], ["ok", null], "a method's success drops what was kept");
+});
+
+test("an invalid set and an invalid call, stateless: kept and shown; the call rejects with fields", async () => {
+  const log = [], { it, mod } = island(log), posts = [];
+  const fetch = (url, init) => {
+    const body = JSON.parse(init.body);
+    posts.push(body);
+    const out = body.set && body.set.Q.length > 5 ? { error: { status: 422, message: "invalid", fields: { Q: "at most 5 characters" } } }
+      : body.method === "remove" ? { error: { status: 422, message: "invalid", fields: { "level.code": "required" } } }
+      : { props: JSON.stringify({ Q: body.set ? body.set.Q : "", rows: [] }), sig: "s" + (posts.length + 1) };
+    return Promise.resolve({ status: 200, json: () => Promise.resolve(out) });
+  };
+  const attrs = ` data-vk-methods='["remove"]' data-vk-call="/levels" data-vk-sig="s1"` + lfields;
+  const p = page(file, `<main>${host({ Q: "", rows: [] }, attrs)}</main>`, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod }, globals: { fetch } });
+  await settle();
+  const live = it.ctx.live;
+  await live.q.set("toolong", { now: true }).catch(() => {});
+  eq([live.q.value, live.q.error, live.error.fields], ["toolong", "at most 5 characters", { Q: "at most 5 characters" }], "kept and shown");
+  await live.remove({ level: {} }).then(() => { throw new Error("resolved"); }, (e) => eq(e.fields, { "level.code": "required" }, "the call's fields"));
+  eq(live.remove.error.fields, { "level.code": "required" }, "live.remove.error.fields");
+  await live.q.set("ab", { now: true });
+  eq([live.q.value, live.q.error], ["ab", null], "a good set clears it");
+});
+
 let current = null;
 process.on("beforeExit", () => { if (current) { console.log("FAIL " + current + ": never finished"); process.exit(1); } });
 // unbuilt opens a page whose island Levels the build doesn't have; the

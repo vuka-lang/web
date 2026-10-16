@@ -332,8 +332,14 @@
   // (data-vk-fields: handle → {w: wire name, d: debounce ms when bound}) is
   // a handle: get(), value and, when bound, set(v[, {now}]) — debounced, the
   // sets of one wait sent as one update (data-vk-on-m-_set, or the call's
-  // set), the value the browser's until the server's answer to it. Calls go
-  // one at a time, in order; a method sends the sets waiting first.
+  // set), the value the browser's until the server's answer to it, and its
+  // error the message the answer has for it (fields[w], or a field inside
+  // it: "city: required"). A set answered 422 with fields (its validate:
+  // tags, or an Invalid) keeps what was typed, shown with its error, until
+  // the field is set again or a method succeeds; any other refusal puts
+  // the server's value back. A failed call rejects with an Error carrying
+  // status and fields. Calls go one at a time, in order; a method sends the
+  // sets waiting first.
   // pending and error are the page's; subscribe tells the framework of any
   // change; view(read) is the object for its hook, read called on each read.
   function liveHandle(inst) {
@@ -343,13 +349,23 @@
     const own = new Set(["pending", "error", "subscribe", "methods", "snapshot", "version", "view", "update"]);
     let snap = { pending: false, error: null }, ver = 0, busy = 0, lastErr = null, chain = null;
     let queued = null, batch = null, timer = null;
-    const subs = new Set(), per = {}, local = {}, methods = {};
+    const subs = new Set(), per = {}, local = {}, methods = {}, ferr = {}, held = {};
     const notify = () => {
       ver++;
       snap = { pending: busy > 0, error: lastErr };
       subs.forEach((f) => { try { f(snap); } catch (err) { console.error(err); } });
     };
-    const fail = (e) => { const err = new Error(e.message || "error"); err.vuka = e; throw err; };
+    const fail = (e) => {
+      const err = new Error(e.message || "error");
+      err.vuka = e; err.status = e.status; err.fields = e.fields || null;
+      throw err;
+    };
+    const msgFor = (fs, w) => {
+      if (!fs) return null;
+      if (w in fs) return fs[w];
+      for (const k in fs) if (k.startsWith(w + ".")) return k.slice(w.length + 1) + ": " + fs[k];
+      return null;
+    };
     const post = (body) => fetch(el.getAttribute("data-vk-call"), {
       method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
@@ -385,7 +401,10 @@
       notify();
       return p.then((r) => {
         busy--; lastErr = null;
-        if (st) { st.pending = false; st.error = null; }
+        if (st) {
+          st.pending = false; st.error = null;
+          for (const w in held) { delete held[w]; delete local[w]; delete ferr[w]; }
+        }
         notify();
         return r;
       }, (err) => {
@@ -401,12 +420,23 @@
       const set = queued, b = batch;
       queued = batch = null;
       const p = follow(null, run(() => send("", null, set)));
-      const settle = () => { for (const w in set) if (local[w] === set[w]) delete local[w]; notify(); };
-      p.then(settle, settle);
+      const settle = () => { for (const w in set) { delete ferr[w]; if (local[w] === set[w]) delete local[w]; } notify(); };
+      const refused = (err) => {
+        const e = err && err.vuka || {}, keep = e.status === 422 && !!e.fields;
+        for (const w in set) {
+          ferr[w] = msgFor(e.fields, w);
+          if (local[w] !== set[w]) continue;
+          if (keep) held[w] = true;
+          else delete local[w];
+        }
+        notify();
+      };
+      p.then(settle, refused);
       p.then(b.res, b.rej);
     };
     const setField = (w, d, v, o) => {
       local[w] = v;
+      delete held[w];
       (queued = queued || {})[w] = v;
       if (!batch) {
         batch = {};
@@ -439,7 +469,10 @@
         const w = fields[k].w, d = fields[k].d, bound = typeof d === "number";
         const f = { get: () => (r(), cur(w)) };
         Object.defineProperty(f, "value", { enumerable: true, get: f.get, set: bound ? (x) => { setField(w, d, x); } : undefined });
-        if (bound) f.set = (x, o) => setField(w, d, x, o);
+        if (bound) {
+          f.set = (x, o) => setField(w, d, x, o);
+          Object.defineProperty(f, "error", { enumerable: true, get: () => (r(), w in ferr ? ferr[w] : null) });
+        }
         v[k] = f;
       }
       Object.defineProperty(v, "pending", { enumerable: true, get: () => (r(), snap.pending) });

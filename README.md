@@ -1310,7 +1310,11 @@ the ones tagged `bind:` (`v-model="live.q.value"`, debounced; the server
 runs `Changed` after) and calls the exported methods (`live.cancel(id)`).
 Embedding `ui.Live` makes it a live page; without it each update is a
 signed POST that carries the page's props back — signed for the page and
-the visitor's sign-in, so no one else can replay them.
+the visitor's sign-in, so no one else can replay them. `validate:` tags on
+a bound field, and on a method's struct arguments at any depth, are checked
+before anything is applied or run: a failure answers 422 with each field's
+message (`fields: {"q": "at most 50 characters"}`, `level.code`), shown as
+`live.q.error` or the method's `error.fields`.
 
 ```vuka
 @web.Get("/orders")
