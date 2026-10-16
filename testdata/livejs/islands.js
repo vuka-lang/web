@@ -269,6 +269,40 @@ test("a stateless page's fields: the set posted with the signed props, answered 
   eq(posts[1].sig, "s2", "the next set carries the new signature");
 });
 
+test("a page with fields and no methods: live is there, reads and sets (live and stateless)", async () => {
+  const fattrs = ` data-vk-fields='${attr({ title: { w: "Title" }, q: { w: "Q", d: 30 } })}'`;
+  {
+    const log = [], { it, mod } = island(log);
+    const attrs = ` data-vk-on-m-_set="c1:5"` + fattrs;
+    const p = joined(`<main>${host({ Title: "Levels", Q: "" }, attrs)}</main>`, mod);
+    await settle();
+    const live = it.ctx.live;
+    eq([live !== null && live !== undefined, live.title.value], [true, "Levels"], "live, read");
+    live.q.set("ad", { now: true });
+    await settle();
+    const ev = p.ws().sent.filter((m) => m.type === "event");
+    eq(ev.map((m) => [m.target, m.data]), [["c1:5", { Q: "ad" }]], "the set sent");
+    p.server({ type: "patch", ref: ev[0].ref, updates: [{ id: "c0", html: `<main>${host({ Title: "Levels (1)", Q: "ad" }, attrs)}</main>` }] });
+    await settle();
+    eq([live.title.value, live.q.value], ["Levels (1)", "ad"], "Changed's answer");
+  }
+  {
+    const log = [], { it, mod } = island(log), posts = [];
+    const fetch = (url, init) => {
+      const body = JSON.parse(init.body);
+      posts.push(body);
+      return Promise.resolve({ status: 200, json: () => Promise.resolve({ props: JSON.stringify({ Title: "Levels (" + body.set.Q + ")", Q: body.set.Q }), sig: "s2" }) });
+    };
+    const attrs = ` data-vk-call="/levels" data-vk-sig="s1"` + fattrs;
+    const p = page(file, `<main>${host({ Title: "Levels", Q: "" }, attrs)}</main>`, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod }, globals: { fetch } });
+    await settle();
+    const live = it.ctx.live;
+    eq(live.title.value, "Levels", "stateless: read");
+    await live.q.set("x", { now: true });
+    eq([posts[0].set, live.title.value, p.$("vk-island").getAttribute("data-vk-sig")], [{ Q: "x" }, "Levels (x)", "s2"], "stateless: posted, answered");
+  }
+});
+
 let current = null;
 process.on("beforeExit", () => { if (current) { console.log("FAIL " + current + ": never finished"); process.exit(1); } });
 // unbuilt opens a page whose island Levels the build doesn't have; the

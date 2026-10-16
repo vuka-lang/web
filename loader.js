@@ -499,7 +499,7 @@
       };
       ctx.bound = Object.keys(refs).filter((k) => refs[k].x === undefined);
       ctx.vuka = viewer(inst.el);
-      if (inst.el.hasAttribute("data-vk-methods")) ctx.live = inst.live = liveHandle(inst);
+      if (["data-vk-methods", "data-vk-fields", "data-vk-call"].some((a) => inst.el.hasAttribute(a))) ctx.live = inst.live = liveHandle(inst);
       return props;
     };
     const want = adapterURL ? [import(moduleURL), import(adapterURL)] : [import(moduleURL)];
