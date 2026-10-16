@@ -48,6 +48,11 @@
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const get = (path) => fetch(base + path, { cache: "no-store" }).then((r) => r.json());
 
+  // assetsFailed is what failed when the app's own build didn't but its
+  // styles, scripts or islands did: the last good ones keep serving.
+  const assetsFailed = () => build.state !== "failed" && build.assets && build.assets.failed
+    ? (build.assets.islands ? "island build failed" : "asset build failed") : "";
+
   // The handle: the build when it isn't ok, else the page's time and queries.
   function drawHandle() {
     handle.className = "handle";
@@ -67,6 +72,11 @@
       stateEl.innerHTML = `<span class="build-text">build failed</span>`;
       return;
     }
+    if (assetsFailed()) {
+      handle.classList.add("err");
+      stateEl.innerHTML = `<span class="build-text">${assetsFailed()}</span>`;
+      return;
+    }
     if (!page) { stateEl.textContent = "…"; return; }
     if (page.tone) handle.classList.add(page.tone);
     const n = calls.filter((c) => !c.page && !c.cron).length;
@@ -75,11 +85,13 @@
   }
 
   function drawBuild() {
-    chip.hidden = build.state !== "building" && build.state !== "failed";
-    chip.className = "chip " + (build.state === "failed" ? "err" : "building");
-    chip.textContent = build.state === "failed" ? "build failed" : "rebuilding";
-    buildOut.hidden = build.state !== "failed" || !build.output;
-    buildOut.textContent = build.output || "";
+    const assets = assetsFailed();
+    chip.hidden = build.state !== "building" && build.state !== "failed" && !assets;
+    chip.className = "chip " + (build.state === "failed" || assets && build.state !== "building" ? "err" : "building");
+    chip.textContent = build.state === "failed" ? "build failed" : build.state === "building" ? "rebuilding" : assets;
+    const out = build.state === "failed" ? build.output : assets ? build.assets.output : "";
+    buildOut.hidden = !out;
+    buildOut.textContent = out || "";
   }
 
   function drawSelect() {
@@ -281,7 +293,8 @@
     es.onmessage = (e) => {
       const st = JSON.parse(e.data);
       st.elapsed = st.since ? Math.max(0, (Date.now() - Date.parse(st.since)) / 1000) : 0;
-      const changed = st.state !== build.state || st.output !== build.output;
+      const key = (b) => JSON.stringify([b.state, b.output, b.assets || null]);
+      const changed = key(st) !== key(build);
       build = st;
       buildAt = Date.now();
       if (changed) { drawBuild(); drawHandle(); }

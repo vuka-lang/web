@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -44,6 +45,67 @@ func TestLoaderJS(t *testing.T) {
 		t.Fatalf("%s", out)
 	}
 	t.Logf("%s", strings.TrimSpace(string(out)))
+}
+
+// The development toolbar's build state, in node over a small DOM: an
+// island build failing shows on the handle with Vite's output, and clears.
+func TestToolbarJS(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("no node")
+	}
+	out, err := exec.Command(node, "testdata/livejs/toolbar.js", "live.js", "toolbar.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s", out)
+	}
+	t.Logf("%s", strings.TrimSpace(string(out)))
+}
+
+// vuka run's word that the assets' last compile failed reaches the loader
+// (an island not built says why) and the toolbar's build state; an app
+// with no scripts yet loads the loader while it stands.
+func TestAssetsFailure(t *testing.T) {
+	withToolbar(t)
+	dir := devAssets(t)
+	t.Setenv(DevDirEnv, t.TempDir())
+	os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"scopes":{"k1":{"name":"x","styles":["a.css"]}}}`), 0o644)
+	h := scopedApp().Handler()
+	loader := func() string {
+		page := tbDo(t, h, "GET", "/plain").body
+		m := regexp.MustCompile(`<script src="(/_vuka/c/loader\.js\?v=[^"]+)" defer></script>`).FindStringSubmatch(page)
+		if m == nil {
+			return ""
+		}
+		return tbDo(t, h, "GET", m[1]).body
+	}
+	state := func() buildState {
+		var st buildState
+		json.Unmarshal([]byte(tbDo(t, h, "GET", "/_vuka/toolbar/build").body), &st)
+		return st
+	}
+	if js := loader(); js != "" {
+		t.Errorf("no scripts, no failure: a loader")
+	}
+	if st := state(); st.Assets != nil {
+		t.Errorf("no failure: %+v", st.Assets)
+	}
+	time.Sleep(110 * time.Millisecond)
+	os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"failed":true,"islands":true,"output":"vite build: exit status 1\n"}`), 0o644)
+	time.Sleep(110 * time.Millisecond)
+	if js := loader(); !strings.Contains(js, `"d":true,"x":true`) {
+		t.Errorf("the loader doesn't know the island build failed: %.300s", js)
+	}
+	if st := state(); st.Assets == nil || !st.Assets.Islands || st.Assets.Output != "vite build: exit status 1\n" {
+		t.Errorf("the toolbar's state: %+v", st.Assets)
+	}
+	os.Remove(filepath.Join(dir, "state.json"))
+	time.Sleep(110 * time.Millisecond)
+	if js := loader(); js != "" {
+		t.Errorf("the failure gone: still a loader")
+	}
+	if st := state(); st.Assets != nil {
+		t.Errorf("the failure gone: %+v", st.Assets)
+	}
 }
 
 // scopedCounter and scopedLabel are components as the vuka command
@@ -134,7 +196,7 @@ func TestAssetsServe(t *testing.T) {
 		t.Errorf("every page of the app loads it (a live navigation may bring a component): %s", plain)
 	}
 	_, js, _ := get(tag[1])
-	if !strings.Contains(js, `{"m":{"k1":"/_vuka/c/k1.0a1b2c3d.js"},"f":{"k1":["bump"]},"e":"/_vuka/c/events"}`) {
+	if !strings.Contains(js, `{"m":{"k1":"/_vuka/c/k1.0a1b2c3d.js"},"f":{"k1":["bump"]},"e":"/_vuka/c/events","d":true}`) {
 		t.Errorf("the loader's manifest: %s", js)
 	}
 	if code, mod, _ := get("/_vuka/c/k1.0a1b2c3d.js"); code != 200 || !strings.Contains(mod, "bump(el") {

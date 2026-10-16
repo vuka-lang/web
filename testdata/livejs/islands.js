@@ -271,6 +271,43 @@ test("a stateless page's fields: the set posted with the signed props, answered 
 
 let current = null;
 process.on("beforeExit", () => { if (current) { console.log("FAIL " + current + ": never finished"); process.exit(1); } });
+// unbuilt opens a page whose island Levels the build doesn't have; the
+// loader's stream (development) is captured to send it a later manifest.
+function unbuilt(info) {
+  const streams = [];
+  class EventSource { constructor(url) { this.url = url; streams.push(this); } }
+  const body = `<main><vk-island data-vk-s="p#2" data-vk-island="Levels" data-vk-client="load" data-vk-props='{}'></vk-island></main>`;
+  const log = [], { mod } = island(log);
+  const p = page(file, body, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/levels.js": mod }, globals: { EventSource } });
+  return { p, log, streams, box: () => p.$("vk-island [data-vk-missing]") };
+}
+
+test("vuka run: an island the build doesn't have says its build failed", async () => {
+  const { p, box } = unbuilt({ m: {}, i: { Pick: ["/pick.js", ""] }, e: "/_vuka/events", d: true, x: true });
+  await settle();
+  eq(p.$("vk-island").getAttribute("data-vk-error"), "unknown island", "flagged");
+  eq(box() && box().textContent, "Island Levels isn't built: the island build failed — see the toolbar or the terminal", "the box");
+});
+
+test("vuka run: not built yet, then a build has it: the box goes and it mounts", async () => {
+  const { p, log, streams, box } = unbuilt({ m: {}, i: {}, e: "/_vuka/events", d: true });
+  await settle();
+  eq(box() && box().textContent, "Island Levels isn't built yet", "the box");
+  streams[0].onmessage({ data: JSON.stringify({ m: {}, i: {}, e: "/_vuka/events", d: true, x: true }) });
+  eq(box().textContent.includes("the island build failed"), true, "the build failed since");
+  streams[0].onmessage({ data: JSON.stringify({ m: {}, i: { Levels: ["/levels.js", ""] }, e: "/_vuka/events", d: true }) });
+  await settle();
+  eq([box(), p.$("vk-island").getAttribute("data-vk-error")], [null, null], "the box and the flag gone");
+  eq(log, [["mount", []]], "mounted");
+});
+
+test("production: an unknown island shows no box", async () => {
+  const { p, box } = unbuilt({ m: {}, i: { Pick: ["/pick.js", ""] } });
+  await settle();
+  eq(p.$("vk-island").getAttribute("data-vk-error"), "unknown island", "flagged");
+  eq(box(), null, "no box");
+});
+
 (async () => {
   let failed = 0;
   for (const t of tests) {

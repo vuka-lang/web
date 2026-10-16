@@ -160,7 +160,9 @@ type assetSet struct {
 	checked time.Time
 	scripts map[string][]byte
 	islands map[string][]byte
-	allowed []string // the types whose pushes it allowed
+	allowed []string       // the types whose pushes it allowed
+	fail    *assetsFailure // development: the last compile failed (vuka run's state.json)
+	failMod time.Time
 
 	streams *streams // development: the pages hearing of each new manifest
 }
@@ -203,8 +205,55 @@ func (s *assetSet) current() (manifest, []byte, string) {
 				s.allow()
 			}
 		}
+		if s.readFailure() {
+			s.loader, s.tag = s.loaderJS()
+		}
 	}
 	return s.m, s.loader, s.tag
+}
+
+// assetsFailure is vuka run's word that the assets' last compile failed:
+// the manifest and modules served are the last good ones.
+type assetsFailure struct {
+	Failed  bool   `json:"failed"`
+	Islands bool   `json:"islands,omitempty"` // an island's build is among the failures
+	Output  string `json:"output"`
+}
+
+// readFailure reads the state vuka run leaves beside the manifest, and
+// reports whether it changed; s.mu is held.
+func (s *assetSet) readFailure() bool {
+	file := filepath.Join(s.dir, "state.json")
+	fi, err := os.Stat(file)
+	if err != nil {
+		changed := s.fail != nil
+		s.fail, s.failMod = nil, time.Time{}
+		return changed
+	}
+	if fi.ModTime().Equal(s.failMod) && s.fail != nil {
+		return false
+	}
+	var f assetsFailure
+	data, err := os.ReadFile(file)
+	if err != nil || json.Unmarshal(data, &f) != nil || !f.Failed {
+		changed := s.fail != nil
+		s.fail = nil
+		return changed
+	}
+	s.fail, s.failMod = &f, fi.ModTime()
+	return true
+}
+
+// failure is the assets' last failed compile in development; nil when it
+// succeeded.
+func (s *assetSet) failure() *assetsFailure {
+	if s == nil || s.dir == "" {
+		return nil
+	}
+	s.current()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fail
 }
 
 // allow lets each live component's scripts push the methods they name, and
@@ -248,12 +297,14 @@ var loaderSrc string
 // loaderInfo is what the loader knows of the manifest: each scope's module
 // and methods, the global module, and in development the event stream.
 type loaderInfo struct {
-	Modules map[string]string    `json:"m"`
-	Methods map[string][]string  `json:"f,omitempty"`
+	Modules   map[string]string    `json:"m"`
+	Methods   map[string][]string  `json:"f,omitempty"`
 	Global    string               `json:"g,omitempty"`
 	Events    string               `json:"e,omitempty"`
 	Islands   map[string][2]string `json:"i,omitempty"`  // name → [moduleURL, adapterURL]
 	IslandCSS []string             `json:"ic,omitempty"` // stylesheet URLs a page with an island links
+	Dev       bool                 `json:"d,omitempty"`  // vuka run: an island not built shows why
+	Failed    bool                 `json:"x,omitempty"`  // and the island build failed
 }
 
 func (s *assetSet) info() loaderInfo {
@@ -287,6 +338,8 @@ func (s *assetSet) info() loaderInfo {
 	}
 	if s.dir != "" {
 		li.Events = assetEvents
+		li.Dev = true
+		li.Failed = s.fail != nil && s.fail.Islands
 	}
 	return li
 }
@@ -301,7 +354,10 @@ func (s *assetSet) loaderJS() ([]byte, string) {
 // component scripts.
 func (s *assetSet) headTag() string {
 	m, _, tag := s.current()
-	if !m.scripted() {
+	s.mu.Lock()
+	failed := s.fail != nil
+	s.mu.Unlock()
+	if !m.scripted() && !failed {
 		return ""
 	}
 	return `<script src="` + loaderPath + `?v=` + tag + `" defer></script>`

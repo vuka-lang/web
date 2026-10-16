@@ -17,6 +17,7 @@
   const islandInsts = new Map(); // island host element → island instance
   let islandIO = null; // shared IntersectionObserver for client:visible
   const islandCSS = new Set(); // island stylesheet URLs already linked
+  const missing = new Set(); // hosts of islands the build doesn't have
   let global = null;
 
   const load = (url) => {
@@ -179,7 +180,7 @@
     ensureIslandCSS();
     const name = el.getAttribute("data-vk-island");
     const spec = m.i && m.i[name];
-    if (!spec) { el.setAttribute("data-vk-error", "unknown island"); return; }
+    if (!spec) { missingIsland(el, name); return; }
     const inst = { el, id: scopeOf(el) || name, name, spec, ons: null, state: "armed", handle: null, props: {}, refs: {}, fns: new Map(), key: ["", ""] };
     islandInsts.set(el, inst);
     const go = () => hydrateIsland(inst);
@@ -197,6 +198,39 @@
         if (rm) { const obs = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { obs.disconnect(); go(); } }, { rootMargin: rm }); obs.observe(el); inst.obs = obs; break; }
         if (!islandIO) islandIO = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { const i = islandInsts.get(e.target); islandIO.unobserve(e.target); if (i) hydrateIsland(i); } });
         islandIO.observe(el);
+      }
+    }
+  }
+
+  // Under vuka run an island the build doesn't have says so on the page —
+  // its build failed, or it isn't built yet — and mounts once a build has it.
+  const boxOf = (el) => [...el.children].find((c) => c.hasAttribute("data-vk-missing"));
+  function missingIsland(el, name) {
+    el.setAttribute("data-vk-error", "unknown island");
+    if (!m.d) return;
+    missing.add(el);
+    let box = boxOf(el);
+    if (!box) {
+      box = document.createElement("div");
+      box.setAttribute("data-vk-missing", "");
+      box.setAttribute("style", "display:block;margin:4px 0;padding:8px 12px;border:1px dashed #dc2626;border-radius:6px;" +
+        "background:#fef2f2;color:#991b1b;font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace");
+      el.insertBefore(box, el.firstChild);
+    }
+    const text = "Island " + name + " isn't built" + (m.x ? ": the island build failed — see the toolbar or the terminal" : " yet");
+    if (box.textContent !== text) box.textContent = text;
+  }
+  function recheckMissing() {
+    for (const el of missing) {
+      const name = el.getAttribute("data-vk-island");
+      if (!el.isConnected) missing.delete(el);
+      else if (!m.i[name]) missingIsland(el, name);
+      else {
+        missing.delete(el);
+        const box = boxOf(el);
+        if (box) box.remove();
+        el.removeAttribute("data-vk-error");
+        armIsland(el);
       }
     }
   }
@@ -522,7 +556,8 @@
   }
 
   function update(next) {
-    m = { m: next.m || {}, f: next.f || {}, g: next.g, e: next.e, i: next.i || {}, ic: next.ic || [] };
+    m = { m: next.m || {}, f: next.f || {}, g: next.g, e: next.e, i: next.i || {}, ic: next.ic || [], d: !!next.d, x: !!next.x };
+    recheckMissing();
   }
   update(m);
 

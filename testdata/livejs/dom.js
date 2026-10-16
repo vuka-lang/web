@@ -150,6 +150,7 @@ class Element extends Node {
   get id() { return this.getAttribute("id") || ""; }
   get options() { return this.tagName === "SELECT" ? this.querySelectorAll("option") : undefined; }
   get className() { return this.getAttribute("class") || ""; }
+  set className(v) { this.setAttribute("class", String(v)); }
   get type() { return (this.getAttribute("type") || (this.tagName === "BUTTON" ? "submit" : "text")).toLowerCase(); }
   get form() { return this.parentElement && this.parentElement.closest("form"); }
   getAttribute(n) { const a = this.attributes.find((a) => a.name === n); return a ? a.value : null; }

@@ -803,7 +803,7 @@ func (a *App) routeToolbar() {
 		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
 			// The page's stream: the state when it connects, then each change.
 			tb.streams.serve(w, r, func() (string, bool) {
-				st := readBuildState(tb.dir)
+				st := readBuildState(tb.dir, a.assets)
 				st.Elapsed = 0 // the page counts from Since
 				b, _ := json.Marshal(st)
 				return string(b), true
@@ -811,7 +811,7 @@ func (a *App) routeToolbar() {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusOK, readBuildState(tb.dir))
+		writeJSON(w, http.StatusOK, readBuildState(tb.dir, a.assets))
 	}))
 	a.routeCrons()
 }
@@ -826,16 +826,20 @@ type buildState struct {
 	Took    float64   `json:"took,omitempty"`
 	Output  string    `json:"output,omitempty"`
 	Elapsed float64   `json:"elapsed,omitempty"` // seconds building, when read
+	// Assets is the last compile of the styles, scripts and islands when it
+	// failed: the last good ones keep serving.
+	Assets *assetsFailure `json:"assets,omitempty"`
 }
 
-func readBuildState(dir string) buildState {
+func readBuildState(dir string, as *assetSet) buildState {
 	var st buildState
 	if dir == "" {
 		return st
 	}
+	st.Assets = as.failure()
 	b, err := os.ReadFile(filepath.Join(dir, "build.json"))
 	if err != nil || json.Unmarshal(b, &st) != nil {
-		return buildState{}
+		return buildState{Assets: st.Assets}
 	}
 	if st.State == "building" && !st.Since.IsZero() {
 		st.Elapsed = time.Since(st.Since).Seconds()
