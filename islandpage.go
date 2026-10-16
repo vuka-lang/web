@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	htmlpkg "html"
 	"io"
 	"log"
 	"net/http"
@@ -21,12 +23,13 @@ import (
 	"github.com/vuka-lang/vuka"
 )
 
-// Pages backed by a component: @web.Get on an @ui.Island struct.
+// Pages backed by a component: @web.Live (a live page, embedding ui.Live)
+// or @web.Get (a stateless page) on an @ui.Island struct.
 //
-//	@web.Get("/applicants")
-//	@ui.Island("components/Applicants.vue")
+//	@web.Live("/applicants")
+//	@ui.Island("components/Applicants.vue", ui.Layout(layouts.Page("Applicants")))
 //	type Applicants struct {
-//		ui.Live                  // optional: a live page; without it, stateless
+//		ui.Live                  // a live page; @web.Get without it is stateless
 //		Q    string `url:"q" bind:"q"` // a prop, kept in the address's ?q=; the component may set it
 //		Rows []Applicant         // a prop
 //		db   *DB                 // the server's own: injected, never sent
@@ -167,10 +170,7 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 	}
 	ip.binds = binds
 	pathNames := pathParams(s.path)
-	layout := a.liveLayout
-	if layout == nil {
-		layout = defaultLayout(ip.typ.Name())
-	}
+	layout := a.islandLayout(ip.typ, nil)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rq := a.newRequest(w, r)
 		end := a.span(rq.ctx, "handler", s.where)
@@ -192,7 +192,8 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 			return
 		}
 		end()
-		a.page(rq, layout(ui.IslandPage(x.Interface(), ui.CallAt(r.URL.Path, a.signProps(rq.ctx, ip, r.URL.Path, props)))))
+		rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(x))
+		a.page(rq, layout(rq.ctx, ui.IslandPage(x.Interface(), ui.CallAt(r.URL.Path, a.signProps(rq.ctx, ip, r.URL.Path, props)))))
 	}), nil
 }
 
@@ -348,6 +349,60 @@ func (a *App) verifyProps(ctx context.Context, ip *islandPage, path, props, sig 
 	}
 	return nil
 }
+
+// islandLayout is the layout of a page backed by t's island: the
+// island's own (@ui.Island(ui.Layout(…))), else the route's (web.Layout),
+// else the app's (web.LiveLayout), else a bare document titled
+// ui.PageTitle.
+func (a *App) islandLayout(t reflect.Type, route func(ui.Node) ui.Node) ui.LayoutFunc {
+	if l := ui.IslandLayout(t); l != nil {
+		return l
+	}
+	l := route
+	if l == nil {
+		l = a.liveLayout
+	}
+	if l != nil {
+		return func(_ context.Context, page ui.Node) ui.Node { return l(page) }
+	}
+	return func(ctx context.Context, page ui.Node) ui.Node { return defaultLayout(ui.PageTitle(ctx))(page) }
+}
+
+// pageTitle is the title of the page x (a pointer to an island's struct)
+// backs: its Title(), else its type's name.
+func pageTitle(x reflect.Value) string {
+	if t, ok := x.Interface().(interface{ Title() string }); ok {
+		return t.Title()
+	}
+	return x.Type().Elem().Name()
+}
+
+// withTitle gives a document whose head has no <title> one.
+func withTitle(html []byte, title string) []byte {
+	if title == "" {
+		return html
+	}
+	head := indexFold(html, "<head")
+	if head < 0 || head+5 >= len(html) || html[head+5] != '>' && html[head+5] != ' ' {
+		return html
+	}
+	open := bytes.IndexByte(html[head:], '>')
+	if open < 0 {
+		return html
+	}
+	open += head + 1
+	end := indexFold(html[open:], "</head")
+	if end < 0 || indexFold(html[open:open+end], "<title") >= 0 {
+		return html
+	}
+	t := "<title>" + htmlpkg.EscapeString(title) + "</title>"
+	out := make([]byte, 0, len(html)+len(t))
+	out = append(out, html[:open]...)
+	out = append(out, t...)
+	return append(out, html[open:]...)
+}
+
+func indexFold(b []byte, s string) int { return bytes.Index(b, []byte(s)) }
 
 func defaultLayout(title string) func(ui.Node) ui.Node {
 	return func(page ui.Node) ui.Node {

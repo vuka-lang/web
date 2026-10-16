@@ -91,10 +91,11 @@ func snapshot() registry {
 // Path segments in braces bind parameters of the same name: "/pets/{id}";
 // "{rest...}" matches the rest of the path.
 //
-// On a type — an @ui.Island struct, with @web.Get — it declares a page
-// backed by that component (see "Pages backed by a component" in the
-// islands guide): its exported fields are the component's props, its
-// exported methods what the component calls.
+// On a type — an @ui.Island struct, with @web.Get — it declares a
+// stateless page backed by that component (see "Pages backed by a
+// component" in the islands guide): its exported fields are the
+// component's props, its exported methods what the component calls. A live
+// one (embedding ui.Live) is declared with @web.Live.
 func Handle(method, path string) vuka.Bundle {
 	return vuka.Dual(func(d *vuka.Decl) {
 		record(func(r *registry) { r.routes = append(r.routes, declRoute{method, path, d}) })

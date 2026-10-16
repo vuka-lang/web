@@ -39,6 +39,10 @@ import (
 // text bind from the path segment or query parameter of their name. The page
 // is the component inside the app's layout (LiveLayout), or the one Layout
 // names, or else a bare HTML document. Use adds middleware.
+//
+// On an @ui.Island struct embedding ui.Live it is a live page backed by
+// that component (see islandpage.go); the island's ui.Layout wins over
+// Layout.
 func Live(path string, opts ...LiveOption) func(*vuka.Type) {
 	return func(t *vuka.Type) {
 		ls := &liveSpec{path: path, typ: t.Reflect, name: t.Name, pkg: t.Reflect.PkgPath(), attrs: flattenAttrs(t.Attrs)}
@@ -76,7 +80,7 @@ type liveSpec struct {
 	layout          func(ui.Node) ui.Node
 	mw              []Middleware
 	attrs           []any         // the type's typed attributes
-	island          bool          // a page backed by its island (@web.Get on an @ui.Island type)
+	island          bool          // a page backed by its island (@web.Live or @web.Get on an @ui.Island type)
 	routeOpts       []RouteOption // App.Live's Attrs and Wrap
 }
 
@@ -152,6 +156,18 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	fail := func(format string, args ...any) error {
 		return fmt.Errorf("web: GET %s (%s): %s", s.path, s.where, fmt.Sprintf(format, args...))
 	}
+	island := ls.island || ls.typ.Kind() == reflect.Struct && ui.IsIsland(ls.typ)
+	if island && !ls.island {
+		if !reflect.PointerTo(ls.typ).Implements(statefulType) {
+			return nil, fail("%s is an @ui.Island page under @web.Live, which is live: embed ui.Live (or route it with @web.Get, a stateless page)", ls.name)
+		}
+		if err := ui.CheckIsland(ls.typ); err != nil {
+			return nil, fail("%v", err)
+		}
+		c := *ls
+		c.island = true
+		ls = &c
+	}
 	if ls.typ.Kind() != reflect.Struct || !reflect.PointerTo(ls.typ).Implements(statefulType) {
 		return nil, fail("%s is not a stateful component: a struct embedding vuka.Live with a Render() vuka.Node method", ls.name)
 	}
@@ -179,6 +195,10 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	}
 	if layout == nil {
 		layout = defaultLayout(ls.typ.Name())
+	}
+	var islandLayout ui.LayoutFunc
+	if ls.island {
+		islandLayout = a.islandLayout(ls.typ, ls.layout)
 	}
 	site := "web.Live " + s.path
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,7 +229,13 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 			}
 			j.updates = map[ui.Stateful]any{comp: pv.Interface()}
 		}
-		page := layout(ui.Component(site, nil, comp))
+		var page ui.Node
+		if islandLayout != nil {
+			rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(c))
+			page = islandLayout(rq.ctx, ui.Component(site, nil, comp))
+		} else {
+			page = layout(ui.Component(site, nil, comp))
+		}
 		end()
 		a.page(rq, page)
 	}), nil
@@ -422,6 +448,7 @@ func (a *App) page(rq *request, n ui.Node) {
 	if live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS {
 		script = a.scriptTag(r, token)
 	}
+	html = withTitle(html, ui.PageTitle(rq.ctx))
 	head := a.headTags(r, html)
 	if a.tb != nil && a.assets != nil {
 		if e := entryOf(rq.ctx); e != nil {

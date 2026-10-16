@@ -55,12 +55,12 @@ go get github.com/vuka-lang/web
 
 | | |
 |---|---|
-| `@web.Get(path)`, `Post`, `Put`, `Patch`, `Delete`, `Handle(method, path)` | a route; works on functions and controller methods — on an `@ui.Island` type, a page backed by that component (below) |
+| `@web.Get(path)`, `Post`, `Put`, `Patch`, `Delete`, `Handle(method, path)` | a route; works on functions and controller methods — on an `@ui.Island` type, a stateless page backed by that component (below) |
 | `@web.Template(file [, name])` | render the result with a view (below); before or after the route decorator |
 | `@web.Use(mw…)` | HTTP middleware for this route, `func(http.Handler) http.Handler` |
 | `@web.Service` | a struct becomes a dependency |
 | `@web.Controller(prefix)` | a struct becomes a dependency whose route methods are served under `prefix` |
-| `@web.Live(path, opts…)` | a stateful component becomes a live page (below); `web.Style`, `web.Script`, `web.CSS`, `web.JS` give it styles and scripts (below) |
+| `@web.Live(path, opts…)` | a stateful component becomes a live page (below) — an `@ui.Island` type embedding `ui.Live`, a live page backed by that component; `web.Style`, `web.Script`, `web.CSS`, `web.JS` give it styles and scripts (below) |
 | `@web.Cron(spec)` | the function runs on a schedule (below) |
 
 Paths use `{name}` for a segment and `{name...}` for the rest of the path, and
@@ -1315,23 +1315,28 @@ import Week "./web/islands/Week.vue"
 <Week days={p.days} onBook={p.Book} client:visible />
 ```
 
-A page can be a component: `@web.Get` on an `@ui.Island` type serves the
-component as the page. Through `useLive` (from `vuka:live`, typed from the Go
+A page can be a component: `@web.Live` on an `@ui.Island` type embedding
+`ui.Live` serves the component as a live page, `@web.Get` on one without it
+as a stateless page. Through `useLive` (from `vuka:live`, typed from the Go
 struct) the component reads the exported fields (`live.rows.value`), sets
 the ones tagged `bind:` (`v-model="live.q.value"`, debounced; the server
 runs `Changed` after) and calls the exported methods (`live.cancel(id)`).
-Embedding `ui.Live` makes it a live page; without it each update is a
+A live page's sets and calls are live events; a stateless page's are each a
 signed POST that carries the page's props back — signed for the page and
 the visitor's sign-in, so no one else can replay them. `validate:` tags on
 a bound field, and on a method's struct arguments at any depth, are checked
 before anything is applied or run: a failure answers 422 with each field's
 message (`fields: {"q": "at most 50 characters"}`, `level.code`), shown as
-`live.q.error` or the method's `error.fields`.
+`live.q.error` or the method's `error.fields`. `ui.Layout` in the
+decorator is the page's layout (over `web.Layout` and `web.LiveLayout`): a
+`func(ui.Node) ui.Node`, or a `func(ctx, ui.Node) ui.Node` reading the
+request; several nest.
 
 ```vuka
-@web.Get("/orders")
-@ui.Island("./web/components/Orders.vue")
+@web.Live("/orders")
+@ui.Island("./web/components/Orders.vue", ui.Layout(layouts.Page("Orders")))
 type Orders struct {
+	ui.Live
 	Q    string  `json:"q" url:"q" bind:"q"`
 	Rows []Order `json:"rows"`
 	db   *Store
