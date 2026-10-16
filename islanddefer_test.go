@@ -12,6 +12,7 @@ import (
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/web/internal/chrome"
 )
 
 // orders is a stateless page with deferred fields: Stats in its own group,
@@ -172,4 +173,107 @@ func TestDeferredLive(t *testing.T) {
 	if m, err := recv(c, 200*time.Millisecond); err == nil {
 		t.Errorf("more after the loads: %+v", m)
 	}
+}
+
+// patchedOrders loads slowly and stays mounted across a patch.
+type patchedOrders struct {
+	ui.Live
+	Page  int      `json:"page" url:"page"`
+	Rows  []string `json:"rows" defer:""`
+	Stats int      `json:"stats" defer:""`
+}
+
+type ordersParams struct {
+	URLParams
+	Page int
+}
+
+func (o *patchedOrders) Render() ui.Node               { return ui.IslandPage(o) }
+func (o *patchedOrders) Mount(ctx context.Context)     { o.Subscribe("orders") }
+func (o *patchedOrders) Update(p ordersParams)         { o.Page = p.Page }
+func (o *patchedOrders) LoadStats(ctx context.Context) { o.Stats = 7 }
+func (o *patchedOrders) LoadRows(ctx context.Context) error {
+	select {
+	case <-time.After(200 * time.Millisecond):
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	o.Rows = []string{"a"}
+	return nil
+}
+
+func init() {
+	ui.Island("components/Orders.vue", ui.Layout(titledDoc("orders"), shell))(vuka.TypeOf[patchedOrders]("web.patchedOrders"))
+}
+
+// A patch arriving while a load runs keeps the load: the page is the same.
+func TestDeferredLiveSurvivesPatch(t *testing.T) {
+	a := New(Only("none"))
+	a.Live("/patched", &patchedOrders{})
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	for _, v := range []int{1, 2} {
+		_, tok := pageToken(t, srv, "/patched?page=1")
+		c, err := dial(t, srv, tok, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		send(t, c, map[string]any{"type": "join", "ref": 1, "v": v})
+		send(t, c, map[string]any{"type": "navigate", "ref": 2, "url": "/patched?page=2", "patch": true})
+		var got string
+		for !strings.Contains(got, "&#34;rows&#34;:[&#34;a&#34;]") {
+			rctx, done := context.WithTimeout(context.Background(), 3*time.Second)
+			_, b, err := c.Read(rctx)
+			done()
+			if err != nil {
+				t.Fatalf("v%d: the rows never came: %v (last %s)", v, err, got)
+			}
+			if m := (live.ServerMessage{}); json.Unmarshal(b, &m) == nil && m.Type == live.Error {
+				t.Fatalf("v%d: %s", v, b)
+			}
+			got = string(b)
+			if strings.Contains(got, `"ref":2`) && !strings.Contains(got, `"patch"`) {
+				t.Fatalf("v%d: the navigation wasn't a patch: %s", v, got)
+			}
+		}
+		if !strings.Contains(got, "&#34;page&#34;:2") || !strings.Contains(got, "&#34;stats&#34;:7") {
+			t.Errorf("v%d: after the load: %s", v, got)
+		}
+		c.CloseNow()
+	}
+}
+
+// slowDash's component module takes longer to load than its loaders.
+type slowDash struct {
+	ui.Live
+	Rows []string `json:"rows" defer:""`
+}
+
+func (d *slowDash) Render() ui.Node { return ui.IslandPage(d) }
+func (d *slowDash) LoadRows()       { d.Rows = []string{"Ada"} }
+
+func init() {
+	ui.Island("components/SlowDash.vue", ui.Layout(fullPage, shell))(vuka.TypeOf[slowDash]("web.slowDash"))
+}
+
+const slowDashJS = `await new Promise((r) => setTimeout(r, 600));
+export function mount(el, props, ctx) {
+  const show = () => { el.textContent = JSON.stringify({ rows: ctx.live.rows.value ?? null, pending: ctx.live.rows.pending }); };
+  ctx.live.subscribe(show);
+  show();
+  return { update() { show(); } };
+}`
+
+// Loads done before the component's module loads reach it as it mounts.
+func TestBrowserDeferredBeforeMount(t *testing.T) {
+	RegisterAssets([]byte(`{"islands":{"slowDash":{"name":"slowDash","module":"slowdash.abcd1234.js","framework":"vanilla"}}}`))
+	RegisterIsland("slowdash.abcd1234.js", []byte(slowDashJS))
+	t.Cleanup(func() { RegisterAssets(nil); delete(islandReg, "slowdash.abcd1234.js") })
+	a := New(Only("none"))
+	a.Live("/slow", &slowDash{})
+	srv := httptest.NewServer(a.Handler())
+	t.Cleanup(srv.Close)
+
+	p := chrome.Launch(t).Open(srv.URL + "/slow?x=1")
+	p.WaitText("vk-island", `{"rows":["Ada"],"pending":false}`)
 }

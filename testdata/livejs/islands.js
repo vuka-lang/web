@@ -453,6 +453,32 @@ test("deferred fields, live: pending and undefined until a patch brings them; a 
   eq(log.filter((l) => l[0] === "mount").length, 1, "no remount");
 });
 
+test("deferred fields, live: loads that land while the island's module is still loading reach it when it mounts", async () => {
+  const log = [], { it, mod } = island(log);
+  let resolve;
+  const slow = new Promise((r) => { resolve = r; });
+  const p = joined(`<main>${host({ title: "Orders" }, dfields + dstate(["stats", "rows"]))}</main>`, slow);
+  await settle();
+  p.server({ type: "patch", ref: 0, updates: [{ id: "c0", html: `<main>${host({ title: "Orders", stats: { open: 3 }, rows: ["a"] }, dfields + dstate([]))}</main>` }] });
+  await settle();
+  resolve(mod);
+  await settle();
+  const live = it.ctx.live;
+  eq([live.stats.value, live.stats.pending, live.rows.value, live.rows.pending], [{ open: 3 }, false, ["a"], false], "loaded");
+  eq(it.props.rows, ["a"], "the component's props");
+});
+
+test("an island mounted before the join gets the props the join's render brings", async () => {
+  const log = [], { it, mod } = island(log);
+  const body = (t) => `<main>${host({ title: t })}</main>`;
+  const p = page(file, body("http"), { live: true, scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod } });
+  await settle();
+  p.ws().onopen();
+  p.server({ type: "render", ref: 1, html: body("joined") });
+  await settle();
+  eq(it.props.title, "joined", "the join's props");
+});
+
 test("deferred fields, stateless: loaded by a signed post once mounted, first of its calls", async () => {
   const log = [], { it, mod } = island(log), posts = [];
   let release;

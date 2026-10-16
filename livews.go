@@ -258,7 +258,7 @@ type conn struct {
 	doing  string                          // what the session runs, for its errors' log: a handler's name, "join", …
 	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
-	loads context.CancelFunc // ends the deferred loads of the page joined or navigated to
+	loads []context.CancelFunc // end the deferred loads of the page joined or navigated to
 
 	mu     sync.Mutex
 	inbox  []delivery
@@ -460,7 +460,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 			c.ws.Close(code, reply.(live.ServerMessage).Error)
 			return false
 		}
-		c.startDeferred()
+		c.startDeferred(false)
 	case c.s == nil:
 		c.write(ctx, live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: "live: join first"})
 	case m.Type == live.Navigate:
@@ -472,7 +472,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		}
 		c.write(ctx, reply)
 		if moved {
-			c.startDeferred()
+			c.startDeferred(patch)
 		}
 	default:
 		c.write(ctx, c.event(m.ClientMessage))
@@ -784,23 +784,27 @@ type deferredSession interface {
 type loaded struct{ d *ui.DeferredLoad }
 
 // startDeferred runs the deferred loads of the page just joined or
-// navigated to, each on its own goroutine with the page's context, ended
-// when the page is left; each, done, is applied as a broadcast is.
-func (c *conn) startDeferred() {
+// navigated to, each on its own goroutine with the page's context; each,
+// done, is applied as a broadcast is. Leaving the page ends its loads,
+// except on a patch (kept): its components stay mounted, and so do the
+// loads they started, which never start again.
+func (c *conn) startDeferred(kept bool) {
 	ds, ok := c.s.(deferredSession)
 	if !ok {
 		return
 	}
-	loads := ds.Deferred()
-	if c.loads != nil {
-		c.loads()
+	if !kept {
+		for _, end := range c.loads {
+			end()
+		}
 		c.loads = nil
 	}
+	loads := ds.Deferred()
 	if len(loads) == 0 {
 		return
 	}
 	ctx, cancel := context.WithCancel(c.page)
-	c.loads = cancel
+	c.loads = append(c.loads, cancel)
 	for _, d := range loads {
 		go func() {
 			d.Run(ctx)

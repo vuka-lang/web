@@ -165,7 +165,7 @@
       else if (vid) inst.vid = vid;
     }
     for (const el of islandRoots()) if (!islandInsts.has(el)) armIsland(el);
-    if (d && !d.join) updateIslands();
+    if (d) updateIslands();
   }
 
   // ensureIslandCSS links a framework island build's stylesheets (Tailwind +
@@ -567,8 +567,9 @@
     inst.state = "loading";
     const [moduleURL, adapterURL] = inst.spec;
     const ctx = context(inst);
-    const raw = inst.el.getAttribute("data-vk-props") || "{}";
+    // the host's props as it mounts: patches may land while its module loads
     const go = () => {
+      const raw = inst.el.getAttribute("data-vk-props") || "{}";
       const { props, refs } = islandProps(inst, raw);
       inst.props = props;
       inst.refs = refs;
