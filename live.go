@@ -23,6 +23,7 @@ import (
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // Live serves a stateful component as a page at path, a GET route:
@@ -153,23 +154,24 @@ var statefulType = typeOf[ui.Stateful]()
 
 func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	ls := s.live
-	fail := func(format string, args ...any) error {
-		return fmt.Errorf("web: GET %s (%s): %s", s.path, s.where, fmt.Sprintf(format, args...))
+	what := "GET " + s.path + " (" + whereName(s.where) + ")"
+	fail := func(format string, args ...any) *diag.Diagnostic {
+		return failf("E0330", what, s.where, format, args...)
 	}
 	island := ls.island || ls.typ.Kind() == reflect.Struct && ui.IsIsland(ls.typ)
 	if island && !ls.island {
 		if !reflect.PointerTo(ls.typ).Implements(statefulType) {
-			return nil, fail("%s is an @ui.Island page under @web.Live, which is live: embed ui.Live (or route it with @web.Get, a stateless page)", ls.name)
+			return nil, fail("%s is an @ui.Island page under @web.Live, which is live, and it doesn't embed ui.Live", ls.name).WithHelp("embed ui.Live, or route it with @web.Get (a stateless page)")
 		}
 		if err := ui.CheckIsland(ls.typ); err != nil {
-			return nil, fail("%v", err)
+			return nil, failure("E0320", what, s.where, err)
 		}
 		c := *ls
 		c.island = true
 		ls = &c
 	}
 	if ls.typ.Kind() != reflect.Struct || !reflect.PointerTo(ls.typ).Implements(statefulType) {
-		return nil, fail("%s is not a stateful component: a struct embedding vuka.Live with a Render() vuka.Node method", ls.name)
+		return nil, failf("E0329", what, s.where, "%s is not a stateful component", ls.name).WithHelp("embed ui.Live in a struct with a Render() ui.Node method")
 	}
 	pathNames := pathParams(s.path)
 	props, err := a.liveProps(ls.typ, s.where)
@@ -181,7 +183,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	}
 	params, err := patchParams(ls.typ)
 	if err != nil {
-		return nil, fail("%v", err)
+		return nil, failure("E0334", what, s.where, err)
 	}
 	var paramProps []prop
 	if params != nil {
@@ -361,7 +363,7 @@ func patchParams(t reflect.Type) (*params, error) {
 			continue
 		}
 		if found != nil {
-			return nil, fmt.Errorf("%s has two Update methods taking web.URLParams structs, %s and %s", t.Name(), found.typ, p.typ)
+			return nil, diag.New("E0334", "%s has two Update methods taking web.URLParams structs, %s and %s", t.Name(), found.typ, p.typ).WithHelp("keep one Update taking a struct that embeds web.URLParams")
 		}
 		found = p
 	}

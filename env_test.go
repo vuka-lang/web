@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // envSandbox moves the test into a fresh module directory holding files. The
@@ -74,19 +76,19 @@ func TestParseDotEnv(t *testing.T) {
 		{"later wins, self reference", "A=1\nA=${A}2\nB=$A", "A=1|A=12|B=12", ""},
 		{"the process wins", "HOME=/x\nB=$HOME", "HOME=/x|B=/home/me", ""},
 		{"a lone dollar", "A=$ 5 $1 $", "A=$ 5 $1 $", ""},
-		{"no key", "A=1\n=2", "", "f.env:2: expected KEY=value"},
-		{"bad key", "1A=x", "", "f.env:1: expected KEY=value"},
-		{"no equals", "A=1\n\nexport B", "", "f.env:3: expected KEY=value"},
-		{"unterminated single", "A=1\nB='x\ny", "", "f.env:2: unterminated '-quoted value of B"},
-		{"unterminated double", `A="x`, "", "f.env:1: unterminated double-quoted value of A"},
-		{"text after quote", `A="x" y`, "", "f.env:1: unexpected text after the closing quote"},
-		{"line after a multi-line value", "A=\"1\n2\"\nB='3\n4'\nnope", "", "f.env:5: expected KEY=value"},
-		{"unterminated brace", "A=${B", "", "f.env:1: unterminated ${"},
-		{"bad reference", "A=${1B}", "", "f.env:1: bad variable reference ${1B}"},
+		{"no key", "A=1\n=2", "", "expected KEY=value\n --> f.env:2"},
+		{"bad key", "1A=x", "", "expected KEY=value\n --> f.env:1"},
+		{"no equals", "A=1\n\nexport B", "", "expected KEY=value\n --> f.env:3"},
+		{"unterminated single", "A=1\nB='x\ny", "", "unterminated '-quoted value of B\n --> f.env:2"},
+		{"unterminated double", `A="x`, "", "unterminated double-quoted value of A\n --> f.env:1"},
+		{"text after quote", `A="x" y`, "", "unexpected text after the closing quote\n --> f.env:1"},
+		{"line after a multi-line value", "A=\"1\n2\"\nB='3\n4'\nnope", "", "expected KEY=value\n --> f.env:5"},
+		{"unterminated brace", "A=${B", "", "unterminated ${\n --> f.env:1"},
+		{"bad reference", "A=${1B}", "", "bad variable reference ${1B}\n --> f.env:1"},
 	} {
 		pairs, err := parseDotEnv("f.env", []byte(c.src), lookup, nil)
 		if c.err != "" {
-			if err == nil || !strings.HasSuffix(err.Error(), c.err) {
+			if err == nil || diag.Of(err) != "E0416" || !strings.Contains(err.Error(), "error[E0416]: "+c.err) {
 				t.Errorf("%s: err %v; want %q", c.name, err, c.err)
 			}
 			continue
@@ -204,7 +206,7 @@ func TestDotEnvOptions(t *testing.T) {
 func TestEnvFileErrors(t *testing.T) {
 	envSandbox(t, map[string]string{".env": "GOOD=1\nPASSWORD='hunter2\n", ".env.test": "FINE=1"})
 	err := New(Only(pkgOf(t))).Build()
-	if err == nil || !strings.Contains(err.Error(), ".env:2: unterminated '-quoted value of PASSWORD") || strings.Contains(err.Error(), "hunter2") {
+	if err == nil || !strings.Contains(err.Error(), "error[E0416]: unterminated '-quoted value of PASSWORD\n --> .env:2") || strings.Contains(err.Error(), "hunter2") {
 		t.Fatalf("Build: %v", err)
 	}
 	if os.Getenv("GOOD") != "" || os.Getenv("FINE") != "1" {
@@ -215,8 +217,8 @@ func TestEnvFileErrors(t *testing.T) {
 func TestRequire(t *testing.T) {
 	envSandbox(t, map[string]string{".env": "SET=x\nEMPTY=\n", ".env.example": "SET=\nSECRET_KEY=\nSMTP_HOST=\n"})
 	err := New(Only(pkgOf(t)), Require("SET", "EMPTY", "API_TOKEN"), Require("API_TOKEN")).Build()
-	want := "web: missing environment variables: EMPTY, API_TOKEN (read .env; looked for .env.test, .env); also unset, listed in .env.example: SECRET_KEY, SMTP_HOST"
-	if err == nil || err.Error() != want {
+	want := "error[E0415]: missing environment variables: EMPTY, API_TOKEN (read .env; looked for .env.test, .env); also unset, listed in .env.example: SECRET_KEY, SMTP_HOST\n  = help: set them, or put them in .env"
+	if err == nil || !strings.HasPrefix(err.Error(), want) {
 		t.Errorf("Build:\n%v\nwant\n%s", err, want)
 	}
 	t.Setenv("EMPTY", "y")

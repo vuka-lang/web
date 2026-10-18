@@ -21,6 +21,7 @@ import (
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // Pages backed by a component: @web.Live (a live page, embedding ui.Live)
@@ -72,13 +73,13 @@ func (a *App) pageSpecs(p typePage) ([]*routeSpec, error) {
 	t := p.typ.Reflect
 	where := "page " + p.typ.Name
 	if p.method != http.MethodGet {
-		return nil, fmt.Errorf("web: %s %s (%s): a page backed by a component is a GET: @web.Get", p.method, p.path, where)
+		return nil, diag.New("E0331", "%s %s (%s): a page backed by a component is a GET", p.method, p.path, where).WithHelp("route the type with @web.Get or @web.Live")
 	}
 	if t.Kind() != reflect.Struct || !ui.IsIsland(t) {
-		return nil, fmt.Errorf("web: GET %s (%s): @web.Get on a type serves its component: add @ui.Island(\"path/to/Component.vue\")", p.path, where)
+		return nil, diag.New("E0332", "GET %s (%s): @web.Get on a type serves its component, and %s has no @ui.Island", p.path, where, p.typ.Name).WithHelp("add @ui.Island (or @ui.Island(\"path/to/Component.vue\")) to the type")
 	}
 	if err := ui.CheckIsland(t); err != nil {
-		return nil, fmt.Errorf("web: GET %s (%s): %w", p.path, where, err)
+		return nil, failure("E0320", "GET "+p.path+" ("+where+")", "", err)
 	}
 	attrs := flattenAttrs(p.typ.Attrs)
 	if reflect.PointerTo(t).Implements(statefulType) {
@@ -151,7 +152,7 @@ func mountPage(ctx context.Context, x reflect.Value) error {
 	if m.Type().NumIn() == 1 && m.Type().In(0) == reflect.TypeFor[context.Context]() {
 		in = append(in, reflect.ValueOf(ctx))
 	} else if m.Type().NumIn() > 0 {
-		return fmt.Errorf("web: %s's Mount takes a context.Context or nothing", x.Type().Elem())
+		return diag.New("E0333", "%s's Mount is %s", x.Type().Elem(), m.Type()).WithHelp("declare Mount() or Mount(ctx context.Context), returning nothing or an error")
 	}
 	out := m.Call(in)
 	if len(out) == 1 && out[0].Type() == errType && !out[0].IsNil() {

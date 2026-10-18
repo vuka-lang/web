@@ -14,6 +14,8 @@ import (
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/ui/templx"
+
+	"github.com/vuka-lang/vuka/diag"
 )
 
 type view struct {
@@ -24,7 +26,7 @@ type view struct {
 
 func compileView(dv declView, data reflect.Type) (*view, error) {
 	if data == nil {
-		return nil, fmt.Errorf("the view %s needs a result to render", dv.file.Path())
+		return nil, diag.New("E0417", "the view %s needs a result to render", dv.file.Path()).WithHelp("return the data the view renders")
 	}
 	var v *view
 	var err error
@@ -63,7 +65,7 @@ func htmlView(dv declView) (*view, error) {
 func templView(dv declView, data reflect.Type) (*view, error) {
 	comps, ok := templx.Components(dv.file)
 	if !ok {
-		return nil, fmt.Errorf("%s is not a .templ file Vuka compiled", dv.file.Path())
+		return nil, diag.New("E0417", "%s is not a .templ file Vuka compiled", dv.file.Path())
 	}
 	var comp *templx.Component
 	if dv.name == "" {
@@ -74,13 +76,13 @@ func templView(dv declView, data reflect.Type) (*view, error) {
 			}
 		}
 		if len(exported) != 1 {
-			return nil, fmt.Errorf("%s has %d exported components %v; name one: @web.Template(%q, \"Name\")",
-				dv.file.Path(), len(exported), exported, dv.file.Path())
+			return nil, diag.New("E0417", "%s has %d exported components %v", dv.file.Path(), len(exported), exported).
+				WithHelp("name one: @web.Template(%q, \"Name\")", dv.file.Path())
 		}
 	} else if i := slices.IndexFunc(comps, func(c templx.Component) bool { return c.Name == dv.name }); i >= 0 {
 		comp = &comps[i]
 	} else {
-		return nil, fmt.Errorf("%s has no component %s", dv.file.Path(), dv.name)
+		return nil, diag.New("E0417", "%s has no component %s", dv.file.Path(), dv.name)
 	}
 	fn := reflect.ValueOf(comp.Func)
 	args, err := componentArgs(fn.Type(), comp.Params, data, comp.Name)
@@ -112,19 +114,19 @@ func componentArgs(ft reflect.Type, names []string, data reflect.Type, comp stri
 		st, ptr = st.Elem(), true
 	}
 	if st.Kind() != reflect.Struct {
-		return nil, fmt.Errorf("component %s takes %s; a %s result can't fill it", comp, signature(ft, names), data)
+		return nil, diag.New("E0417", "component %s takes %s; a %s result can't fill it", comp, signature(ft, names), data).WithHelp("return a struct whose fields are named like the parameters")
 	}
 	fields := make([][]int, ft.NumIn())
 	for i := range fields {
 		if i >= len(names) || names[i] == "" {
-			return nil, fmt.Errorf("component %s: parameter %d has no name to match a field of %s", comp, i+1, data)
+			return nil, diag.New("E0417", "component %s: parameter %d has no name to match a field of %s", comp, i+1, data)
 		}
 		f, ok := fieldNamed(st, names[i])
 		if !ok {
-			return nil, fmt.Errorf("component %s: %s has no field for parameter %s", comp, data, names[i])
+			return nil, diag.New("E0417", "component %s: %s has no field for parameter %s", comp, data, names[i]).WithHelp("add a field %s to %s", names[i], data)
 		}
 		if !f.Type.AssignableTo(ft.In(i)) {
-			return nil, fmt.Errorf("component %s: field %s.%s is %s; parameter %s is %s", comp, st.Name(), f.Name, f.Type, names[i], ft.In(i))
+			return nil, diag.New("E0417", "component %s: field %s.%s is %s; parameter %s is %s", comp, st.Name(), f.Name, f.Type, names[i], ft.In(i))
 		}
 		fields[i] = f.Index
 	}

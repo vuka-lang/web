@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // Middleware wraps an http.Handler.
@@ -148,7 +149,7 @@ func (u Uses) apply(a *App) {
 // each injected by type.
 func Service(t *vuka.Type) {
 	if t.New == nil {
-		panic(fmt.Sprintf("web: @web.Service needs a struct; %s isn't one", t.Name))
+		panic(diag.New("E0418", "@web.Service on %s, which isn't a struct", t.Name).WithHelp("put it on a struct type"))
 	}
 	record(func(r *registry) { r.services = append(r.services, t) })
 }
@@ -158,7 +159,7 @@ func Service(t *vuka.Type) {
 func Controller(prefix string) func(*vuka.Type) {
 	return func(t *vuka.Type) {
 		if t.New == nil {
-			panic(fmt.Sprintf("web: @web.Controller needs a struct; %s isn't one", t.Name))
+			panic(diag.New("E0418", "@web.Controller on %s, which isn't a struct", t.Name).WithHelp("put it on a struct type"))
 		}
 		record(func(r *registry) { r.controllers = append(r.controllers, declController{prefix, t}) })
 	}

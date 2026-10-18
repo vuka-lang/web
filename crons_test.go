@@ -120,8 +120,8 @@ func TestCronBuildErrors(t *testing.T) {
 	Cron("@every 1m")(decl(p, "returns", func() int { return 1 }))
 	err := New(Only(p)).Build()
 	for _, want := range []string{
-		`web: @web.Cron("61 * * * *") on main.bad at t.vuka:` + itoa(bad.Line) + `: cron: "61 * * * *": minute: 61 is out of range 0-59`,
-		"web: cron needsDB (main.needsDB at t.vuka:",
+		`error[E0411]: @web.Cron("61 * * * *") on main.bad: cron: "61 * * * *": minute: 61 is out of range 0-59` + "\n --> t.vuka:" + itoa(bad.Line),
+		"error[E0411]: cron needsDB (main.needsDB): ",
 		"parameter db *web.DB: a cron takes a context.Context and provided types; no provider for *web.DB",
 		"parameter n int: a cron takes",
 		"returns func() int; a cron returns nothing or an error",
@@ -137,7 +137,7 @@ func TestCronBuildErrors(t *testing.T) {
 	a.Cron("y", "every minute", func() {})
 	a.Cron("z", "@hourly", 42)
 	err = a.Build()
-	for _, want := range []string{"web: cron x is declared twice", `web: cron y (github.com/vuka-lang/web.TestCronBuildErrors.func`, `want five fields`, "web: cron z: int is not a function"} {
+	for _, want := range []string{"error[E0412]: cron x is declared twice", `error[E0411]: cron y (github.com/vuka-lang/web.TestCronBuildErrors.func`, `want five fields`, "error[E0411]: cron z: int is not a function"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("Build: %v\nwant %q", err, want)
 		}

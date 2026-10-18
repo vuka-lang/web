@@ -266,8 +266,8 @@ templ footer() {}
 	}
 	err := New(Only(bad)).Build()
 	for _, want := range []string{
-		`/ambiguous (main./ambiguous at t.vuka:`,
-		`has 2 exported components [PetList Card]; name one`,
+		"GET /ambiguous (main./ambiguous): pets.templ has 2 exported components [PetList Card]\n --> t.vuka:",
+		`= help: name one: @web.Template("pets.templ", "Name")`,
 		`component PetList: web.Pet has no field for parameter title`,
 		`field .Pets is string; parameter pets is []web.Pet`,
 		`the view pets.templ needs a result to render`,
@@ -322,7 +322,7 @@ func TestDI(t *testing.T) {
 	if e := errOf(Provide(&DB{}, &DB{}, func(db *DB) *Repo { return nil })); !strings.Contains(e, "*web.DB is provided twice") {
 		t.Errorf("twice: %s", e)
 	}
-	if e := errOf(Provide(func() {})); !strings.Contains(e, "must be func(deps…) T") {
+	if e := errOf(Provide(func() {})); !strings.Contains(e, "error[E0410]: the constructor func() isn't func(deps…) T") {
 		t.Errorf("bad ctor: %s", e)
 	}
 }
@@ -534,13 +534,15 @@ func TestStartupErrors(t *testing.T) {
 		t.Fatal("no error")
 	}
 	for _, want := range []string{
-		"GET /a (main.a at t.vuka:",
+		"error[E0405]: GET /a (main.a): parameter #1 int: a scalar parameter binds by name, and this one has none\n --> t.vuka:",
 		"parameter #1 int: a scalar parameter binds by name",
 		"parameter y web.NewPet: a handler binds one struct from the request, and this is the second",
 		"parameter ch chan int: can't be bound from a request",
-		"results func() (int, int): a handler returns nothing, error, T, (T, error) or Result[T]",
+		"error[E0406]: GET /d (main.d): results func() (int, int)\n --> t.vuka:",
+		"= help: a handler returns nothing, error, T, (T, error) or Result[T]",
 		"parameter c web.Cache: no provider for web.Cache",
-		"GET /a is declared twice: by main.a at t.vuka:",
+		"error[E0401]: GET /a is declared twice: by main.a and by main.a2\n --> t.vuka:",
+		": declared here first",
 		"parameter m *web.Opaque: no provider for *web.Opaque",
 		"the receiver *web.Repo is not a @web.Controller or a provided type",
 	} {

@@ -68,7 +68,7 @@ func TestFrontendFallbackAndPrecedence(t *testing.T) {
 func TestFrontendClash(t *testing.T) {
 	a := spaApp(t, Frontend(fixtureDist, fixtureRoot))
 	a.Get("/{rest...}", func() string { return "mine" })
-	if err := a.Build(); err == nil || !strings.Contains(err.Error(), `web: Frontend("testdata/frontend/dist") serves GET /{path...}, as GET /{rest...} (`) {
+	if err := a.Build(); err == nil || !strings.Contains(err.Error(), `error[E0402]: Frontend("testdata/frontend/dist") serves GET /{path...}, as GET /{rest...} (`) {
 		t.Fatalf("Build: %v", err)
 	}
 	a = spaApp(t, Frontend(fixtureDist, fixtureRoot), Frontend(fixtureDist, fixtureRoot))
@@ -151,7 +151,7 @@ func TestFrontendNotBuilt(t *testing.T) {
 	empty := fstest.MapFS{"dist/.gitkeep": {}}
 	for name, fsys := range map[string]fstest.MapFS{"empty": empty, "missing": {}} {
 		err := spaApp(t, Frontend(fsys, "dist")).Build()
-		if err == nil || !strings.Contains(err.Error(), `web: Frontend("dist"): the frontend is empty or missing: build it first`) {
+		if err == nil || !strings.Contains(err.Error(), "error[E0601]: Frontend(\"dist\"): the frontend is empty or missing\n  = help: build it first") {
 			t.Errorf("%s: Build: %v", name, err)
 		}
 	}

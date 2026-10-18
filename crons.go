@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/vuka/diag"
 	"github.com/vuka-lang/web/cron"
 )
 
@@ -50,7 +51,7 @@ func Cron(spec string) func(*vuka.Decl) {
 		s := &cronSpec{name: strings.TrimPrefix(d.Name, "main."), spec: spec, where: fmt.Sprintf("%s at %s:%d", d.Name, d.File, d.Line),
 			fn: reflect.ValueOf(d.Func), recv: d.Recv, params: d.Params}
 		if _, err := cron.Parse(spec); err != nil {
-			s.err = fmt.Errorf("web: @web.Cron(%q) on %s: %v", spec, s.where, err)
+			s.err = failure("E0411", fmt.Sprintf("@web.Cron(%q) on %s", spec, whereName(s.where)), s.where, err)
 		}
 		record(func(r *registry) { r.crons = append(r.crons, declCron{d.Pkg, s}) })
 	}
@@ -67,7 +68,7 @@ func (a *App) Cron(name, spec string, fn any) *App {
 	a.mutable("Cron")
 	v := reflect.ValueOf(fn)
 	if v.Kind() != reflect.Func {
-		a.c.errs = append(a.c.errs, fmt.Errorf("web: cron %s: %T is not a function", name, fn))
+		a.c.errs = append(a.c.errs, diag.New("E0411", "cron %s: %T is not a function", name, fn).WithHelp("pass a function taking a context.Context and provided types"))
 		return a
 	}
 	s := &cronSpec{name: name, spec: spec, where: funcName(v), fn: v}
@@ -75,7 +76,7 @@ func (a *App) Cron(name, spec string, fn any) *App {
 		s.params = append(s.params, vuka.Param{Type: v.Type().In(i)})
 	}
 	if _, err := cron.Parse(spec); err != nil {
-		s.err = fmt.Errorf("web: cron %s (%s): %v", name, s.where, err)
+		s.err = failure("E0411", "cron "+name+" ("+whereName(s.where)+")", s.where, err)
 	}
 	a.cronSpecs = append(a.cronSpecs, s)
 	return a
@@ -184,7 +185,8 @@ func (a *App) compileCrons() []error {
 			continue
 		}
 		if prev, dup := seen[c.name]; dup {
-			errs = append(errs, fmt.Errorf("web: cron %s is declared twice: by %s and by %s", c.name, prev, c.where))
+			errs = append(errs, diag.New("E0412", "cron %s is declared twice: by %s and by %s", c.name, whereName(prev), whereName(c.where)).
+				At(whereSpan(c.where)).WithRelated(withLabel(whereSpan(prev), "declared here first")).WithHelp("give one of them another name"))
 			continue
 		}
 		seen[c.name] = c.where
@@ -201,7 +203,7 @@ func (a *App) compileCrons() []error {
 
 func (a *App) compileCron(c *cronSpec) (*cronJob, error) {
 	fail := func(format string, args ...any) error {
-		return fmt.Errorf("web: cron %s (%s): %s", c.name, c.where, fmt.Sprintf(format, args...))
+		return failf("E0411", "cron "+c.name+" ("+whereName(c.where)+")", c.where, format, args...)
 	}
 	t := c.fn.Type()
 	if t.NumOut() > 1 || t.NumOut() == 1 && t.Out(0) != errType {

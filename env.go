@@ -16,6 +16,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // envLoad is one reading of a list of env files from one directory.
@@ -198,7 +200,7 @@ func (a *App) checkRequired() error {
 	if len(missing) == 0 {
 		return nil
 	}
-	msg := "web: missing environment variables: " + strings.Join(missing, ", ")
+	msg := "missing environment variables: " + strings.Join(missing, ", ")
 	switch l := a.env; {
 	case l == nil || len(l.searched) == 0:
 		msg += " (no env files are read)"
@@ -221,7 +223,7 @@ func (a *App) checkRequired() error {
 			}
 		}
 	}
-	return errors.New(msg)
+	return diag.New("E0415", "%s", msg).WithHelp("set them, or put them in .env")
 }
 
 // Env returns the environment variable key as a T: a string, bool, integer,
@@ -254,7 +256,7 @@ func MustEnv[T any](key string) T {
 		panic(err)
 	}
 	if !set {
-		panic("web: environment variable " + key + " is not set")
+		panic(diag.New("E0415", "environment variable %s is not set", key).WithHelp("set it, or put it in .env"))
 	}
 	return v
 }
@@ -274,7 +276,7 @@ func lookupEnv[T any](key string) (T, bool, error) {
 		return v, false, nil
 	}
 	if err := parseEnvValue(s, reflect.ValueOf(&v).Elem()); err != nil {
-		return v, true, fmt.Errorf("web: environment variable %s: %w", key, err)
+		return v, true, diag.New("E0415", "environment variable %s: %v", key, err).WithHelp("set %s to a value of its type", key)
 	}
 	return v, true, nil
 }

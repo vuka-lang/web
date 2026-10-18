@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // Starter is a provided value with work to do when the app starts: Run calls
@@ -60,13 +62,13 @@ func newContainer() *container { return &container{providers: map[reflect.Type]*
 func (c *container) provide(ctor any, source string) *provider {
 	v := reflect.ValueOf(ctor)
 	if !v.IsValid() {
-		c.errs = append(c.errs, fmt.Errorf("web: Provide(nil)"))
+		c.errs = append(c.errs, diag.New("E0410", "Provide(nil)").WithHelp("give Provide constructors and ready values"))
 		return nil
 	}
 	p := &provider{source: source}
 	if t := v.Type(); t.Kind() == reflect.Func {
 		if t.NumOut() == 0 || t.NumOut() > 2 || (t.NumOut() == 2 && t.Out(1) != errType) || t.IsVariadic() {
-			c.errs = append(c.errs, fmt.Errorf("web: constructor %s must be func(deps…) T or func(deps…) (T, error)", t))
+			c.errs = append(c.errs, diag.New("E0410", "the constructor %s isn't func(deps…) T or func(deps…) (T, error)", t).WithHelp("return the type it provides, and an error at most"))
 			return nil
 		}
 		p.fn, p.out, p.hasErr = v, t.Out(0), t.NumOut() == 2
@@ -83,7 +85,7 @@ func (c *container) provide(ctor any, source string) *provider {
 		}
 	}
 	if old, dup := c.providers[p.out]; dup {
-		c.errs = append(c.errs, fmt.Errorf("web: %s is provided twice: by %s and by %s", p.out, old.source, p.source))
+		c.errs = append(c.errs, diag.New("E0408", "%s is provided twice: by %s and by %s", p.out, old.source, p.source).WithHelp("provide each type once"))
 		return nil
 	}
 	c.providers[p.out] = p
@@ -108,7 +110,7 @@ func (c *container) walk(t reflect.Type, chain []string, path []reflect.Type, do
 			for _, s := range path[i:] {
 				names = append(names, s.String())
 			}
-			return fmt.Errorf("web: dependency cycle: %s -> %s", strings.Join(names, " -> "), t)
+			return diag.New("E0409", "dependency cycle: %s -> %s", strings.Join(names, " -> "), t).WithHelp("break the cycle: one of the types must not need the other")
 		}
 	}
 	if done[t] {
@@ -119,7 +121,7 @@ func (c *container) walk(t reflect.Type, chain []string, path []reflect.Type, do
 		for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 			chain[i], chain[j] = chain[j], chain[i]
 		}
-		return fmt.Errorf("web: no provider for %s, needed by %s", t, strings.Join(chain, ", needed by "))
+		return diag.New("E0407", "no provider for %s, needed by %s", t, strings.Join(chain, ", needed by ")).WithHelp("provide it: web.Provide(NewX), or @web.Service on the type")
 	}
 	for _, in := range p.in {
 		if err := c.walk(in, append(chain[:len(chain):len(chain)], p.source), append(path, t), done); err != nil {

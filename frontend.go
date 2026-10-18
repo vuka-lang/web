@@ -25,6 +25,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // A frontend is a single-page app built by its own toolchain (Vite, say)
@@ -180,8 +182,8 @@ func (f *frontend) prepare(a *App) error {
 		if errors.Is(err, fs.ErrNotExist) && !hasFiles(f.files) {
 			what = "is empty or missing"
 		}
-		return fmt.Errorf("%s: the frontend %s: build it first (vuka build runs vite build; or npm run build in the frontend's directory), "+
-			"or run in development (vuka run, VUKA_ENV=development) for a placeholder page", name, what)
+		return diag.New("E0601", "%s: the frontend %s", strings.TrimPrefix(name, "web: "), what).
+			WithHelp("build it first (vuka build runs vite build; or npm run build in the frontend's directory),\nor run in development (vuka run, VUKA_ENV=development) for a placeholder page")
 	}
 	f.immutable = readManifest(f.files)
 	f.index = f.withEnv(index)

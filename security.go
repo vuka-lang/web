@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // SecurityHeaders are the headers every response of an app carries unless
@@ -114,7 +115,7 @@ func TrustedProxies(cidrs ...string) Option {
 			if err != nil {
 				addr, aerr := netip.ParseAddr(c)
 				if aerr != nil {
-					a.c.errs = append(a.c.errs, errors.New("web: TrustedProxies: "+strconv.Quote(c)+" is neither a CIDR nor an address"))
+					a.c.errs = append(a.c.errs, diag.New("E0413", "TrustedProxies: %s is neither a CIDR nor an address", strconv.Quote(c)).WithHelp("give CIDRs (10.0.0.0/8) or addresses (10.1.2.3)"))
 					continue
 				}
 				p = netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen())

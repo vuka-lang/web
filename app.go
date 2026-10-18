@@ -21,6 +21,7 @@ import (
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/vuka/diag"
 	"github.com/vuka-lang/web/cron"
 )
 
@@ -209,7 +210,7 @@ func (a *App) Handle(method, path string, fn any, opts ...RouteOption) *App {
 	v := reflect.ValueOf(fn)
 	s := &routeSpec{method: method, path: path, fn: v}
 	if v.Kind() != reflect.Func {
-		a.c.errs = append(a.c.errs, fmt.Errorf("web: %s %s: the handler is %T, not a function", method, path, fn))
+		a.c.errs = append(a.c.errs, diag.New("E0403", "%s %s: the handler is %T, not a function", method, path, fn).WithHelp("pass a function"))
 		return a
 	}
 	s.where = funcName(v)
@@ -324,7 +325,8 @@ func (a *App) build() (http.Handler, error) {
 	for _, s := range specs {
 		key := s.method + " " + s.path
 		if prev, dup := seen[key]; dup {
-			errs = append(errs, fmt.Errorf("web: %s is declared twice: by %s and by %s", key, prev, s.where))
+			errs = append(errs, diag.New("E0401", "%s is declared twice: by %s and by %s", key, whereName(prev), whereName(s.where)).
+				At(whereSpan(s.where)).WithRelated(withLabel(whereSpan(prev), "declared here first")).WithHelp("give one of them another path or method"))
 			continue
 		}
 		seen[key] = s.where
@@ -358,7 +360,8 @@ func (a *App) build() (http.Handler, error) {
 			for _, p := range f.routes() {
 				key := wildcards.ReplaceAllString(p, "{}")
 				if prev, dup := gets[key]; dup {
-					errs = append(errs, fmt.Errorf("web: Frontend(%q) serves GET %s, as %s does", f.root, p, prev))
+					errs = append(errs, diag.New("E0402", "Frontend(%q) serves GET %s, as %s does", f.root, p, prev).
+						WithHelp("move the handler, or the frontend's page, to another path"))
 				}
 				gets[key] = fmt.Sprintf("Frontend(%q)", f.root)
 			}
@@ -432,7 +435,8 @@ func (a *App) wrapRoute(s *routeSpec, h http.Handler) (http.Handler, error) {
 		}
 		name := ra.RouteWrapper()
 		if !slices.ContainsFunc(a.wraps, func(w routeWrap) bool { return w.name == name }) {
-			return nil, fmt.Errorf("web: %s %s (%s): its attribute %T needs %s, which the app doesn't have", s.method, s.path, s.where, x, name)
+			return nil, failf("E0404", s.method+" "+s.path+" ("+whereName(s.where)+")", s.where, "its attribute %T needs %s, which the app doesn't have", x, name).
+				WithHelp("provide it, or add the module that does (web/auth for its gates)")
 		}
 	}
 	if a.trackRequests {

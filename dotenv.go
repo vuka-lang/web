@@ -2,8 +2,9 @@ package web
 
 import (
 	"bytes"
-	"fmt"
 	"strings"
+
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // dotenv parses a .env file. Each value is expanded as it is read, from the
@@ -47,7 +48,7 @@ func parseDotEnv(name string, data []byte, env func(string) (string, bool), vars
 }
 
 func (p *dotenv) errorf(format string, args ...any) error {
-	return fmt.Errorf("web: %s:%d: %s", p.name, p.line, fmt.Sprintf(format, args...))
+	return diag.New("E0416", format, args...).AtLine(p.name, p.line)
 }
 
 func (p *dotenv) skipBlanks() {
@@ -183,12 +184,12 @@ func (p *dotenv) expand(s string, escapes bool, line int) (string, error) {
 				}
 			}
 			if depth > 0 {
-				return "", fmt.Errorf("web: %s:%d: unterminated ${", p.name, line)
+				return "", diag.New("E0416", "unterminated ${").AtLine(p.name, line).WithHelp("close it: ${NAME}")
 			}
 			ref := s[i+2 : j-1]
 			name, def, hasDef := strings.Cut(ref, ":-")
 			if !validKey(name) {
-				return "", fmt.Errorf("web: %s:%d: bad variable reference ${%s}", p.name, line, name)
+				return "", diag.New("E0416", "bad variable reference ${%s}", name).AtLine(p.name, line).WithHelp("a reference is ${NAME} or ${NAME:-default}")
 			}
 			v, ok := p.lookup(name)
 			if (!ok || v == "") && hasDef {

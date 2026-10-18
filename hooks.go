@@ -3,7 +3,6 @@ package web
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/vuka/diag"
 )
 
 // This file holds what a library guarding an app's routes builds on — an
@@ -110,7 +110,7 @@ func Implementation[T any](a *App) (T, error) {
 	var zero T
 	t := typeOf[T]()
 	if t.Kind() != reflect.Interface {
-		return zero, fmt.Errorf("web: Implementation[%s]: not an interface", t)
+		return zero, diag.New("E0414", "Implementation[%s]: not an interface", t).WithHelp("T names an interface the provided types implement")
 	}
 	if !a.c.has(t) {
 		var found []reflect.Type
@@ -121,7 +121,7 @@ func Implementation[T any](a *App) (T, error) {
 		}
 		switch len(found) {
 		case 0:
-			return zero, fmt.Errorf("web: nothing provided implements %s", t)
+			return zero, diag.New("E0414", "nothing provided implements %s", t).WithHelp("provide a type implementing it")
 		case 1:
 			t = found[0]
 		default:
@@ -129,7 +129,7 @@ func Implementation[T any](a *App) (T, error) {
 			for i, f := range found {
 				names[i] = f.String()
 			}
-			return zero, fmt.Errorf("web: several provided types implement %s: %s", typeOf[T](), strings.Join(names, ", "))
+			return zero, diag.New("E0414", "several provided types implement %s: %s", typeOf[T](), strings.Join(names, ", ")).WithHelp("provide one of them as %s", typeOf[T]())
 		}
 	}
 	v, err := a.c.get(t)

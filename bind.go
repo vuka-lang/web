@@ -19,6 +19,7 @@ import (
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/vuka/diag"
 )
 
 type routeSpec struct {
@@ -90,8 +91,9 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 	if s.live != nil {
 		return a.compileLive(s)
 	}
+	what := s.method + " " + s.path + " (" + whereName(s.where) + ")"
 	fail := func(format string, args ...any) error {
-		return fmt.Errorf("web: %s %s (%s): %s", s.method, s.path, s.where, fmt.Sprintf(format, args...))
+		return failf("E0405", what, s.where, format, args...)
 	}
 	var binders []binder
 	if s.recv != nil {
@@ -123,24 +125,24 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 			if label == "" {
 				label = fmt.Sprint("#", i+1)
 			}
-			return nil, fail("parameter %s %s: %v", label, p.Type, err)
+			return nil, failure("E0405", fmt.Sprintf("%s: parameter %s %s", what, label, p.Type), s.where, err)
 		}
 		binders = append(binders, b)
 		shown = append(shown, a.paramSource(p, pathNames))
 	}
 	out, err := results(s.fn.Type())
 	if err != nil {
-		return nil, fail("%v", err)
+		return nil, failure("E0406", what, s.where, err)
 	}
 	htmlPage := s.view != nil || (out.data != nil && out.data.Implements(nodeType))
 	s.html = htmlPage
 	var v *view
 	if s.view != nil {
 		if out.data != nil && out.data.Implements(nodeType) {
-			return nil, fail("returns a vuka.Node and has a view; drop one")
+			return nil, failf("E0417", what, s.where, "returns a vuka.Node and has a view").WithHelp("drop one")
 		}
 		if v, err = compileView(*s.view, out.data); err != nil {
-			return nil, fail("%v", err)
+			return nil, failure("E0417", what, s.where, err)
 		}
 	}
 	route, handler := s.method+" "+s.path, shortName(s.where)
@@ -288,7 +290,7 @@ func results(ft reflect.Type) (shape, error) {
 			return out[0], nil
 		}}, nil
 	}
-	return shape{}, fmt.Errorf("results %s: a handler returns nothing, error, T, (T, error) or Result[T]", ft)
+	return shape{}, diag.New("E0406", "results %s", ft).WithHelp("a handler returns nothing, error, T, (T, error) or Result[T]")
 }
 
 func isResult(t reflect.Type) bool {
@@ -315,7 +317,7 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 		return func(*request) (reflect.Value, error) { return a.c.get(t) }, nil
 	case scalar(t):
 		if p.Name == "" || p.Name == "_" {
-			return nil, errors.New("a scalar parameter binds by name, and this one has none (in plain Go, name it with web.Params)")
+			return nil, diag.New("E0405", "a scalar parameter binds by name, and this one has none").WithHelp("in plain Go, name it with web.Params")
 		}
 		name, inPath := p.Name, slices.Contains(pathNames, p.Name)
 		return func(rq *request) (reflect.Value, error) {
@@ -336,7 +338,7 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 		}, nil
 	case bindable(t):
 		if *body {
-			return nil, errors.New("a handler binds one struct from the request, and this is the second")
+			return nil, diag.New("E0405", "a handler binds one struct from the request, and this is the second").WithHelp("join them in one struct, or provide one of them")
 		}
 		*body = true
 		if err := ui.CheckValidate(t); err != nil {
@@ -344,9 +346,9 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 		}
 		return structBinder(t, pathNames, a.router), nil
 	case t.Kind() == reflect.Pointer || t.Kind() == reflect.Interface:
-		return nil, fmt.Errorf("no provider for %s, needed by %s", t, s.where)
+		return nil, diag.New("E0407", "no provider for %s, needed by %s", t, whereName(s.where)).WithHelp("provide it: web.Provide(NewX), or @web.Service on the type")
 	}
-	return nil, errors.New("can't be bound from a request")
+	return nil, diag.New("E0405", "can't be bound from a request").WithHelp("bind scalars by name, one struct from the body, and provided types")
 }
 
 // bindable reports whether t is a struct, or pointer to one, with exported

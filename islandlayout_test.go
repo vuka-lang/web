@@ -9,6 +9,7 @@ import (
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/vuka/diag"
 	"github.com/vuka-lang/web/internal/chrome"
 )
 
@@ -143,7 +144,7 @@ func TestIslandLayoutBad(t *testing.T) {
 		ui.Live
 	}
 	ui.Island(ui.Layout("not a layout"))(vuka.TypeOf[badShelf]("web.badShelf"))
-	if err := shelfApp().Page("/b", &badShelf{}).Build(); err == nil || !strings.Contains(err.Error(), "ui.Layout takes") {
+	if err := shelfApp().Page("/b", &badShelf{}).Build(); err == nil || diag.Of(err) != "E0321" || !strings.Contains(err.Error(), "ui.Layout is given a string, which isn't a layout") {
 		t.Errorf("got %v", err)
 	}
 }
