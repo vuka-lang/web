@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.27.x"
+  TAILWIND_VERSION: v4.3.0
+
+jobs:
+  test:
+    name: vet, race tests (node runtime, Chrome)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - id: chrome
+        uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
+        with:
+          chrome-version: stable
+      - name: Tools
+        run: |
+          # Ubuntu 24.04 keeps unprivileged user namespaces from Chrome's sandbox.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          echo "VUKA_CHROME=${{ steps.chrome.outputs.chrome-path }}" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$HOME/.local/bin/tailwindcss" \
+            "https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64"
+          chmod +x "$HOME/.local/bin/tailwindcss"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: gofmt
+        run: |
+          bad=$(git ls-files '*.go' | grep -v -e '/testdata/' -e '_vuka\.go$' -e '_vuka_test\.go$' | xargs gofmt -l)
+          if [ -n "$bad" ]; then echo "not gofmt'd:"; echo "$bad"; exit 1; fi
+      - run: go vet ./...
+      - run: go test -race -timeout 30m ./...

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/vuka-lang/web/internal/testenv"
 )
 
 // Timeout bounds every call and wait.
@@ -74,12 +75,12 @@ type message struct {
 }
 
 // Launch starts Chrome for the test, closed when it ends; it skips the test
-// when there is no Chrome.
+// when there is no Chrome (fails it under CI).
 func Launch(t testing.TB) *Browser {
 	t.Helper()
 	bin := Find()
 	if bin == "" {
-		t.Skip("no Chrome found (set VUKA_CHROME)")
+		testenv.Needs(t, "no Chrome found (set VUKA_CHROME)")
 	}
 	dir, err := os.MkdirTemp("", "vuka-chrome-")
 	if err != nil {

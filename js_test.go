@@ -17,13 +17,14 @@ import (
 	"github.com/coder/websocket"
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/web/internal/testenv"
 )
 
 // The runtime's JS commands, in node over a small DOM.
 func TestLiveJSCommands(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("no node")
+		testenv.Needs(t, "no node")
 	}
 	out, err := exec.Command(node, "testdata/livejs/js.js", "live.js").CombinedOutput()
 	if err != nil {
@@ -36,7 +37,7 @@ func TestLiveJSCommands(t *testing.T) {
 func TestLiveJSState(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("no node")
+		testenv.Needs(t, "no node")
 	}
 	out, err := exec.Command(node, "testdata/livejs/state.js", "live.js").CombinedOutput()
 	if err != nil {

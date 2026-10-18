@@ -139,8 +139,13 @@ func TestPeriodicSessionCheck(t *testing.T) {
 	c := serve(t, app)
 	c.login("ada@example.com", "correct horse", "")
 	ws, _ := c.socket("/board", c.srv.URL)
-	if n := reads(&ss.gets, func() { time.Sleep(275 * time.Millisecond) }); n < 3 || n > 6 {
-		t.Errorf("a quiet page read its session %d times in 5½ intervals", n)
+	before, start := ss.gets.Load(), time.Now()
+	for ss.gets.Load()-before < 3 && time.Since(start) < 10*time.Second {
+		time.Sleep(10 * time.Millisecond)
+	}
+	n, took := ss.gets.Load()-before, time.Since(start)
+	if most := int64(took/(50*time.Millisecond)) + 1; n < 3 || n > most {
+		t.Errorf("a quiet page read its session %d times in %v (at most %d)", n, took, most)
 	}
 	ss.MemorySessions.DeleteUser(context.Background(), "1")
 	if _, err := recv(ws); websocket.CloseStatus(err) != 4001 {

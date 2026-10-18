@@ -17,6 +17,7 @@ import (
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
 	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/web/internal/testenv"
 )
 
 // withCSS registers css as the app's stylesheet for the test.
@@ -226,7 +227,7 @@ func tailwind(t *testing.T, src, out string) {
 	t.Helper()
 	bin, err := exec.LookPath("tailwindcss")
 	if err != nil {
-		t.Skip("no tailwindcss on PATH")
+		testenv.Needs(t, "no tailwindcss on PATH")
 	}
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "page.html"), []byte(src), 0o644)

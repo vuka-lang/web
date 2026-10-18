@@ -17,6 +17,7 @@ import (
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/web/internal/testenv"
 )
 
 // The island runtime — function, state and live props — in node over a
@@ -24,7 +25,7 @@ import (
 func TestLiveJSIslands(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("no node")
+		testenv.Needs(t, "no node")
 	}
 	out, err := exec.Command(node, "testdata/livejs/islands.js", "live.js", "loader.js").CombinedOutput()
 	if err != nil {
@@ -38,7 +39,7 @@ func TestLiveJSIslands(t *testing.T) {
 func TestLoaderJS(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("no node")
+		testenv.Needs(t, "no node")
 	}
 	out, err := exec.Command(node, "testdata/livejs/loader.js", "live.js", "loader.js").CombinedOutput()
 	if err != nil {
@@ -52,7 +53,7 @@ func TestLoaderJS(t *testing.T) {
 func TestToolbarJS(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("no node")
+		testenv.Needs(t, "no node")
 	}
 	out, err := exec.Command(node, "testdata/livejs/toolbar.js", "live.js", "toolbar.js").CombinedOutput()
 	if err != nil {

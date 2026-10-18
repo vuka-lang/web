@@ -12,6 +12,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/vuka-lang/web/internal/chrome"
 	"github.com/vuka-lang/web/internal/livetree"
+	"github.com/vuka-lang/web/internal/testenv"
 )
 
 // Until the Vuka live session speaks protocol v2, the web tests answer v2
@@ -108,7 +109,7 @@ func TestLiveV2Broadcast(t *testing.T) {
 func TestLiveJSSpecFixtures(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("no node")
+		testenv.Needs(t, "no node")
 	}
 	out, err := exec.Command(node, "testdata/livejs/run.js", "live.js", "testdata/livejs/spec.json").CombinedOutput()
 	if err != nil {

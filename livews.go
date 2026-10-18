@@ -455,6 +455,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 			c.s = nil
 		}
 		reply, code := c.join(ctx, m.Ref, m.V)
+		c.syncTopics() // before the reply: a broadcast the client causes once joined reaches it
 		c.write(ctx, reply)
 		if code != 0 {
 			c.ws.Close(code, reply.(live.ServerMessage).Error)
@@ -470,12 +471,15 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 			// before the reply: the toolbar asks for the page once it lands
 			c.tb.navigated(c.tb.cur.Load(), c.uri, patch, c.r.Header)
 		}
+		c.syncTopics()
 		c.write(ctx, reply)
 		if moved {
 			c.startDeferred(patch)
 		}
 	default:
-		c.write(ctx, c.event(m.ClientMessage))
+		reply := c.event(m.ClientMessage)
+		c.syncTopics()
+		c.write(ctx, reply)
 	}
 	c.syncTopics()
 	return true

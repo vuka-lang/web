@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
@@ -24,7 +25,16 @@ func decl(pkg, name string, fn any, params ...string) *vuka.Decl {
 	return vuka.FuncDecl(vuka.Decl{Name: "main." + name, Pkg: pkg, File: "t.vuka", Line: int(line.Add(1)), Func: fn}, params...)
 }
 
-func pkgOf(t *testing.T) string { return "test/" + t.Name() }
+// pkgOf is a package path of t's own, a new one on each run (-count).
+func pkgOf(t *testing.T) string {
+	p, _ := testPkgs.LoadOrStore(t, fmt.Sprint("test/", t.Name(), "/", testRuns.Add(1)))
+	return p.(string)
+}
+
+var (
+	testPkgs sync.Map
+	testRuns atomic.Int64
+)
 
 func do(t *testing.T, h http.Handler, method, target, body string, header ...string) (int, string, http.Header) {
 	t.Helper()

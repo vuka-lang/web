@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/vuka-lang/web/internal/testenv"
 )
 
 // The browser runtime's v2 code (live.js) runs in node over messages this
@@ -234,7 +236,7 @@ func (e *Encoder) treeHTML(id string) string {
 func TestRandomTreesInNode(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
-		t.Skip("no node")
+		testenv.Needs(t, "no node")
 	}
 	var fixtures []fixture
 	counts := map[string]int{}
