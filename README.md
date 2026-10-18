@@ -1429,6 +1429,13 @@ commands and navigation also run in node over a small DOM
 - Event handlers of a live page get the join's context: `web.Request` is the
   join's request, and writing to `web.ResponseWriter` goes nowhere.
 
+## Versions
+
+From v0.50.0, vuka, ui, web and the `vuka` command are released together
+under one version; require them at the same version (`vuka upgrade` moves an
+app between versions). See
+[Versions and compatibility](https://vuka-lang.github.io/vuka/project/versions).
+
 ## License
 
 MIT
