@@ -1,5 +1,5 @@
 // The Vite plugin for frontends served by a github.com/vuka-lang/web app
-// (web.Frontend). vuka run and vuka build copy it into the frontend's
+// (web.Frontend). vuka run, vuka build and web.Dev copy it into the frontend's
 // directory as vuka/vite.js; in vite.config:
 //
 //	import vuka from './vuka/vite.js'
@@ -12,7 +12,8 @@
 //     stops. A development app finds the file beside the build it serves and
 //     loads its pages' modules from the dev server, so the browser stays on
 //     the app's address. It also sets server.origin, so the URLs of assets
-//     the modules import point at the dev server.
+//     the modules import point at the dev server. A dev server web.Dev
+//     started (VUKA_DEV_PARENT) exits once the app is gone.
 //   - vite build writes the manifest (.vite/manifest.json): the app caches
 //     the files it lists for good. A .gitkeep in the output directory,
 //     which emptyOutDir removes, is put back.
@@ -40,6 +41,8 @@ import { dirname, join, resolve } from 'node:path'
 
 export const HOT_FILE = '.vite/vuka-hot.json'
 export const ENV_GLOBAL = '__VUKA_ENV__'
+/** The env var naming the app that started the dev server (web.Dev): it stops when the app is gone. */
+export const PARENT_ENV = 'VUKA_DEV_PARENT'
 /** The env var naming the island-build spec file; set by vuka build/run. */
 export const ISLAND_ENV = 'VUKA_ISLAND_BUILD'
 
@@ -149,6 +152,12 @@ export default function vuka() {
       }, 1000)
       timer.unref?.()
       http.once('close', () => clearInterval(timer))
+      const parent = Number(process.env[PARENT_ENV])
+      if (parent) {
+        const watch = setInterval(() => alive(parent) || process.exit(), 1000)
+        watch.unref?.()
+        http.once('close', () => clearInterval(watch))
+      }
     },
 
     buildStart() {
@@ -182,6 +191,16 @@ export function devOrigin(addr, https) {
   if (['::', '0.0.0.0', '::1', '127.0.0.1', '::ffff:127.0.0.1'].includes(host)) host = 'localhost'
   else if (host.includes(':')) host = `[${host}]`
   return `${https ? 'https' : 'http'}://${host}:${addr.port}`
+}
+
+/** Whether process pid runs. */
+export function alive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return e.code === 'EPERM'
+  }
 }
 
 function writeHot(file, data) {

@@ -68,6 +68,9 @@ type App struct {
 	sched     *scheduler // nil: no crons
 	scheduled bool       // Start added the scheduler to the lifecycle
 
+	devTools bool      // Dev: development, with Tailwind and Vite, where the process runs in it
+	tools    *devTools // nil: none to run
+
 	tb        *toolbar // nil: no development toolbar
 	noToolbar bool
 
@@ -103,12 +106,16 @@ func New(opts ...Option) *App {
 	if a.env = loadEnv(a.envFiles); a.env.err != nil {
 		a.c.errs = append(a.c.errs, a.env.err)
 	}
-	a.dev = a.dev || IsDev() // VUKA_ENV=development, or VUKA_DEV_DIR under `vuka run`; never an env file's (loadEnv skips VUKA_ keys)
+	// VUKA_ENV=development, VUKA_DEV=1, or VUKA_DEV_DIR under `vuka run`; never an env file's (loadEnv skips VUKA_ keys)
+	a.dev = IsDev() || a.devTools && testBinary
 	if a.liveKey == nil {
 		a.liveKey = devLiveKey(a.dev)
 	}
 	if a.router == nil {
 		a.router = NewServeMux()
+	}
+	if a.devTools && devActive() {
+		a.tools = a.newDevTools()
 	}
 	a.css = a.appCSS()
 	a.assets = a.appAssets()
@@ -517,12 +524,21 @@ func (a *App) Start(ctx context.Context) error {
 		a.scheduled = true
 		a.c.hook(hook{name: "crons", start: a.sched.start, stop: a.sched.stop})
 	}
-	return errors.Join(a.c.start(ctx), errors.Join(takeEnvErrors()...))
+	if err := errors.Join(a.c.start(ctx), errors.Join(takeEnvErrors()...)); err != nil {
+		return err
+	}
+	if a.tools != nil {
+		a.tools.start(a.frontends)
+	}
+	return nil
 }
 
 // Stop runs the stop sequence: each value implementing Stopper and each
 // OnStop hook, in the reverse order of the start sequence.
 func (a *App) Stop(ctx context.Context) error {
+	if a.tools != nil {
+		a.tools.stop()
+	}
 	a.hub.closeAll()
 	a.parked.closeAll()
 	a.css.close()
