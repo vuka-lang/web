@@ -5,10 +5,10 @@ go 1.25.0
 require (
 	github.com/a-h/templ v0.3.1020 // indirect
 	github.com/coder/websocket v1.8.15
-	github.com/vuka-lang/vuka v0.32.1-0.20261018220625-a9d037d539b2
+	github.com/vuka-lang/vuka v0.50.0
 )
 
-require github.com/vuka-lang/ui v0.30.1-0.20261018220745-63d28e34b2ba
+require github.com/vuka-lang/ui v0.50.0
 
 require golang.org/x/text v0.41.0
 
