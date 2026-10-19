@@ -290,7 +290,18 @@ func (s *scheduler) job(name string) *cronJob {
 	if i := slices.IndexFunc(s.jobs, func(j *cronJob) bool { return j.name == name }); i >= 0 {
 		return s.jobs[i]
 	}
-	return nil
+	// A main package's crons, when its tests build it, are named for its
+	// import path ("pets.cleanUp"): one of them answers to its own name.
+	var found *cronJob
+	for _, j := range s.jobs {
+		if _, short, ok := strings.Cut(j.name, "."); ok && short == name {
+			if found != nil {
+				return nil
+			}
+			found = j
+		}
+	}
+	return found
 }
 
 func (s *scheduler) names() string {

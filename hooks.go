@@ -66,7 +66,7 @@ func WrapRoutes(name string, f func(RouteInfo) Middleware) Option {
 // (a composed decorator, such as one a library's attribute function
 // returns) gives its attributes. It also goes to App.Live.
 func Attrs(attrs ...any) RouteOption {
-	return func(s *routeSpec) { s.attrs = append(s.attrs, flattenAttrs(attrs)...) }
+	return routeOpt(func(s *routeSpec) { s.attrs = append(s.attrs, flattenAttrs(attrs)...) })
 }
 
 func flattenAttrs(attrs []any) []any {
@@ -81,9 +81,9 @@ func flattenAttrs(attrs []any) []any {
 	return out
 }
 
-// liveOption makes a RouteOption one for App.Live: Attrs and Wrap apply to
-// the page's route.
-func (o RouteOption) liveOption(s *liveSpec) { s.routeOpts = append(s.routeOpts, o) }
+// liveOption makes a route's option one for a live page: Attrs and Wrap
+// apply to the page's route.
+func (o routeOpt) liveOption(s *liveSpec) { s.routeOpts = append(s.routeOpts, o) }
 
 // ParamFrom binds handler parameters of type T with f, before any other
 // rule: f's error answers the request as a handler's would. A library

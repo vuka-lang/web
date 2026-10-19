@@ -67,6 +67,7 @@ func JS(src ...string) Asset { return Asset{"js", src} }
 
 func (Asset) apply(*App)           {}
 func (Asset) liveOption(*liveSpec) {}
+func (Asset) Attrs() []any         { return nil }
 
 const (
 	assetsPrefix  = livePrefix + "c/"

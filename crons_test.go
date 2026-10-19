@@ -318,3 +318,16 @@ func TestBrowserToolbarCrons(t *testing.T) {
 		p.Screenshot(filepath.Join(dir, "toolbar-crons.png"))
 	}
 }
+
+func TestCronByShortName(t *testing.T) {
+	s := &scheduler{jobs: []*cronJob{{name: "pets.cleanUp"}, {name: "jobs.sweep"}, {name: "a.dup"}, {name: "b.dup"}, {name: "plain"}}}
+	for name, want := range map[string]string{"pets.cleanUp": "pets.cleanUp", "cleanUp": "pets.cleanUp", "plain": "plain", "dup": "", "none": ""} {
+		got := ""
+		if j := s.job(name); j != nil {
+			got = j.name
+		}
+		if got != want {
+			t.Errorf("job(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
