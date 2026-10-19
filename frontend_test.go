@@ -168,6 +168,32 @@ func TestFrontendNotBuilt(t *testing.T) {
 	expect(t, h, "GET", "/app.js", "", 404, "")
 }
 
+// TestFrontendIslands: the islands vuka build-islands wrote into a
+// frontend's build are served from it, cached for good, and pages load
+// them; a build of islands alone answers other paths 404.
+func TestFrontendIslands(t *testing.T) {
+	islands := fstest.MapFS{
+		"dist/.vuka/manifest.json":       {Data: []byte(`{"islands":{"Chart":{"name":"Chart","module":"chart.0a1b2c3d.js","framework":"vanilla"}}}`)},
+		"dist/.vuka/i/chart.0a1b2c3d.js": {Data: []byte("export function mount() {}")},
+	}
+	a := spaApp(t, Frontend(islands, "dist"))
+	a.Get("/page", func() ui.Node { return ui.El("html", nil, ui.El("head", nil), ui.El("body", nil)) })
+	h := a.Handler()
+	code, body, hdr := do(t, h, "GET", "/_vuka/i/chart.0a1b2c3d.js", "")
+	if code != 200 || body != "export function mount() {}" || !strings.Contains(hdr.Get("Cache-Control"), "immutable") {
+		t.Errorf("the island's chunk: %d %q %q", code, body, hdr.Get("Cache-Control"))
+	}
+	expect(t, h, "GET", "/page", "", 200, `<script src="/_vuka/c/loader.js?v=`)
+	expect(t, h, "GET", "/_vuka/c/loader.js", "", 200, `"i":{"Chart":["/_vuka/i/chart.0a1b2c3d.js",""]}`)
+	expect(t, h, "GET", "/somewhere", "", 404, "")
+	expect(t, h, "GET", "/.vuka/manifest.json", "", 404, "")
+
+	islands["dist/index.html"] = &fstest.MapFile{Data: []byte("<html><head><title>SPA</title></head></html>")}
+	h = spaApp(t, Frontend(islands, "dist")).Handler()
+	expect(t, h, "GET", "/somewhere", "", 200, "<title>SPA</title>")
+	expect(t, h, "GET", "/_vuka/i/chart.0a1b2c3d.js", "", 200, "mount")
+}
+
 func TestFrontendDevReadsDisk(t *testing.T) {
 	dist := devDir(t, map[string]string{"index.html": "<html><head><title>v1</title></head><body></body></html>", "a.js": "1"})
 	h := spaApp(t, Dev(), Frontend(fstest.MapFS{"dist/index.html": {Data: []byte("embedded")}}, "dist")).Handler()

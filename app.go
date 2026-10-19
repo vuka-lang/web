@@ -424,6 +424,9 @@ func (a *App) build() (http.Handler, error) {
 	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(serveLiveJS))
 	a.router.Handle(http.MethodGet, liveSocket, http.HandlerFunc(a.serveLive))
 	a.routeCSS()
+	if a.assets == nil {
+		a.assets = distAssets(a.frontends)
+	}
 	a.routeAssets()
 	if a.tb != nil {
 		a.routeToolbar()

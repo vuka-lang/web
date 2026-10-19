@@ -29,6 +29,7 @@ const (
 	// when the app is gone, however the app ended.
 	devParentEnv = "VUKA_DEV_PARENT"
 	twDir        = ".vuka/tailwind"
+	islandsDir   = ".vuka/assets"
 )
 
 var (
@@ -48,6 +49,7 @@ type devTools struct {
 	twBin   string // tailwindcss; "" when the app has no Tailwind to run
 	twSheet string // the project's stylesheet; "" for the built-in one
 	css     string // the stylesheet Tailwind keeps built
+	islands string // the directory vuka build-islands -watch keeps the islands in; "" for none
 	missing []string
 
 	mu      sync.Mutex
@@ -68,6 +70,13 @@ func devActive() bool {
 func (a *App) newDevTools() *devTools {
 	cwd, _ := os.Getwd()
 	t := &devTools{root: moduleRoot(cwd)}
+	if os.Getenv(AssetsEnv) == "" && registersIslands(t.root) {
+		if hasVukaTool(t.root) {
+			t.islands = filepath.Join(t.root, filepath.FromSlash(islandsDir))
+		} else {
+			t.missing = append(t.missing, "islands: go get -tool github.com/vuka-lang/vuka/cmd/vuka")
+		}
+	}
 	if a.noCSS || os.Getenv(CSSEnv) != "" {
 		return t
 	}
@@ -140,6 +149,9 @@ func (t *devTools) start(frontends []*frontend) {
 	if t.twBin != "" {
 		go t.startTailwind()
 	}
+	if t.islands != "" {
+		go t.startIslands()
+	}
 	for _, f := range frontends {
 		dir := f.projectDir()
 		if dir == "" || f.devServer() != nil {
@@ -177,6 +189,71 @@ func (t *devTools) startTailwind() {
 			log.Printf("web: Dev: tailwind: %v", err)
 		}
 	}
+}
+
+// startIslands runs vuka build-islands -watch, which keeps the islands
+// built in t.islands, where the app reads them.
+func (t *devTools) startIslands() {
+	bin := vukaTool(t.root)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if bin == "" || t.stopped {
+		return
+	}
+	if err := t.spawn("islands", t.root, true, nil, bin, "build-islands", "-watch"); err != nil {
+		log.Printf("web: Dev: islands: %v", err)
+	}
+}
+
+// registersIslands reports whether the module's Go source registers an
+// island: ui.RegisterIsland or a ui.Island option.
+func registersIslands(root string) bool {
+	found := false
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || found {
+			return fs.SkipAll
+		}
+		n := d.Name()
+		if d.IsDir() {
+			if p != root && (strings.HasPrefix(n, ".") || strings.HasPrefix(n, "_") || n == "node_modules" || n == "testdata" || n == "vendor" || fileExists(filepath.Join(p, "go.mod"))) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasSuffix(n, ".go") && !strings.HasSuffix(n, "_test.go") {
+			src, _ := os.ReadFile(p)
+			found = bytes.Contains(src, []byte("RegisterIsland[")) || bytes.Contains(src, []byte(".Island("))
+		}
+		return nil
+	})
+	return found
+}
+
+var toolLine = regexp.MustCompile(`(?m)^\s*(?:tool\s+)?github\.com/vuka-lang/vuka/cmd/vuka\s*$`)
+
+// hasVukaTool reports whether the vuka command is at hand: a tool of the
+// module (go get -tool), or on PATH.
+func hasVukaTool(root string) bool {
+	mod, _ := os.ReadFile(filepath.Join(root, "go.mod"))
+	if toolLine.Match(mod) {
+		return true
+	}
+	_, err := exec.LookPath("vuka")
+	return err == nil
+}
+
+// vukaTool is the vuka command: the module's tool, built by go tool -n,
+// else vuka on PATH; "" when there is neither.
+func vukaTool(root string) string {
+	c := exec.Command("go", "tool", "-n", "vuka")
+	c.Dir = root
+	if out, err := c.Output(); err == nil {
+		if p := strings.TrimSpace(string(out)); fileExists(p) {
+			return p
+		}
+	}
+	p, _ := exec.LookPath("vuka")
+	return p
 }
 
 // writeEntry writes the stylesheet Tailwind builds, as vuka run does: the
