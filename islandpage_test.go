@@ -60,18 +60,27 @@ func (a *applicants) Away() error { return Redirect("/elsewhere") }
 
 func (a *applicants) Boom() error { return http.ErrAbortHandler }
 
-// liveApplicants is the live variant: ui.Live embedded; its Render is
-// the compiler's, written here.
+// liveApplicants is the live variant: ui.Live embedded, Q bound to ?q= and
+// the Mount hook in its LiveSchema; its Render is the compiler's, written
+// here.
 type liveApplicants struct {
 	ui.Live
-	Q    string   `json:"q" url:"q"`
+	Q    string   `json:"q"`
 	Rows []string `json:"rows"`
 	db   *applicantDB
 }
 
+func (a *liveApplicants) LiveSchema(l *ui.LiveSchema) {
+	l.Field(&a.Q, ui.URL("q"))
+	l.Mount(a.mount)
+}
+
 func (a *liveApplicants) Render() ui.Node { return ui.IslandPage(a) }
 
-func (a *liveApplicants) Mount() { a.Rows = a.db.find(a.Q) }
+func (a *liveApplicants) mount(ctx context.Context) error {
+	a.Rows = a.db.find(a.Q)
+	return nil
+}
 
 func (a *liveApplicants) Search(q string) { a.Q, a.Rows = q, a.db.find(q) }
 

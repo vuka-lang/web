@@ -96,8 +96,9 @@ func (a *App) pageSpecs(p typePage) ([]*routeSpec, error) {
 }
 
 // islandBinds are the bindings of a page-backed island's fields: its
-// unexported fields of provided types, injected; its exported fields
-// tagged url:"name", from that query parameter; its exported fields naming
+// unexported fields of provided types, injected; its exported fields its
+// LiveSchema gives a URL (ui.URL("name")), or tagged url:"name", from that
+// query parameter; its exported fields naming
 // a path segment, from the path.
 func (a *App) islandBinds(t reflect.Type, path, where string) ([]prop, error) {
 	var props []prop
@@ -118,7 +119,11 @@ func (a *App) islandBinds(t reflect.Type, path, where string) ([]prop, error) {
 			props = append(props, prop{index: f.Index, name: f.Name, typ: f.Type, dep: true, unexported: true})
 		case !scalar(f.Type):
 		default:
-			if q, _, _ := strings.Cut(f.Tag.Get("url"), ","); q != "" && q != "-" {
+			q, _, _ := strings.Cut(f.Tag.Get("url"), ",")
+			if u := ui.FieldOptionsOf(t, f).URL; u != "" {
+				q = u
+			}
+			if q != "" && q != "-" {
 				props = append(props, prop{index: f.Index, name: q, typ: f.Type, query: true})
 				continue
 			}
