@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/vuka-lang/ui"
 )
 
 // devEnv sets the environment Dev looks at (env, pairs of names and values)
@@ -276,4 +278,61 @@ func TestDevLeavesRunningTools(t *testing.T) {
 func processRuns(pid int) bool {
 	p, err := os.FindProcess(pid)
 	return err == nil && p.Signal(syscall.Signal(0)) == nil
+}
+
+// TestDevIslands: an app registering islands runs vuka build-islands
+// -watch and serves what it builds; its pages load the loader before the
+// first build is there. Without the vuka command, Dev says how to get it.
+func TestDevIslands(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake is a shell script")
+	}
+	fake, _ := filepath.Abs("testdata/dev/vuka")
+	devEnv(t, "VUKA_DEV", "1")
+	dir := t.TempDir()
+	for name, data := range map[string]string{
+		"go.mod":  "module example.com/devapp\n\ngo 1.25\n",
+		"main.go": "package main\n\nfunc init() { ui.RegisterIsland[Chart]() }\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+	bin := filepath.Join(dir, "bin")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+"/bin"+string(os.PathListSeparator)+"/usr/bin")
+
+	logs := captureSlog(t)
+	a := New(Only("none"), NoToolbar(), Dev())
+	if err := a.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	a.Stop(context.Background())
+	if !strings.Contains(logs.String(), "for islands: go get -tool github.com/vuka-lang/vuka/cmd/vuka") {
+		t.Errorf("no word of the vuka command:\n%s", logs)
+	}
+
+	copyExec(t, fake, filepath.Join(bin, "vuka"))
+	a = New(Only("none"), NoToolbar(), Dev())
+	a.Get("/page", func() ui.Node { return ui.El("html", nil, ui.El("head", nil), ui.El("body", nil)) })
+	if _, body := devGet(t, a, "/page"); !strings.Contains(body, `<script src="/_vuka/c/loader.js?v=`) {
+		t.Errorf("no loader before the first build: %s", body)
+	}
+	if err := a.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the island in the loader", func() bool {
+		_, js := devGet(t, a, "/_vuka/c/loader.js")
+		return strings.Contains(js, `"Chart":["/_vuka/i/chart.0a1b2c3d.js",""]`)
+	})
+	if code, js := devGet(t, a, "/_vuka/i/chart.0a1b2c3d.js"); code != 200 || js != "export function mount() {}" {
+		t.Errorf("the chunk: %d %q", code, js)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, ".vuka/islands.pid"))
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Stop(context.Background())
+	eventually(t, "vuka build-islands gone", func() bool { return !processRuns(pid) })
 }

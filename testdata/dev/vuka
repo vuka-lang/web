@@ -1,0 +1,9 @@
+#!/bin/sh
+# A fake vuka build-islands -watch: writes an island build where the app
+# reads it, then runs until its stdin closes.
+[ "$1 $2" = "build-islands -watch" ] || exit 2
+mkdir -p .vuka/assets/i
+printf 'export function mount() {}' > .vuka/assets/i/chart.0a1b2c3d.js
+printf '{"islands":{"Chart":{"name":"Chart","module":"chart.0a1b2c3d.js","framework":"vanilla"}}}' > .vuka/assets/manifest.json
+echo $$ > .vuka/islands.pid
+cat > /dev/null

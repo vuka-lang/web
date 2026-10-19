@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -77,6 +78,9 @@ const (
 	// AssetsEnv names the directory vuka run keeps the compiled assets in:
 	// manifest.json, the modules (c/), and the island chunks (i/).
 	AssetsEnv = "VUKA_ASSETS"
+	// islandsDist is where go tool vuka build-islands writes the islands in
+	// a frontend's build, laid out as AssetsEnv's directory is.
+	islandsDist = ".vuka"
 )
 
 // manifest is what the vuka command compiled: the scoped components and
@@ -151,7 +155,9 @@ func RegisterIsland(name string, js []byte) {
 // keeps up to date (re-read when its manifest changes, checked at most
 // every 100ms).
 type assetSet struct {
-	dir string
+	dir    string
+	files  fs.FS // the islands of a frontend's build (islandsDist), when not dir
+	always bool  // Dev's island build: pages load the loader before the first build
 
 	mu      sync.Mutex
 	m       manifest
@@ -174,6 +180,13 @@ func (a *App) appAssets() *assetSet {
 		s.current()
 		return s
 	}
+	if a.tools != nil && a.tools.islands != "" {
+		s := &assetSet{dir: a.tools.islands, always: true, streams: newStreams()}
+		if s.current(); s.loader == nil {
+			s.loader, s.tag = s.loaderJS() // until the first build: islands say they aren't built yet
+		}
+		return s
+	}
 	assetsMu.Lock()
 	defer assetsMu.Unlock()
 	if assetsReg == nil {
@@ -186,6 +199,30 @@ func (a *App) appAssets() *assetSet {
 	s.loader, s.tag = s.loaderJS()
 	s.allow()
 	return s
+}
+
+// distAssets is the islands go tool vuka build-islands wrote into a
+// frontend's build, for an app that registers none: nil when no frontend
+// has them.
+func distAssets(frontends []*frontend) *assetSet {
+	for _, f := range frontends {
+		sub, err := fs.Sub(f.files, islandsDist)
+		if err != nil {
+			continue
+		}
+		data, err := fs.ReadFile(sub, "manifest.json")
+		if err != nil {
+			continue
+		}
+		s := &assetSet{files: sub}
+		if json.Unmarshal(data, &s.m) != nil {
+			continue
+		}
+		s.loader, s.tag = s.loaderJS()
+		s.allow()
+		return s
+	}
+	return nil
 }
 
 // current is the manifest, and the loader and its tag.
@@ -358,7 +395,7 @@ func (s *assetSet) headTag() string {
 	s.mu.Lock()
 	failed := s.fail != nil
 	s.mu.Unlock()
-	if !m.scripted() && !failed {
+	if !m.scripted() && !failed && !s.always {
 		return ""
 	}
 	return `<script src="` + loaderPath + `?v=` + tag + `" defer></script>`
@@ -417,6 +454,8 @@ func (s *assetSet) serveIsland(w http.ResponseWriter, r *http.Request) {
 	var js []byte
 	if s.dir != "" {
 		js, _ = os.ReadFile(filepath.Join(s.dir, "i", name))
+	} else if s.files != nil {
+		js, _ = fs.ReadFile(s.files, "i/"+name)
 	} else {
 		assetsMu.Lock()
 		js = s.islands[name]

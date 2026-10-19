@@ -319,11 +319,13 @@ func Only(pkgs ...string) Option {
 // VUKA_ENV=development (`VUKA_DEV=1 go run .`). Responses then show
 // internal errors' messages and the toolbar is on, and Start runs
 // tailwindcss --watch and each frontend's Vite dev server, when installed,
-// the app serving through them; Stop ends them. Without the tools the app
-// serves the last build and logs one line saying how to get them. Under vuka
-// run, which runs them itself, it starts nothing. In a test binary it turns
-// on development without starting anything; elsewhere — a production
-// binary — it does nothing, so main can keep it.
+// and, for an app registering islands, vuka build-islands -watch (the vuka
+// command a tool of the module or on PATH), the app serving through them;
+// Stop ends them. Without the tools the app serves the last build and logs
+// one line saying how to get them. Under vuka run, which runs them itself,
+// it starts nothing. In a test binary it turns on development without
+// starting anything; elsewhere — a production binary — it does nothing, so
+// main can keep it.
 func Dev() Option { return OptionFunc(func(a *App) { a.devTools = true }) }
 
 // WithRouter serves the app's routes with r instead of net/http's ServeMux.
