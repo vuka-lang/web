@@ -183,51 +183,58 @@ func (a *App) Use(mw ...Middleware) *App {
 	return a
 }
 
-// RouteOption configures a route registered in code.
-type RouteOption func(*routeSpec)
+// RouteOption configures a registration (App.Get, Registry.Live, …): one
+// of web's (Params, Template, Use, Layout, Wrap, Attrs), another package's
+// (an auth gate, ui.Island) or any value carrying typed attributes, which
+// become the route's, as attributes written on a decorated handler are.
+type RouteOption interface{ Attrs() []any }
 
-// Params names a handler's parameters in order, which reflection can't see:
-// scalar parameters bind by name.
+// routeOpt is an option applied to the route's spec when the app is built.
+type routeOpt func(*routeSpec)
+
+func (o routeOpt) Attrs() []any { return []any{o} }
+
+// Params names a handler's parameters in order (a method's receiver
+// excluded), which reflection can't see: scalar parameters bind by name.
 func Params(names ...string) RouteOption {
-	return func(s *routeSpec) {
+	return routeOpt(func(s *routeSpec) {
 		for i := range s.params {
 			if i < len(names) {
 				s.params[i].Name = names[i]
 			}
 		}
-	}
+	})
 }
 
-// View renders the route's result with a view, as @web.Template does.
-func View(f vuka.File, name ...string) RouteOption {
-	return func(s *routeSpec) {
-		s.view = &declView{file: f}
-		if len(name) > 0 {
-			s.view.name = name[0]
-		}
-	}
+// View renders the route's result with a view, as Template does.
+func View(f vuka.File, name ...string) RouteOption { return Template(f, name...) }
+
+// Wrap adds middleware to the route, as Use does.
+func Wrap(mw ...Middleware) RouteOption {
+	return routeOpt(func(s *routeSpec) { s.mw = append(s.mw, mw...) })
 }
 
-// Wrap adds middleware to the route, as @web.Use does.
-func Wrap(mw ...Middleware) RouteOption { return func(s *routeSpec) { s.mw = append(s.mw, mw...) } }
-
-// Handle registers fn for method and path, bound as a decorated handler is.
+// Handle registers fn for method and path, as Routes.Handle does for every
+// app.
 func (a *App) Handle(method, path string, fn any, opts ...RouteOption) *App {
 	a.mutable("Handle")
-	v := reflect.ValueOf(fn)
-	s := &routeSpec{method: method, path: path, fn: v}
-	if v.Kind() != reflect.Func {
-		a.c.errs = append(a.c.errs, diag.New("E0403", "%s %s: the handler is %T, not a function", method, path, fn).WithHelp("pass a function"))
-		return a
-	}
-	s.where = funcName(v)
-	for i := 0; i < v.Type().NumIn(); i++ {
-		s.params = append(s.params, vuka.Param{Type: v.Type().In(i)})
-	}
-	for _, o := range opts {
-		o(s)
-	}
-	a.specs = append(a.specs, s)
+	a.reg.handle(method, path, fn, opts, true)
+	return a
+}
+
+// Controller makes the struct ctor builds a service whose route methods are
+// served under prefix, as Routes.Controller does for every app.
+func (a *App) Controller(prefix string, ctor any, opts ...RouteOption) *App {
+	a.mutable("Controller")
+	a.reg.controller(prefix, ctor, opts, true)
+	return a
+}
+
+// Service provides the struct ctor builds as a lazy singleton, as
+// Routes.Service does for every app.
+func (a *App) Service(ctor any) *App {
+	a.mutable("Service")
+	a.reg.service(ctor, true)
 	return a
 }
 
@@ -273,26 +280,41 @@ func (a *App) take(pkg string) bool { return a.only == nil || a.only[pkg] }
 func (a *App) build() (http.Handler, error) {
 	prefixes := map[reflect.Type]string{}
 	typeAttrs := map[reflect.Type][]any{}
-	for _, t := range a.reg.services {
-		if a.take(t.Reflect.PkgPath()) {
+	for _, sv := range a.reg.services {
+		if t := sv.typ; sv.own || a.take(t.Reflect.PkgPath()) {
 			a.c.provide(t.New, "service "+t.Name)
 		}
 	}
 	for _, c := range a.reg.controllers {
-		if a.take(c.typ.Reflect.PkgPath()) {
+		if c.own || a.take(c.typ.Reflect.PkgPath()) {
 			a.c.provide(c.typ.New, "controller "+c.typ.Name)
 			prefixes[reflect.PointerTo(c.typ.Reflect)] = c.prefix
-			typeAttrs[reflect.PointerTo(c.typ.Reflect)] = flattenAttrs(c.typ.Attrs)
+			attrs := flattenAttrs(c.typ.Attrs)
+			if c.registered {
+				attrs = append(flattenAttrs(vuka.TypeAttrs(c.typ.Reflect)), attrs...)
+			}
+			typeAttrs[reflect.PointerTo(c.typ.Reflect)] = attrs
 		}
 	}
-	var specs []*routeSpec
+	specs := []*routeSpec(nil)
+	errs := slices.Clone(a.c.errs)
+	errs = append(errs, a.reg.errs...)
 	for _, r := range a.reg.routes {
 		d := r.decl
-		if !a.take(d.Pkg) {
+		if (r.opts == nil || !r.opts.own) && !a.take(d.Pkg) {
+			continue
+		}
+		if t := pageCtor(d); t != nil && ui.IsIsland(t) {
+			ps, err := a.pageSpecs(typePage{r.method, r.path, r.opts.pageType(t, d.Func), reflect.ValueOf(d.Func)})
+			if err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			specs = append(specs, ps...)
 			continue
 		}
 		s := &routeSpec{method: r.method, path: r.path, where: fmt.Sprintf("%s at %s:%d", d.Name, d.File, d.Line),
-			fn: reflect.ValueOf(d.Func), recv: d.Recv, params: d.Params, mw: a.reg.uses[declKey(d)]}
+			fn: reflect.ValueOf(d.Func), recv: d.Recv, params: slices.Clone(d.Params), mw: a.reg.uses[declKey(d)]}
 		if d.Recv != nil {
 			t := d.Recv
 			if t.Kind() != reflect.Pointer {
@@ -302,13 +324,18 @@ func (a *App) build() (http.Handler, error) {
 			s.attrs = append(s.attrs, typeAttrs[t]...)
 		}
 		s.attrs = append(s.attrs, flattenAttrs(d.Attrs)...)
+		if r.opts != nil {
+			ref, _ := vuka.FuncOf(d.Func)
+			s.attrs = append(s.attrs, flattenAttrs(ref.Attrs)...)
+		}
 		if v, ok := a.reg.views[declKey(d)]; ok {
 			s.view = &v
 		}
+		r.opts.applyTo(s)
 		specs = append(specs, s)
 	}
 	for _, ls := range a.reg.lives {
-		if a.take(ls.pkg) {
+		if ls.own || a.take(ls.pkg) {
 			specs = append(specs, ls.route())
 		}
 	}
@@ -318,13 +345,12 @@ func (a *App) build() (http.Handler, error) {
 		}
 		ps, err := a.pageSpecs(p)
 		if err != nil {
-			a.c.errs = append(a.c.errs, err)
+			errs = append(errs, err)
 			continue
 		}
 		specs = append(specs, ps...)
 	}
 	specs = append(specs, a.specs...)
-	errs := slices.Clone(a.c.errs)
 	rec := &recordingRouter{Router: a.router}
 	a.router = rec
 	defer func() { a.router = rec.Router }()

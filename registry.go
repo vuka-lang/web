@@ -7,8 +7,10 @@
 //
 //	func main() { web.New().Run(":8080") }
 //
-// Everything a decorator declares can also be registered from plain Go
-// (App.Get, App.Provide, …); see the README.
+// Everything a decorator declares is a call of the Routes registry, and an
+// App's methods of the same names register on it alone:
+//
+//	app.Get("/pets/{id}", ShowPet, web.Params("id", "store"))
 package web
 
 import (
@@ -28,6 +30,7 @@ type Middleware = func(http.Handler) http.Handler
 type declRoute struct {
 	method, path string
 	decl         *vuka.Decl
+	opts         *routeOpts // registered with options (Registry, App): nil for a decorated handler's
 }
 
 type declView struct {
@@ -36,46 +39,123 @@ type declView struct {
 }
 
 type declController struct {
-	prefix string
-	typ    *vuka.Type
+	prefix     string
+	typ        *vuka.Type
+	own        bool
+	registered bool // by Registry or App: its type's attributes are read at Build
 }
 
 type registry struct {
 	routes      []declRoute
 	views       map[string]declView
 	uses        map[string][]Middleware
-	services    []*vuka.Type
+	services    []declService
 	controllers []declController
 	lives       []*liveSpec
 	pages       []typePage
 	crons       []declCron
+	errs        []error // the registrations' mistakes, which Build reports
 }
 
-var (
-	regMu sync.Mutex
-	reg   = registry{views: map[string]declView{}, uses: map[string][]Middleware{}}
-)
+type declService struct {
+	typ *vuka.Type
+	own bool
+}
+
+// Registry holds what an app is made of: routes, live pages, controllers and
+// services. Routes is the package's, filled at init by the declarations of
+// every package the program links; New gives each app a copy, and an App's
+// methods of the same names add to its own:
+//
+//	func init() {
+//		web.Routes.Get("/pets/{id}", ShowPet, web.Params("id", "store"))
+//		web.Routes.Live("/board", NewBoard)
+//	}
+//
+//	app.Get("/pets/{id}", ShowPet, web.Params("id", "store"))
+//
+// It is what the decorators are: @web.Get("/pets/{id}") on ShowPet is the
+// call above.
+type Registry struct {
+	mu sync.Mutex
+	r  registry
+}
+
+// Routes is the registry of the program's declared routes, pages,
+// controllers and services.
+var Routes = &Registry{r: registry{views: map[string]declView{}, uses: map[string][]Middleware{}}}
+
+func (*Registry) vukaRegistry() {}
+
+func (g *Registry) record(f func(*registry)) *Registry {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	f(&g.r)
+	return g
+}
+
+// Handle registers fn for method and path: a handler, its parameters bound
+// from the request (scalars by the names Params gives them), or the
+// constructor of an @ui.Island struct (a page backed by its island).
+func (g *Registry) Handle(method, path string, fn any, opts ...RouteOption) *Registry {
+	return g.record(func(r *registry) { r.handle(method, path, fn, opts, false) })
+}
+
+func (g *Registry) Get(path string, fn any, opts ...RouteOption) *Registry {
+	return g.Handle(http.MethodGet, path, fn, opts...)
+}
+func (g *Registry) Post(path string, fn any, opts ...RouteOption) *Registry {
+	return g.Handle(http.MethodPost, path, fn, opts...)
+}
+func (g *Registry) Put(path string, fn any, opts ...RouteOption) *Registry {
+	return g.Handle(http.MethodPut, path, fn, opts...)
+}
+func (g *Registry) Patch(path string, fn any, opts ...RouteOption) *Registry {
+	return g.Handle(http.MethodPatch, path, fn, opts...)
+}
+func (g *Registry) Delete(path string, fn any, opts ...RouteOption) *Registry {
+	return g.Handle(http.MethodDelete, path, fn, opts...)
+}
+
+// Live serves a stateful component as a page at path (see the Live
+// decorator): page is its constructor, NewBoard, which builds each page's
+// component, its parameters of provided types injected and the others
+// zero. With ui.Island among opts it is a page backed by its island.
+func (g *Registry) Live(path string, page any, opts ...RouteOption) *Registry {
+	return g.record(func(r *registry) { r.live(path, page, opts, false) })
+}
+
+// Controller makes the struct ctor builds a service whose route methods
+// (their method expressions registered: (*PetAdmin).Index) are served
+// under prefix.
+func (g *Registry) Controller(prefix string, ctor any, opts ...RouteOption) *Registry {
+	return g.record(func(r *registry) { r.controller(prefix, ctor, opts, false) })
+}
+
+// Service provides the struct ctor builds as a dependency, a lazy
+// singleton, as @web.Service does.
+func (g *Registry) Service(ctor any) *Registry {
+	return g.record(func(r *registry) { r.service(ctor, false) })
+}
 
 func declKey(d *vuka.Decl) string {
 	return fmt.Sprintf("%s\x00%s\x00%s:%d", d.Pkg, d.Name, d.File, d.Line)
 }
 
-func record(f func(*registry)) {
-	regMu.Lock()
-	defer regMu.Unlock()
-	f(&reg)
-}
+func record(f func(*registry)) { Routes.record(f) }
 
 func snapshot() registry {
-	regMu.Lock()
-	defer regMu.Unlock()
+	Routes.mu.Lock()
+	defer Routes.mu.Unlock()
+	reg := &Routes.r
 	s := registry{
 		routes:      append([]declRoute(nil), reg.routes...),
-		services:    append([]*vuka.Type(nil), reg.services...),
+		services:    append([]declService(nil), reg.services...),
 		controllers: append([]declController(nil), reg.controllers...),
 		lives:       append([]*liveSpec(nil), reg.lives...),
 		pages:       append([]typePage(nil), reg.pages...),
 		crons:       append([]declCron(nil), reg.crons...),
+		errs:        append([]error(nil), reg.errs...),
 		views:       make(map[string]declView, len(reg.views)),
 		uses:        make(map[string][]Middleware, len(reg.uses)),
 	}
@@ -99,9 +179,9 @@ func snapshot() registry {
 // one (embedding ui.Live) is declared with @web.Live.
 func Handle(method, path string) vuka.Bundle {
 	return vuka.Dual(func(d *vuka.Decl) {
-		record(func(r *registry) { r.routes = append(r.routes, declRoute{method, path, d}) })
+		record(func(r *registry) { r.routes = append(r.routes, declRoute{method: method, path: path, decl: d}) })
 	}, func(t *vuka.Type) {
-		record(func(r *registry) { r.pages = append(r.pages, typePage{method, path, t}) })
+		record(func(r *registry) { r.pages = append(r.pages, typePage{method, path, t, reflect.Value{}}) })
 	})
 }
 
@@ -114,18 +194,41 @@ func Delete(path string) vuka.Bundle { return Handle(http.MethodDelete, path) }
 // Template renders a route's result with a view: a .templ file of the same
 // package (its one exported component, or the one named) or an html/template
 // file (its main template, or the one named). The order of @web.Template and
-// the route's method decorator doesn't matter.
-func Template(f vuka.File, name ...string) func(*vuka.Decl) {
+// the route's method decorator doesn't matter; from Go it is an option:
+// app.Get("/pets/{id}", ShowPet, web.Template(petView)).
+func Template(f vuka.File, name ...string) Templates {
 	v := declView{file: f}
 	if len(name) > 0 {
 		v.name = name[0]
 	}
-	return func(d *vuka.Decl) { record(func(r *registry) { r.views[declKey(d)] = v }) }
+	return func(d *vuka.Decl) {
+		if sink, ok := d.Func.(*declView); ok {
+			*sink = v
+			return
+		}
+		record(func(r *registry) { r.views[declKey(d)] = v })
+	}
 }
 
-// Uses is what Use returns: a declarer adding middleware to one route, and an
-// Option adding it to the whole app.
+// Templates is what Template returns: a declarer giving a route its view,
+// and an option doing so.
+type Templates func(*vuka.Decl)
+
+// Attrs makes the view a route's option.
+func (t Templates) Attrs() []any { return []any{t} }
+
+// Uses is what Use returns: a declarer adding middleware to one route, a
+// route's option doing so, and an Option adding it to the whole app.
 type Uses func(*vuka.Decl)
+
+// Attrs makes the middleware a route's option.
+func (u Uses) Attrs() []any { return []any{u} }
+
+func (u Uses) middleware() []Middleware {
+	var mw []Middleware
+	u(&vuka.Decl{Func: &mw})
+	return mw
+}
 
 // Use adds HTTP middleware, the first given outermost: @web.Use(mw) on a
 // route, or web.New(web.Use(mw)) for every request of the app.
@@ -139,11 +242,7 @@ func Use(mw ...Middleware) Uses {
 	}
 }
 
-func (u Uses) apply(a *App) {
-	var mw []Middleware
-	u(&vuka.Decl{Func: &mw})
-	a.mw = append(a.mw, mw...)
-}
+func (u Uses) apply(a *App) { a.mw = append(a.mw, u.middleware()...) }
 
 // Service makes a struct a dependency: a lazy singleton built from its fields,
 // each injected by type.
@@ -151,7 +250,7 @@ func Service(t *vuka.Type) {
 	if t.New == nil {
 		panic(diag.New("E0418", "@web.Service on %s, which isn't a struct", t.Name).WithHelp("put it on a struct type"))
 	}
-	record(func(r *registry) { r.services = append(r.services, t) })
+	record(func(r *registry) { r.services = append(r.services, declService{typ: t}) })
 }
 
 // Controller makes a struct a service whose route methods are served under
@@ -161,7 +260,7 @@ func Controller(prefix string) func(*vuka.Type) {
 		if t.New == nil {
 			panic(diag.New("E0418", "@web.Controller on %s, which isn't a struct", t.Name).WithHelp("put it on a struct type"))
 		}
-		record(func(r *registry) { r.controllers = append(r.controllers, declController{prefix, t}) })
+		record(func(r *registry) { r.controllers = append(r.controllers, declController{prefix: prefix, typ: t}) })
 	}
 }
 

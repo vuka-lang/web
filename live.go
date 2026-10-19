@@ -54,18 +54,18 @@ func Live(path string, opts ...LiveOption) func(*vuka.Type) {
 	}
 }
 
-// LiveOption configures a page declared with Live.
-type LiveOption interface{ liveOption(*liveSpec) }
+// LiveOption configures a page declared with Live; it is a RouteOption too.
+type LiveOption interface {
+	RouteOption
+	liveOption(*liveSpec)
+}
 
 type liveOptionFunc func(*liveSpec)
 
 func (f liveOptionFunc) liveOption(s *liveSpec) { f(s) }
+func (f liveOptionFunc) Attrs() []any           { return []any{f} }
 
-func (u Uses) liveOption(s *liveSpec) {
-	var mw []Middleware
-	u(&vuka.Decl{Func: &mw})
-	s.mw = append(s.mw, mw...)
-}
+func (u Uses) liveOption(s *liveSpec) { s.mw = append(s.mw, u.middleware()...) }
 
 // Layout wraps a Live page's component: the page is layout(component).
 // Styles and scripts (Style, Script, CSS, JS) given with it belong to the
@@ -76,34 +76,36 @@ func Layout(layout func(page ui.Node) ui.Node, assets ...Asset) LiveOption {
 
 type liveSpec struct {
 	path, name, pkg string
+	own             bool         // registered on an App: Only doesn't apply
+	registered      bool         // by Registry or App: its type's attributes are read at Build
 	typ             reflect.Type // the struct
 	template        reflect.Value
+	ctor            reflect.Value // its constructor, when registered with one
 	layout          func(ui.Node) ui.Node
 	mw              []Middleware
-	attrs           []any         // the type's typed attributes
-	island          bool          // a page backed by its island (@web.Live or @web.Get on an @ui.Island type)
-	routeOpts       []RouteOption // App.Live's Attrs and Wrap
+	attrs           []any      // the type's typed attributes
+	island          bool       // a page backed by its island (@web.Live or @web.Get on an @ui.Island type)
+	routeOpts       []routeOpt // Attrs, Wrap, Params given with it
 }
 
 // route is the page's GET route.
 func (ls *liveSpec) route() *routeSpec {
 	s := &routeSpec{method: http.MethodGet, path: ls.path, where: "live page " + ls.name, live: ls, mw: slices.Clone(ls.mw), attrs: slices.Clone(ls.attrs)}
+	if ls.registered {
+		s.attrs = append(flattenAttrs(vuka.TypeAttrs(ls.typ)), s.attrs...)
+	}
 	for _, o := range ls.routeOpts {
 		o(s)
 	}
 	return s
 }
 
-// Live serves component (a pointer to a stateful component, whose fields are
-// the defaults) as a page at path, as the Live decorator does.
-func (a *App) Live(path string, component ui.Stateful, opts ...LiveOption) *App {
+// Live serves a stateful component as a page at path, as Routes.Live does
+// for every app: page is its constructor (NewBoard), or a pointer to the
+// component whose fields are the defaults.
+func (a *App) Live(path string, page any, opts ...RouteOption) *App {
 	a.mutable("Live")
-	v := reflect.ValueOf(component)
-	ls := &liveSpec{path: path, typ: v.Type().Elem(), name: v.Type().Elem().String(), template: v.Elem()}
-	for _, o := range opts {
-		o.liveOption(ls)
-	}
-	a.specs = append(a.specs, ls.route())
+	a.reg.live(path, page, opts, true)
 	return a
 }
 
@@ -173,6 +175,9 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	if ls.typ.Kind() != reflect.Struct || !reflect.PointerTo(ls.typ).Implements(statefulType) {
 		return nil, failf("E0329", what, s.where, "%s is not a stateful component", ls.name).WithHelp("embed ui.Live in a struct with a Render() ui.Node method")
 	}
+	if err := a.checkCtor(ls.ctor, s.where); err != nil {
+		return nil, err
+	}
 	pathNames := pathParams(s.path)
 	props, err := a.liveProps(ls.typ, s.where)
 	if ls.island {
@@ -209,11 +214,11 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 			noteRoute(rq.ctx, "GET "+s.path, s.where)
 		}
 		end := a.span(rq.ctx, "handler", s.where)
-		c := reflect.New(ls.typ)
-		if ls.template.IsValid() {
-			c.Elem().Set(ls.template)
+		c, err := a.newComponent(ls.typ, ls.template, ls.ctor)
+		if err == nil {
+			err = a.bindProps(c.Elem(), props, pathNames, r)
 		}
-		if err := a.bindProps(c.Elem(), props, pathNames, r); err != nil {
+		if err != nil {
 			end()
 			a.writeError(w, r, err, true)
 			return

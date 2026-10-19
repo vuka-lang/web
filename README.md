@@ -389,8 +389,8 @@ func (c *Counter) Render() ui.Node {
   else the field name, ignoring case). The page is the component inside the
   layout `web.Layout(f, assets…)` names, else the app's `web.LiveLayout(f, assets…)`, else a bare
   document — `f` is `func(page ui.Node) ui.Node`. `web.Use(mw…)` adds
-  middleware. From Go: `app.Live("/counter", &Counter{Start: 1})` (the
-  value's fields are the defaults).
+  middleware. From Go: `app.Live("/counter", NewCounter)` (or `&Counter{Start: 1}`, whose
+  fields are the defaults).
 - Any GET route whose page — a `ui.Node` result, or a templ view —
   renders a stateful component or an event handler is live by itself:
 
@@ -1416,17 +1416,28 @@ Login throttling and the per-address live connection cap count by it.
 
 ## Plain Go
 
-Everything works from Go without decorators. Reflection can't see parameter
-names, so scalar parameters need `web.Params`; structs, request values and
-dependencies bind as usual.
+Everything works from Go without decorators, with the calls they are:
+`@web.Get("/pets/{id}")` on `ShowPet` is `web.Routes.Get("/pets/{id}",
+ShowPet, web.Params("id", "store"))` at init, and an `App`'s methods of the
+same names register on that app alone. Reflection can't see parameter names,
+so scalar parameters are named with `web.Params` (the receiver excluded);
+structs, request values and dependencies bind as usual.
 
 ```go
-app := web.New(web.Provide(NewStore))
-app.Get("/pets/{id}", func(s *Store, id int) (Pet, error) { … }, web.Params("s", "id"))
+app := web.New()
+app.Service(NewStore)
+app.Get("/pets/{id}", ShowPet, web.Params("id", "store"), auth.Required())
 app.Post("/pets", func(in NewPet, s *Store) (Pet, error) { … })
-app.Get("/page", page, web.View(vuka.File("views/page.html")), web.Wrap(mw))
+app.Get("/page", page, web.Template(vuka.File("views/page.html")), web.Use(mw))
+app.Live("/board", NewBoard)
+app.Live("/applicants", NewApplicants, ui.Island(ui.Layout(layouts.Page("Applicants"))))
+app.Controller("/admin/pets", NewPetAdmin)
+app.Get("/{id}", (*PetAdmin).Show, web.Params("id"))
 ```
 
+A page's constructor builds each page's component, its parameters of
+provided types injected and the others zero. Options are `RouteOption`s:
+web's own, an auth gate, `ui.Island`, or any value carrying typed attributes.
 From Go, `vuka.File("…")` reads from disk relative to the working directory.
 
 Generated code only makes things faster. Live components written as nodes

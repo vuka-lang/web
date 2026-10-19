@@ -57,11 +57,13 @@ import (
 type typePage struct {
 	method, path string
 	typ          *vuka.Type
+	ctor         reflect.Value // its constructor, when registered with one
 }
 
 // islandPage is a stateless page's: its type and its fields' bindings.
 type islandPage struct {
 	typ   reflect.Type
+	ctor  reflect.Value
 	name  string
 	path  string
 	binds []prop
@@ -83,10 +85,10 @@ func (a *App) pageSpecs(p typePage) ([]*routeSpec, error) {
 	}
 	attrs := flattenAttrs(p.typ.Attrs)
 	if reflect.PointerTo(t).Implements(statefulType) {
-		ls := &liveSpec{path: p.path, typ: t, name: p.typ.Name, pkg: t.PkgPath(), attrs: attrs, island: true}
+		ls := &liveSpec{path: p.path, typ: t, name: p.typ.Name, pkg: t.PkgPath(), attrs: attrs, island: true, ctor: p.ctor}
 		return []*routeSpec{ls.route()}, nil
 	}
-	ip := &islandPage{typ: t, name: p.typ.Name, path: p.path}
+	ip := &islandPage{typ: t, ctor: p.ctor, name: p.typ.Name, path: p.path}
 	return []*routeSpec{
 		{method: http.MethodGet, path: p.path, where: where, attrs: attrs, island: ip, html: true},
 		{method: http.MethodPost, path: p.path, where: where + " (its calls)", attrs: attrs, island: ip},
@@ -166,6 +168,9 @@ func mountPage(ctx context.Context, x reflect.Value) error {
 func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 	ip := s.island
 	binds, err := a.islandBinds(ip.typ, s.path, s.where)
+	if err == nil {
+		err = a.checkCtor(ip.ctor, s.where)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -175,8 +180,11 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rq := a.newRequest(w, r)
 		end := a.span(rq.ctx, "handler", s.where)
-		x := reflect.New(ip.typ)
-		if err := a.bindProps(x.Elem(), binds, pathNames, r); err != nil {
+		x, err := a.newComponent(ip.typ, reflect.Value{}, ip.ctor)
+		if err == nil {
+			err = a.bindProps(x.Elem(), binds, pathNames, r)
+		}
+		if err != nil {
 			end()
 			a.writeError(w, r, err, true)
 			return
@@ -262,9 +270,12 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 			what = "set"
 		}
 		end := a.span(rq.ctx, "handler", s.where+"."+what)
-		x := reflect.New(ip.typ)
+		x, err := a.newComponent(ip.typ, reflect.Value{}, ip.ctor)
 		loads := ui.LoadsFrom(ip.typ, []byte(call.Props))
-		raw, err := ui.UntagProps([]byte(call.Props))
+		var raw []byte
+		if err == nil {
+			raw, err = ui.UntagProps([]byte(call.Props))
+		}
 		if err == nil {
 			err = json.Unmarshal(raw, x.Interface())
 		}
@@ -458,7 +469,7 @@ func (a *App) Page(path string, component any, attrs ...any) *App {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	ps, err := a.pageSpecs(typePage{http.MethodGet, path, &vuka.Type{Name: t.String(), Reflect: t, Attrs: attrs}})
+	ps, err := a.pageSpecs(typePage{http.MethodGet, path, &vuka.Type{Name: t.String(), Reflect: t, Attrs: attrs}, reflect.Value{}})
 	if err != nil {
 		a.c.errs = append(a.c.errs, err)
 		return a
