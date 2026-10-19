@@ -1394,6 +1394,13 @@ app.Get("/page", page, web.View(vuka.File("views/page.html")), web.Wrap(mw))
 
 From Go, `vuka.File("…")` reads from disk relative to the working directory.
 
+Generated code only makes things faster. Live components written as nodes
+(`ui.El`, no JSX) patch as whole components: the same page in the browser,
+larger replies ([ui](https://github.com/vuka-lang/ui#live-patches-without-render-tracking)).
+An island's component works untyped without `vuka-live.d.ts`: `useLive()`
+comes from the island build; only `defineProps<T>()` of its types needs the
+file.
+
 ## Testing
 
 ```
