@@ -95,13 +95,14 @@ func envDir(cwd string, files []string) string {
 func reservedEnv(key string) bool { return strings.HasPrefix(key, "VUKA_") }
 
 // IsDev reports whether the process runs in development: VUKA_ENV is
-// "development", or vuka run names its session directory (VUKA_DEV_DIR).
+// "development", VUKA_DEV is 1, or vuka run names its session directory
+// (VUKA_DEV_DIR).
 // Both come from the real environment only — an env file can't set them —
 // so a deployed binary is never switched into development by a file next to
 // it. (An app made with the Dev option is in development whatever IsDev
 // says.)
 func IsDev() bool {
-	return os.Getenv("VUKA_ENV") == "development" || os.Getenv(DevDirEnv) != ""
+	return os.Getenv("VUKA_ENV") == "development" || os.Getenv("VUKA_DEV") == "1" || os.Getenv(DevDirEnv) != ""
 }
 
 // LoadEnv reads env files into the process environment, as New does: for

@@ -90,7 +90,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.Use(mw…)` | app-wide middleware (also `app.Use`); runs for every request, 404s included |
 | `web.WithRouter(r)` | another router (below) |
 | `web.Only(pkgs…)` | take only the declarations of these packages (import paths; `"main"`) |
-| `web.Dev()` | show internal error messages; also `VUKA_ENV=development` |
+| `web.Dev()` | development where the process runs in it (`VUKA_DEV=1`, `VUKA_ENV=development`) and in tests: internal error messages, Tailwind and Vite for `go run .` (below); nothing in production |
 | `web.DotEnv(files…)`, `web.NoDotEnv()`, `web.Require(keys…)` | env files and required variables (below) |
 | `web.OnError(f)` | replace the error page / JSON error body |
 | `web.LiveLayout(f)`, `LiveKey(k)`, `LiveOrigins(p…)`, `LiveTokenTTL(d)`, `WithRelay(r)` | live pages (below) |
@@ -166,7 +166,8 @@ and are skipped in tests, so test runs don't depend on the developer's box.
 Keys starting with `VUKA_` (`VUKA_ENV`, `VUKA_DEV_DIR`, `VUKA_DEV_LIVE_KEY`…)
 come from the real environment only: an env file setting one is ignored
 (and logged), so a file next to a deployed binary never switches it into
-development. `web.IsDev()` says whether the process runs in development.
+development. `web.IsDev()` says whether the process runs in development
+(`VUKA_ENV=development`, `VUKA_DEV=1`, or `vuka run`).
 
 Files are read from the working directory or, when it has none of them, from
 the nearest parent up to the module root (the directory with `go.mod`), so
@@ -1049,12 +1050,45 @@ built-in one, which is just that line. Elsewhere, name it:
 `web.New(web.Tailwind("assets/site.css"))` (a string literal: the `vuka`
 command reads it from the source).
 
+Without the `vuka` command, `web.Dev()` runs the watcher for `go run .`
+([below](#go-run)).
+
 `web.NoTailwind()` turns it all off, as does `VUKA_TAILWIND=off` for the
 `vuka` command. Without the Tailwind CLI, `vuka run` says how to install it
 and serves pages unstyled; `vuka build` fails.
 
 `web.RegisterCSS(name, css)` serves another stylesheet at `/_vuka/<name>`;
 the file `vuka build` generates registers `app.css` with it.
+
+## go run
+
+The `vuka` command is a convenience; a plain `go run .` gets live CSS and the
+frontend's dev server from one option:
+
+```go
+app := web.New(web.Dev(), web.Frontend(dist, "frontend/dist"))
+app.Run("")
+```
+
+```sh
+VUKA_DEV=1 go run .        # or VUKA_ENV=development
+```
+
+In development `Start` (`Run`) runs `tailwindcss --watch` on the app's
+stylesheet (as `vuka run` does, into `.vuka/tailwind/`) and each frontend's
+Vite dev server (`node_modules/.bin/vite` in its project, the Vite plugin
+copied in), and the app serves through them: pages swap in each new
+stylesheet, and load their modules from Vite. Their output is logged with
+`tailwind:` and `vite:` prefixes. `Stop` ends them — SIGTERM to each one's
+process group, SIGKILL after 2s — and a dev server whose app is gone,
+however it ended, exits by itself.
+
+What is missing isn't installed for you: the app serves the last build and
+logs one line saying how to get live CSS and the dev server. Nothing runs
+twice — not under `vuka run`, which runs both itself, nor beside a Vite dev
+server or a `VUKA_TAILWIND_CSS` watcher already running. In a test binary
+`web.Dev()` turns on development (error messages) and starts nothing; in a
+production binary it does nothing at all, so `main` keeps it.
 
 ## Styles and scripts
 
@@ -1298,7 +1332,8 @@ configure. Other files redirect to the dev server, which has the current
 build nor a dev server, pages say how to build. `vuka run` starts the
 frontend's Vite (and installs its dependencies first), `vuka build` runs
 `vite build` before embedding; both copy the plugin into
-`frontend/vuka/vite.js`. A frontend without a `package.json` is served as it
+`frontend/vuka/vite.js`. Without the `vuka` command, `web.Dev()` starts the
+dev server for `go run .` ([above](#go-run)). A frontend without a `package.json` is served as it
 is. The development toolbar is added to the page; the app's Tailwind
 stylesheet isn't. An example is in [`examples/spa`](examples/spa).
 

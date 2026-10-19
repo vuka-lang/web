@@ -1,0 +1,13 @@
+#!/bin/sh
+# A fake Vite dev server: announces $FAKE_VITE_ORIGIN in the hot file, as the
+# vuka() plugin does, and removes it on SIGTERM; with FAKE_VITE_STUBBORN it
+# ignores SIGTERM.
+if [ -n "$FAKE_VITE_STUBBORN" ]; then
+	trap '' TERM
+else
+	trap 'rm -f dist/.vite/vuka-hot.json; exit 0' TERM
+fi
+echo "$$ $VUKA_DEV_PARENT" > pids
+mkdir -p dist/.vite
+printf '{"origin":"%s","base":"/","pid":%d}\n' "$FAKE_VITE_ORIGIN" $$ > dist/.vite/vuka-hot.json
+while :; do sleep 0.05; done

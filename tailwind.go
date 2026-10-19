@@ -81,13 +81,17 @@ func cssTag(css []byte) string {
 	return base64.RawURLEncoding.EncodeToString(sum[:6])
 }
 
-// appCSS is the app's stylesheet: the file vuka run names, else the one
-// registered, else none.
+// appCSS is the app's stylesheet: the file vuka run (or Dev's Tailwind)
+// keeps built, else the one registered, else none.
 func (a *App) appCSS() *stylesheet {
 	if a.noCSS {
 		return nil
 	}
-	if f := os.Getenv(CSSEnv); f != "" {
+	f := os.Getenv(CSSEnv)
+	if a.tools != nil && a.tools.css != "" {
+		f = a.tools.css
+	}
+	if f != "" {
 		return &stylesheet{file: f, dev: true, streams: newStreams()}
 	}
 	cssMu.Lock()

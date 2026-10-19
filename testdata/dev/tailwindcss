@@ -1,0 +1,9 @@
+#!/bin/sh
+# A fake tailwindcss --watch: builds the -o file, starts a child of its own
+# (which the stop signals to the process group end), then runs until its
+# stdin closes.
+while [ $# -gt 0 ]; do [ "$1" = -o ] && out=$2; shift; done
+printf '.built{color:red}\n' > "$out"
+sleep 600 &
+echo "$$ $!" > "$out.pids"
+cat > /dev/null

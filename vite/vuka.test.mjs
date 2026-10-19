@@ -5,7 +5,8 @@ import { EventEmitter } from 'node:events'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import vuka, { HOT_FILE, devOrigin } from './vuka.js'
+import { spawnSync } from 'node:child_process'
+import vuka, { HOT_FILE, alive, devOrigin } from './vuka.js'
 
 function project(extra = {}) {
   const root = mkdtempSync(join(tmpdir(), 'vuka-vite-'))
@@ -108,4 +109,10 @@ test('an island build has a relative base: lazy chunks load beside the chunk imp
     else process.env.VUKA_ISLAND_BUILD = prev
     rmSync(root, { recursive: true })
   }
+})
+
+test('alive tells a running process from a finished one', () => {
+  assert.equal(alive(process.pid), true)
+  const done = spawnSync(process.execPath, ['-e', '']).pid
+  assert.equal(alive(done), false)
 })
