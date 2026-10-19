@@ -66,14 +66,14 @@ func (b *booksLive) Search(ctx context.Context, q string) error {
 }
 
 func (b *booksLive) Render() ui.Node {
-	return ui.DataTable(ui.DataTableProps[bookRow]{
+	return ui.DataTable[bookRow]{
 		Columns:  []ui.Column[bookRow]{{Header: ui.Text("Title"), Cell: func(r bookRow) ui.Node { return ui.Text(r.Title) }}},
 		Page:     b.pager.Result(),
 		Search:   b.query,
 		OnPage:   b.pager.GoTo,
 		OnSearch: b.Search,
 		RowKey:   func(r bookRow) any { return r.ID },
-	})
+	}
 }
 
 func pushAfter(t *testing.T, page, marker string) (id, value string) {
@@ -140,14 +140,14 @@ func (p *toastLive) Clear(ctx context.Context) error { p.msgs = nil; return nil 
 func (p *toastLive) Render() ui.Node {
 	var toasts []ui.Node
 	for i, m := range p.msgs {
-		toasts = append(toasts, ui.Toast(ui.ToastProps{
+		toasts = append(toasts, ui.Toast{
 			ID: fmt.Sprintf("t%d", i), Variant: ui.AlertSuccess, Title: m, Timeout: 4 * time.Second,
-		}))
+		})
 	}
 	return ui.El("div", nil,
 		ui.El("button", []ui.Attr{{Name: "id", Value: "add"}, {Name: "onClick", Value: ui.On(p.Add)}}, ui.Text("Notify")),
 		ui.El("button", []ui.Attr{{Name: "id", Value: "clear"}, {Name: "onClick", Value: ui.On(p.Clear)}}, ui.Text("Clear")),
-		ui.ToastContainer(ui.ToastContainerProps{Children: ui.Fragment(toasts...)}),
+		ui.ToastContainer{Children: ui.Fragment(toasts...)},
 	)
 }
 
