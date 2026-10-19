@@ -53,7 +53,7 @@ func TestBootDiagnostics(t *testing.T) {
 		" --> t.vuka:" + itoa(second.Line) + "\n" +
 		" ::: t.vuka:" + itoa(first.Line) + ": declared here first\n" +
 		"  = help: give one of them another path or method\n" +
-		"  = note: vuka explain E0401 (https://vuka-lang.github.io/vuka/errors/E0401)"
+		"  = note: vuka explain E0401 (" + diag.DocsURL + "E0401)"
 	if err.Error() != want {
 		t.Errorf("got:\n%v\nwant:\n%s", err, want)
 	}
