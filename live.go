@@ -353,7 +353,7 @@ func patchParams(t reflect.Type) (*params, error) {
 	pt := reflect.PointerTo(t)
 	for i := 0; i < pt.NumMethod(); i++ {
 		m := pt.Method(i)
-		if m.Name != "Update" && !strings.HasPrefix(m.Name, "Update__") {
+		if !ui.IsUpdate(m) {
 			continue
 		}
 		in := m.Type.In(m.Type.NumIn() - 1)

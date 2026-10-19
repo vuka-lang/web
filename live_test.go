@@ -481,15 +481,28 @@ type twoUpdates struct {
 	ui.Live
 }
 
-func (*twoUpdates) Update(pagerParams)     {}
-func (*twoUpdates) Update__p(*pagerParams) {}
-func (*twoUpdates) Render() ui.Node        { return nil }
+func (*twoUpdates) Update(pagerParams)             {}
+func (*twoUpdates) UpdatePagerParams(*pagerParams) {}
+func (*twoUpdates) Render() ui.Node                { return nil }
+
+type oldUpdates struct {
+	ui.Live
+}
+
+func (*oldUpdates) Update(pagerParams)     {}
+func (*oldUpdates) Update__p(*pagerParams) {}
+func (*oldUpdates) Render() ui.Node        { return nil }
 
 func TestLiveTwoParamsUpdates(t *testing.T) {
 	app := New(Only("none"))
 	app.Live("/x", &twoUpdates{})
 	if err := app.Build(); err == nil || !strings.Contains(err.Error(), "two Update methods taking web.URLParams structs") {
 		t.Fatalf("%v", err)
+	}
+	app = New(Only("none"))
+	app.Live("/x", &oldUpdates{})
+	if err := app.Build(); err == nil || !strings.Contains(err.Error(), "two Update methods taking web.URLParams structs") {
+		t.Fatalf("an overload named as older vuka commands did: %v", err)
 	}
 }
 
