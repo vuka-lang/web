@@ -63,12 +63,19 @@ const (
 // index.html included, is revalidated by its ETag. The .vite directory is
 // never served.
 //
-// Outside development a root without index.html is a Build error. In
-// development (Dev, VUKA_ENV=development, or vuka run) the files are read
-// from disk when root is found there (beside the source calling Frontend,
-// else in the working directory), a running Vite dev server serves the
-// page's modules, and a frontend not built yet shows a page saying how to
-// build it.
+// The app's islands are embedded with it: go tool vuka build-islands writes
+// them into root's .vuka directory, and the app serves them from there. A
+// build of islands alone, with no index.html, serves them and answers other
+// paths 404:
+//
+//	//go:generate go tool vuka build-islands
+//
+// Outside development a root without index.html or islands is a Build
+// error. In development (Dev, VUKA_ENV=development, or vuka run) the files
+// are read from disk when root is found there (beside the source calling
+// Frontend, else in the working directory), a running Vite dev server
+// serves the page's modules, and a frontend not built yet shows a page
+// saying how to build it.
 func Frontend(fsys fs.FS, root string, opts ...FrontendOption) Option {
 	f := &frontend{fsys: fsys, root: strings.Trim(path.Clean("/"+filepath.ToSlash(root)), "/")}
 	if _, file, _, ok := runtime.Caller(1); ok && filepath.IsAbs(file) {
@@ -177,6 +184,9 @@ func (f *frontend) prepare(a *App) error {
 		return nil // read per request: the build, or the dev server, may come later
 	}
 	index, err := fs.ReadFile(f.files, "index.html")
+	if err != nil && f.islandsOnly() {
+		return nil
+	}
 	if err != nil {
 		what := "has no index.html"
 		if errors.Is(err, fs.ErrNotExist) && !hasFiles(f.files) {
@@ -189,6 +199,14 @@ func (f *frontend) prepare(a *App) error {
 	f.index = f.withEnv(index)
 	f.indexTag = cssTag(f.index)
 	return nil
+}
+
+// islandsOnly reports whether the build holds islands (go tool vuka
+// build-islands) and no page of its own: an app's islands embedded with no
+// single-page app beside them.
+func (f *frontend) islandsOnly() bool {
+	_, err := fs.Stat(f.files, islandsDist+"/manifest.json")
+	return err == nil
 }
 
 func hasFiles(fsys fs.FS) bool {
@@ -343,6 +361,10 @@ func (f *frontend) serveFile(w http.ResponseWriter, r *http.Request, name string
 // how to build when there is neither.
 func (f *frontend) serveIndex(w http.ResponseWriter, r *http.Request) {
 	if !f.dev {
+		if f.index == nil {
+			http.NotFound(w, r) // a build of islands only
+			return
+		}
 		serveContent(w, r, "text/html; charset=utf-8", f.indexTag, false, bytes.NewReader(f.index))
 		return
 	}
@@ -356,6 +378,10 @@ func (f *frontend) serveIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	if page == nil {
 		page, _ = fs.ReadFile(f.files, "index.html")
+		if page == nil && f.islandsOnly() {
+			http.NotFound(w, r)
+			return
+		}
 		if page == nil {
 			page = []byte(placeholderPage(f))
 		}
