@@ -831,7 +831,7 @@ func Tabs() ui.Node {
 
 A live page's renders leave what the browser set alone; a component sets a
 state from the server with `c.PushJS(tab.Set("logs"))`. Guide:
-[client state](https://vuka-lang.github.io/vuka/ui/state); example:
+[client state](https://vuka-lang.github.io/ui/state); example:
 `examples/live/state.vuka`.
 
 ## Dependency injection
@@ -1261,7 +1261,7 @@ row deleted, another process) is caught within `web.LiveCheckEvery` (30s),
 when its identity is also loaded again if `LiveRecheck` (60s) has passed. Its sessions and tokens are kept in memory unless the
 app gives it stores. An app's own login handler re-renders its page on a
 failure (see Forms that fail) with `auth.LoginMessage(err)`;
-`auth.LoginPage` keeps the posted login and `next`. See the [auth guide](https://vuka-lang.github.io/vuka/web/auth)
+`auth.LoginPage` keeps the posted login and `next`. See the [auth guide](https://vuka-lang.github.io/web/auth)
 and [`examples/auth`](examples/auth).
 
 **CSRF.** `web.CSRF()` (which `auth.Module` turns on) answers 403 to a POST,
@@ -1381,7 +1381,7 @@ func (o *Orders) Changed(ctx context.Context) error           { … }
 func (o *Orders) Cancel(ctx context.Context, id int64) error { … }
 ```
 
-The guide: [Islands](https://vuka-lang.github.io/vuka/web/islands). An
+The guide: [Islands](https://vuka-lang.github.io/web/islands). An
 example is in [`examples/islands`](examples/islands).
 
 ## Static files
@@ -1476,7 +1476,7 @@ commands and navigation also run in node over a small DOM
 From v0.50.0, vuka, ui, web and the `vuka` command are released together
 under one version; require them at the same version (`vuka upgrade` moves an
 app between versions). See
-[Versions and compatibility](https://vuka-lang.github.io/vuka/project/versions).
+[Versions and compatibility](https://vuka-lang.github.io/project/versions).
 
 ## License
 
