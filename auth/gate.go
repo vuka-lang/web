@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
 	"github.com/vuka-lang/web"
 )
@@ -345,7 +346,7 @@ type livePageKey struct{}
 func (g Gate) call(c *vuka.Call) {
 	own := c.Attrs()
 	if !hasGate(own, g) {
-		if isPublic(own) || c.Receiver != nil && lifecycle(c.Name) {
+		if isPublic(own) || c.Receiver != nil && lifecycle(c) {
 			c.Next()
 			return
 		}
@@ -440,11 +441,17 @@ func isPublic(attrs []any) bool {
 	return false
 }
 
-// lifecycle reports whether a method ("Board.Render") is one a live
-// component's session calls itself, never an event.
-func lifecycle(name string) bool {
-	m := name[strings.LastIndexByte(name, '.')+1:]
-	return m == "Render" || m == "Mount" || m == "Update" || strings.HasPrefix(m, "Update__")
+// lifecycle reports whether a method call (c.Name "Board.Render", an
+// overload's the name it was declared with) is of a method a live
+// component's session calls itself, never an event: Render, Mount, an
+// Update (ui.IsUpdate).
+func lifecycle(c *vuka.Call) bool {
+	name := c.Name[strings.LastIndexByte(c.Name, '.')+1:]
+	if name == "Render" || name == "Mount" || name == "Update" {
+		return true
+	}
+	m, ok := reflect.TypeOf(c.Receiver).MethodByName(name)
+	return ok && ui.IsUpdate(m)
 }
 
 // refuse ends a call without running the function: with err when it
