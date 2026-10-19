@@ -43,6 +43,15 @@ jobs:
             "https://github.com/tailwindlabs/tailwindcss/releases/download/${TAILWIND_VERSION}/tailwindcss-linux-x64"
           chmod +x "$HOME/.local/bin/tailwindcss"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # A change made together with ui's has a branch of the same name there.
+      - name: The ui branch of this change, if any
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/vuka-lang/ui "$BRANCH" >/dev/null; then
+            git clone --quiet --depth=1 --branch "$BRANCH" https://github.com/vuka-lang/ui "$RUNNER_TEMP/ui"
+            go mod edit -replace github.com/vuka-lang/ui="$RUNNER_TEMP/ui"
+          fi
       - name: gofmt
         run: |
           bad=$(git ls-files '*.go' | grep -v -e '/testdata/' -e '_vuka\.go$' -e '_vuka_test\.go$' | xargs gofmt -l)
