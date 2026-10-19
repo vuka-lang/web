@@ -25,11 +25,11 @@ import (
 //	}
 //
 //	func (b *Books) Render() ui.Node {
-//		return ui.DataTable(ui.DataTableProps[Book]{
+//		return ui.DataTable[Book]{
 //			Columns: cols,
 //			Page:    b.pager.Result(),
 //			OnPage:  b.pager.GoTo,  // func(context.Context, int) error
-//		})
+//		}
 //	}
 //
 // The loader is called with the page and size the pager holds; after each
