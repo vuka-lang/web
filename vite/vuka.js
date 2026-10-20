@@ -107,8 +107,14 @@ export default function vuka() {
 
     // vuka:live — useLive/useVuka for a page-backed island's component — is
     // the framework's own module, which an island build's spec carries.
-    resolveId(id, importer) {
-      if (id !== 'vuka:live') return
+    // An island beside its Go type, outside the frontend, imports packages
+    // the frontend installed: a bare import resolves from the frontend's
+    // root, whose node_modules aren't above the island.
+    async resolveId(id, importer, options) {
+      if (id !== 'vuka:live') {
+        if (!islandSpec() || !importer || !config || importer.startsWith(config.root + '/') || !/^(@[\w.-]+\/)?\w/.test(id)) return
+        return this.resolve(id, join(config.root, 'index.html'), { ...options, skipSelf: true })
+      }
       const spec = islandSpec()
       if (!spec || !spec.live) return
       const fw = /\.vue/.test(importer || '') ? 'vue' : /\.svelte/.test(importer || '') ? 'svelte' : 'react'

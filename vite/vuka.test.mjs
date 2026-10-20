@@ -116,3 +116,26 @@ test('alive tells a running process from a finished one', () => {
   const done = spawnSync(process.execPath, ['-e', '']).pid
   assert.equal(alive(done), false)
 })
+
+test('an island outside the frontend resolves bare imports from the frontend', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'vuka-isl-'))
+  const spec = join(root, 'islands.json')
+  writeFileSync(spec, JSON.stringify({ outDir: join(root, 'o'), input: {} }))
+  const prev = process.env.VUKA_ISLAND_BUILD
+  process.env.VUKA_ISLAND_BUILD = spec
+  try {
+    const p = vuka()
+    p.configResolved({ root: join(root, 'web'), build: { outDir: 'dist' }, base: '/' })
+    const asked = []
+    const ctx = { resolve: async (id, importer) => (asked.push([id, importer]), { id: '/r/' + id }) }
+    const got = await p.resolveId.call(ctx, 'reka-ui', join(root, 'modules', 'page.vue'), {})
+    assert.deepEqual(got, { id: '/r/reka-ui' })
+    assert.deepEqual(asked, [['reka-ui', join(root, 'web', 'index.html')]])
+    assert.equal(await p.resolveId.call(ctx, 'reka-ui', join(root, 'web', 'src', 'a.vue'), {}), undefined)
+    assert.equal(await p.resolveId.call(ctx, './b.ts', join(root, 'modules', 'page.vue'), {}), undefined)
+  } finally {
+    if (prev === undefined) delete process.env.VUKA_ISLAND_BUILD
+    else process.env.VUKA_ISLAND_BUILD = prev
+    rmSync(root, { recursive: true })
+  }
+})
