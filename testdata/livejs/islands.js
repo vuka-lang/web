@@ -217,6 +217,23 @@ test("a live page's methods: live events with their arguments; pending, error fr
   eq(live.error.fields.q, "too short", "live.error");
 });
 
+test("a live page's url props: the values it first rendered with stay out of the address until they change", async () => {
+  const log = [], { it, mod } = island(log);
+  const attrs = ` data-vk-methods='["more"]' data-vk-on-m-more="c1:4" data-vk-url='{"page":"page","kind":"type"}'`;
+  const p = joined(`<main>${host({ page: 1, kind: "placements" }, attrs)}</main>`, mod, { url: "http://test/ajira" });
+  await settle();
+  const done = it.ctx.live.more();
+  const ev = p.ws().sent.find((m) => m.type === "event");
+  p.server({ type: "patch", ref: ev.ref, updates: [{ id: "c0", html: `<main>${host({ page: 1, kind: "placements", n: 1 }, attrs)}</main>` }] });
+  await done;
+  eq(p.location.search, "", "the page's own first values aren't written");
+  const next = it.ctx.live.more();
+  const ev2 = p.ws().sent.filter((m) => m.type === "event")[1];
+  p.server({ type: "patch", ref: ev2.ref, updates: [{ id: "c0", html: `<main>${host({ page: 2, kind: "placements" }, attrs)}</main>` }] });
+  await next;
+  eq(p.location.search, "?page=2", "a changed value is");
+});
+
 test("a stateless page's methods: posted with the signed props; the answer's props update the island", async () => {
   const log = [], { it, mod } = island(log), posts = [];
   const fetch = (url, init) => {
