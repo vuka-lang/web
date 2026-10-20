@@ -242,3 +242,33 @@ func TestBrowserAdoptMountOnce(t *testing.T) {
 	p.Click("button")
 	p.WaitText("span", "m1 n2")
 }
+
+// tabbed defaults its URL field in its mount hook.
+type tabbed struct {
+	ui.Live
+	Tab string
+}
+
+func (c *tabbed) LiveSchema(l *ui.LiveSchema) {
+	l.Field(&c.Tab, ui.URL("tab"))
+	l.Mount(c.mount)
+}
+func (c *tabbed) mount(context.Context) error {
+	if c.Tab == "" {
+		c.Tab = "first"
+	}
+	return nil
+}
+func (c *tabbed) Render() ui.Node { return ui.El("p", nil, ui.Text("tab "+c.Tab)) }
+
+// A page opened without its URL fields keeps what its mount hook set on
+// them once its join adopts it.
+func TestLiveAdoptKeepsMountedURLFields(t *testing.T) {
+	app := New(Only("none"))
+	app.Live("/tabs", &tabbed{})
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	if _, html := joined(t, srv, "/tabs"); !strings.Contains(html, "tab first") {
+		t.Fatalf("the join lost the mount hook's default: %s", html)
+	}
+}
