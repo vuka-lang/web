@@ -52,9 +52,11 @@ type Chat struct {
 
 func (c *Chat) topic() string { return "chat:" + c.Room }
 
-func (c *Chat) Mount() {
+@ui.Mount
+func (c *Chat) mount(ctx context.Context) error {
 	c.Subscribe(c.topic())
 	c.lines = c.Log.History(c.Room)
+	return nil
 }
 
 func (c *Chat) Update(m Said)   { c.lines = append(c.lines, m.Who+": "+m.Text) }
@@ -82,8 +84,8 @@ func (c *Chat) Render() ui.Node {
 	return <section class="chat">
 		<h2>#{c.Room}</h2>
 		<ul class="lines">
-			{for _, l := range c.lines {
-				<li>{l}</li>
+			{for i, l := range c.lines {
+				<li key={i}>{l}</li>
 			}}
 		</ul>
 		{if c.name == "" {

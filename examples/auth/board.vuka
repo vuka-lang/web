@@ -63,11 +63,13 @@ type Board struct {
 	list    []Notice
 }
 
-// Mount sees who opened the page: the identity the connection joined with.
-func (b *Board) Mount(ctx context.Context) {
+// mount sees who opened the page: the identity the connection joined with.
+@ui.Mount
+func (b *Board) mount(ctx context.Context) error {
 	b.me = auth.Current(ctx)
 	b.list = b.Notices.All()
 	b.Subscribe("notices")
+	return nil
 }
 
 func (b *Board) Update(changed) { b.list = b.Notices.All() }
@@ -96,7 +98,7 @@ func (b *Board) Render() ui.Node {
 		<h1>Notices</h1>
 		<ul class="notices">
 			{for _, n := range b.list {
-				<li id={"n" + strconv.Itoa(n.ID)}>{n.Text} <small>— {n.By}</small></li>
+				<li key={n.ID} id={"n" + strconv.Itoa(n.ID)}>{n.Text} <small>— {n.By}</small></li>
 			}}
 		</ul>
 		<form class="post" onSubmit={b.Post}>

@@ -536,6 +536,29 @@ test("a branch that changes element keeps the field after it, focus and all", ()
   eq([p.$("input") === input, p.$("span").textContent, p.$("p").textContent], [true, "new", "who?"], "an inserted node keeps the ones after it");
 });
 
+test("a focused field keeps what the user types, and takes a value the server changed since what it sent", () => {
+  const html = (v, n) => `<form data-vk-id="c1" data-vk-on-submit="c1:0"><input name="text" value="${v}" data-vk-on-input="c1:1"><p>${n}</p></form>`;
+  const p = joined(html("", 0));
+  const input = p.$("input");
+  input.focus();
+  input.value = "hel";
+  p.fire("input", "input");
+  input.value = "hello";
+  p.server({ type: "patch", updates: [{ id: "c1", html: html("hel", 1) }] });
+  eq(input.value, "hello", "an echo of what was sent while typing on");
+  p.fire("input", "input");
+  p.server({ type: "patch", updates: [{ id: "c1", html: html("hello", 2) }] });
+  eq(input.value, "hello", "an echo of what it shows");
+  p.fire("form", "submit");
+  p.server({ type: "patch", updates: [{ id: "c1", html: html("", 3) }] });
+  eq([input.value, p.doc.activeElement === input], ["", true], "cleared once sent, focus kept");
+  input.value = "x";
+  p.fire("input", "input");
+  input.value = "xy";
+  p.server({ type: "patch", updates: [{ id: "c1", html: html("X", 4) }] });
+  eq(input.value, "xy", "typed since: kept");
+});
+
 // Optimistic updates.
 const sentRef = (p, i) => p.ws().sent[i].ref;
 const errors = (p) => p.logs.filter((l) => l.startsWith("error"));

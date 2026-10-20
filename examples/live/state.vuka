@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/vuka-lang/ui"
@@ -111,7 +112,8 @@ type Board struct {
 	n   int
 }
 
-func (b *Board) Mount() { b.tab = ui.State("a") }
+@ui.Mount
+func (b *Board) mount(ctx context.Context) error { b.tab = ui.State("a"); return nil }
 
 func (b *Board) Bump() { b.n++ }
 

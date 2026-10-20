@@ -265,6 +265,8 @@
   function send(msg, el, form) {
     if (!ws || !joined || nav) return; // a page on its way out sends nothing
     msg.ref = ++ref;
+    const f = document.activeElement;
+    sentField = f && isField(f) ? { el: f, shows: fieldShows(f) } : null;
     if (el && (form || msg.event === "click")) {
       busy.set(msg.ref, { el, form });
       el.setAttribute("aria-busy", "true");
@@ -291,8 +293,10 @@
 
   // morph makes el match next in place: attributes and children are updated,
   // children matched by id or data-vk-id, else by position and tag. A field
-  // keeps what the user sees while it has focus; otherwise it takes the
-  // server's value when that changed since the last render.
+  // takes the server's value when that changed since the last render; one
+  // with focus only when it still shows what it showed when the page last
+  // sent an event (a form cleared once sent), else it keeps what the user
+  // is typing.
   function morph(el, next) {
     if (el.tagName !== next.tagName) return el.replaceWith(document.importNode(next, true));
     if (el.hasAttribute("data-vk-ignore") && el.id && el.id === next.id) return;
@@ -304,17 +308,22 @@
       attrs(el, next);
       return keptText(el, next) || children(el, next);
     }
-    const focused = el === document.activeElement;
     const seen = fieldState(el), before = serverValue(el);
+    const typing = el === document.activeElement && !(sentField && sentField.el === el && sentField.shows === fieldShows(el));
     attrs(el, next);
     if (el.tagName === "TEXTAREA") {
       if (el.textContent !== next.textContent) el.textContent = next.textContent;
     } else {
       children(el, next);
     }
-    if (focused) restore(el, seen);
+    if (typing) restore(el, seen);
     else if (serverValue(el) !== before) takeServer(el);
   }
+
+  // sentField is the focused field when the page last sent an event, and
+  // what it showed.
+  let sentField = null;
+  const fieldShows = (el) => checkable(el) || el.tagName === "SELECT" ? JSON.stringify(fieldState(el)) : el.value;
 
   const keyOf = (n) => n.nodeType === 1 ? n.id || n.getAttribute("data-vk-id") || "" : "";
   const same = (a, b) => a.nodeType === b.nodeType && (a.nodeType !== 1 || a.tagName === b.tagName);

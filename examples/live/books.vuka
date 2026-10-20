@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"sync/atomic"
 
@@ -40,7 +41,7 @@ type Shelf struct {
 	Page    int // ?page=, for the first render
 	page    int
 	rows    []Book
-	mount   int64
+	shelf   int64
 	patches int
 }
 
@@ -50,9 +51,11 @@ type ShelfParams struct {
 	Page int // ?page=
 }
 
-func (s *Shelf) Mount() {
-	s.mount = shelves.Add(1)
+@ui.Mount
+func (s *Shelf) mount(ctx context.Context) error {
+	s.shelf = shelves.Add(1)
 	s.show(s.Page)
+	return nil
 }
 
 // Update takes the URL the pager patched the page to.
@@ -85,7 +88,7 @@ func (s *Shelf) Render() ui.Node {
 			<span class="at">page {s.page} of {pages()}</span>
 			{if s.page < pages() { <ui.Link href={shelfURL(s.page + 1)} patch class="next">Next</ui.Link> }}
 		</p>
-		<p><small class="mount">shelf #{s.mount}, patched {s.patches} times</small></p>
+		<p><small class="mount">shelf #{s.shelf}, patched {s.patches} times</small></p>
 		<p><ui.Link href="/books.json">The list as JSON</ui.Link></p>
 	</section>
 }

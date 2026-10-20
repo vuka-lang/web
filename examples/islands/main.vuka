@@ -9,6 +9,7 @@
 package main
 
 import (
+	"context"
 	"log"
 
 	"github.com/vuka-lang/ui"
@@ -24,9 +25,11 @@ type Planner struct {
 	picked ui.State[string]
 }
 
-func (p *Planner) Mount() {
+@ui.Mount
+func (p *Planner) mount(ctx context.Context) error {
 	p.booked = []string{}
 	p.picked = ui.State("mon")
+	return nil
 }
 
 // Book is the island's onBook: the island calls it with the day.

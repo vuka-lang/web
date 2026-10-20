@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+
 	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/ui"
 )
@@ -14,7 +16,8 @@ type Counter struct {
 	n     int
 }
 
-func (c *Counter) Mount() { c.n = c.Start }
+@ui.Mount
+func (c *Counter) mount(ctx context.Context) error { c.n = c.Start; return nil }
 
 func (c *Counter) Inc() { c.n++ }
 func (c *Counter) Dec() { c.n-- }

@@ -21,7 +21,7 @@ type DB struct {
 }
 
 func OpenDB() *DB {
-	return &DB{pets: map[int]model.Pet{1: {1, "Rex", "dog"}, 2: {2, "Tom", "cat"}}, next: 3, owners: map[string]Owner{}}
+	return &DB{pets: map[int]model.Pet{1: {ID: 1, Name: "Rex", Kind: "dog"}, 2: {ID: 2, Name: "Tom", Kind: "cat"}}, next: 3, owners: map[string]Owner{}}
 }
 
 func (db *DB) Start(context.Context) error { log.Print("db: open"); return nil }
