@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"slices"
 
@@ -19,7 +20,8 @@ type Likes struct {
 	notes  []string
 }
 
-func (l *Likes) Mount() { l.likes, l.notes = 5, []string{"milk", "eggs", "keep"} }
+@ui.Mount
+func (l *Likes) mount(ctx context.Context) error { l.likes, l.notes = 5, []string{"milk", "eggs", "keep"}; return nil }
 
 func (l *Likes) Like() error {
 	if l.closed {

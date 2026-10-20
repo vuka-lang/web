@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"slices"
@@ -53,7 +54,8 @@ type Chores struct {
 	done   int
 }
 
-func (c *Chores) Mount() { c.chores = []string{"wash", "cook", "read"} }
+@ui.Mount
+func (c *Chores) mount(ctx context.Context) error { c.chores = []string{"wash", "cook", "read"}; return nil }
 
 func (c *Chores) Pick(e ui.Event) { c.picked = e.Value }
 
@@ -68,7 +70,7 @@ func (c *Chores) Render() ui.Node {
 		<button class="pick" type="button" onClick={ui.JS.RemoveClass(ui.Ref("menu"), "hidden")}>Pick one</button>
 		<ul ref="menu" class="menu hidden">
 			{for _, ch := range c.chores {
-				<li>
+				<li key={ch}>
 					<button
 						type="button"
 						value={ch}
