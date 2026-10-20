@@ -196,6 +196,7 @@
     if (!spec) { missingIsland(el, name); return; }
     if (missing.delete(el) | failed.delete(el)) clearBox(el);
     const inst = { el, id: scopeOf(el) || name, name, vid: el.getAttribute("data-vk-id") || "", spec, ons: null, state: "armed", handle: null, props: {}, refs: {}, fns: new Map(), key: ["", ""] };
+    inst.urlFirst = firstURLProps(el);
     islandInsts.set(el, inst);
     const go = () => hydrateIsland(inst);
     switch (el.getAttribute("data-vk-client") || "visible") {
@@ -573,6 +574,21 @@
     return Object.assign(v, navigation);
   }
 
+  // firstURLProps is the url:"name" props the page was first rendered with
+  // that its address doesn't name: values of the page's own choosing (a
+  // mount hook's defaults), which the address leaves out until they change.
+  function firstURLProps(el) {
+    let map = null, props = null;
+    try {
+      map = JSON.parse(el.getAttribute("data-vk-url") || "null");
+      props = JSON.parse(el.getAttribute("data-vk-props") || "null");
+    } catch (_) {}
+    if (!map || !props || typeof URL !== "function") return {};
+    const q = new URL(location.href).searchParams, out = {};
+    for (const k in map) if (!q.has(map[k]) && props[k] != null) out[k] = String(props[k]);
+    return out;
+  }
+
   // syncURL keeps the address's query parameters of url:"name" props.
   function syncURL(inst) {
     let map = null;
@@ -581,6 +597,7 @@
     const u = new URL(location.href);
     for (const k in map) {
       const v = inst.props[k];
+      if (!u.searchParams.has(map[k]) && inst.urlFirst && k in inst.urlFirst && String(v) === inst.urlFirst[k]) continue;
       if (v == null || v === "" || v === false) u.searchParams.delete(map[k]);
       else u.searchParams.set(map[k], String(v));
     }
