@@ -34,6 +34,9 @@ type routeSpec struct {
 	island       *islandPage // a stateless page backed by its island: its GET, or its calls' POST
 	attrs        []any       // typed attributes, for WrapRoutes
 	html         bool        // answers with a page; set by compile
+	page         bool        // a page as a pages/ folder declares it (PageRoute, LayoutOf, Receiver)
+	layouts      []reflect.Type
+	recvCtor     reflect.Value // the receiver's constructor (Receiver)
 }
 
 type request struct {
@@ -95,8 +98,26 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 	fail := func(format string, args ...any) error {
 		return failf("E0405", what, s.where, format, args...)
 	}
+	if s.page && s.recv == nil && s.method == http.MethodGet {
+		if t := nodePage(s.fn); t != nil {
+			return a.compileNodePage(s, t)
+		}
+	}
+	var layouts []*layoutSpec
+	if len(s.layouts) > 0 {
+		var err error
+		if layouts, err = a.compileLayouts(s, what); err != nil {
+			return nil, err
+		}
+	}
 	var binders []binder
-	if s.recv != nil {
+	if s.recv != nil && s.recvCtor.IsValid() {
+		b, err := a.pageReceiver(s, what)
+		if err != nil {
+			return nil, err
+		}
+		binders = append(binders, b)
+	} else if s.recv != nil {
 		t, deref := s.recv, false
 		if !a.c.has(t) && t.Kind() != reflect.Pointer && a.c.has(reflect.PointerTo(t)) {
 			t, deref = reflect.PointerTo(t), true
@@ -184,6 +205,15 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 				log.Printf("web: %s %s: %v (after the handler wrote the response)", r.Method, r.URL.Path, err)
 			}
 			return
+		}
+		if n, ok := pageResult(val); ok && err == nil && len(layouts) > 0 && wholePage(r) {
+			rq.ctx = titled(rq.ctx, val)
+			wrapped, lerr := a.wrapLayouts(rq, layouts, pathNames, n)
+			if lerr != nil {
+				a.writeError(w, r, lerr, true)
+				return
+			}
+			val = reflect.ValueOf(&wrapped).Elem()
 		}
 		a.respond(rq, val, err, v, htmlPage)
 	}), nil

@@ -140,11 +140,25 @@ func (a *App) islandBinds(t reflect.Type, path, where string) ([]prop, error) {
 	return props, nil
 }
 
-// field is v's field at index, settable even when unexported.
+// field is v's field at index, settable even when unexported; a nil
+// embedded struct pointer on the way is allocated.
 func field(v reflect.Value, index []int) reflect.Value {
-	f := v.FieldByIndex(index)
+	f := v
+	for i, x := range index {
+		if i > 0 && f.Kind() == reflect.Pointer {
+			if f.IsNil() {
+				settable(f).Set(reflect.New(f.Type().Elem()))
+			}
+			f = f.Elem()
+		}
+		f = settable(f.Field(x))
+	}
+	return f
+}
+
+func settable(f reflect.Value) reflect.Value {
 	if !f.CanSet() && f.CanAddr() {
-		f = reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()
+		return reflect.NewAt(f.Type(), unsafe.Pointer(f.UnsafeAddr())).Elem()
 	}
 	return f
 }
