@@ -139,6 +139,21 @@ func TestLiveIslandNeedsLive(t *testing.T) {
 	}
 }
 
+// noRender embeds ui.Live but lacks Render: the message names the method.
+type noRender struct {
+	ui.Live
+	Q string `json:"q"`
+}
+
+func TestLiveIslandNeedsRender(t *testing.T) {
+	ui.Island("components/Shelf.vue")(vuka.TypeOf[noRender]("web.noRender"))
+	a := shelfApp()
+	a.specs = append(a.specs, (&liveSpec{path: "/r", typ: vuka.TypeOf[noRender]("web.noRender").Reflect, name: "web.noRender"}).route())
+	if err := a.Build(); err == nil || !strings.Contains(err.Error(), "has no Render() ui.Node method") {
+		t.Errorf("got %v", err)
+	}
+}
+
 func TestIslandLayoutBad(t *testing.T) {
 	type badShelf struct {
 		ui.Live

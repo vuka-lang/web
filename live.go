@@ -154,6 +154,12 @@ var liveJSTag = func() string {
 
 var statefulType = typeOf[ui.Stateful]()
 
+// embedsLive reports whether struct t embeds ui.Live.
+func embedsLive(t reflect.Type) bool {
+	f, ok := t.FieldByName("Live")
+	return ok && f.Anonymous && f.Type == typeOf[ui.Live]()
+}
+
 func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	ls := s.live
 	what := "GET " + s.path + " (" + whereName(s.where) + ")"
@@ -163,7 +169,10 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	island := ls.island || ls.typ.Kind() == reflect.Struct && ui.IsIsland(ls.typ)
 	if island && !ls.island {
 		if !reflect.PointerTo(ls.typ).Implements(statefulType) {
-			return nil, fail("%s is an @ui.Island page under @web.Live, which is live, and it doesn't embed ui.Live", ls.name).WithHelp("embed ui.Live, or route it with @web.Get (a stateless page)")
+			if embedsLive(ls.typ) {
+				return nil, fail("%s is a page backed by its island on a live route, and *%[1]s has no Render() ui.Node method", ls.name).WithHelp("add func (p *%s) Render() ui.Node { return ui.IslandPage(p) }", ls.typ.Name())
+			}
+			return nil, fail("%s is a page backed by its island on a live route (web.Live, @web.Live), and it doesn't embed ui.Live", ls.name).WithHelp("embed ui.Live, or route it with Get (a stateless page)")
 		}
 		if err := ui.CheckIsland(ls.typ); err != nil {
 			return nil, failure("E0320", what, s.where, err)
@@ -173,6 +182,9 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		ls = &c
 	}
 	if ls.typ.Kind() != reflect.Struct || !reflect.PointerTo(ls.typ).Implements(statefulType) {
+		if ls.typ.Kind() == reflect.Struct && embedsLive(ls.typ) {
+			return nil, failf("E0329", what, s.where, "%s is not a stateful component: *%[1]s has no Render() ui.Node method", ls.name).WithHelp("add func (p *%s) Render() ui.Node", ls.typ.Name())
+		}
 		return nil, failf("E0329", what, s.where, "%s is not a stateful component", ls.name).WithHelp("embed ui.Live in a struct with a Render() ui.Node method")
 	}
 	if err := a.checkCtor(ls.ctor, s.where); err != nil {
