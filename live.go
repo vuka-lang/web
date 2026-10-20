@@ -174,7 +174,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 			}
 			return nil, fail("%s is a page backed by its island on a live route (web.Live, @web.Live), and it doesn't embed ui.Live", ls.name).WithHelp("embed ui.Live, or route it with Get (a stateless page)")
 		}
-		if err := ui.CheckIsland(ls.typ); err != nil {
+		if err := a.checkIsland(ls.typ, ls.ctor); err != nil {
 			return nil, failure("E0320", what, s.where, err)
 		}
 		c := *ls

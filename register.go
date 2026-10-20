@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/vuka"
 	"github.com/vuka-lang/vuka/diag"
 )
@@ -260,7 +261,28 @@ func (a *App) newComponent(t reflect.Type, template, ctor reflect.Value) (reflec
 	if out[0].IsNil() {
 		return reflect.Value{}, &Error{Status: http.StatusInternalServerError, Message: fmt.Sprintf("%s returned a nil %s", funcName(ctor), out[0].Type())}
 	}
+	if a.recheck[t] {
+		if err := ui.CheckIsland(t); err != nil {
+			return reflect.Value{}, err
+		}
+	}
 	return out[0], nil
+}
+
+// checkIsland checks the island page t at start-up. A deferred group
+// without a loader (E0324) waits for the page's constructor, which may
+// declare it (l.Loads): its pages are checked as it builds them.
+func (a *App) checkIsland(t reflect.Type, ctor reflect.Value) error {
+	err := ui.CheckIsland(t)
+	var d *diag.Diagnostic
+	if err == nil || !ctor.IsValid() || !errors.As(err, &d) || d.Code != "E0324" {
+		return err
+	}
+	if a.recheck == nil {
+		a.recheck = map[reflect.Type]bool{}
+	}
+	a.recheck[t] = true
+	return nil
 }
 
 // checkCtor checks the dependencies a page's constructor takes.

@@ -277,3 +277,42 @@ func TestBrowserDeferredBeforeMount(t *testing.T) {
 	p := chrome.Launch(t).Open(srv.URL + "/slow?x=1")
 	p.WaitText("vk-island", `{"rows":["Ada"],"pending":false}`)
 }
+
+// ctorLoaded's loader is declared by its constructor, which runs after the
+// app's start-up checks.
+type ctorLoaded struct {
+	ui.Live
+	Rows []string `json:"rows"`
+}
+
+func newCtorLoaded() *ctorLoaded {
+	p := &ctorLoaded{}
+	p.Loads("rows", (*ctorLoaded).loadRows)
+	return p
+}
+
+func (p *ctorLoaded) LiveSchema(l *ui.LiveSchema) { l.Field(&p.Rows, ui.Defer("rows")) }
+func (p *ctorLoaded) loadRows()                   { p.Rows = []string{"a", "b"} }
+func (p *ctorLoaded) Render() ui.Node             { return ui.IslandPage(p) }
+
+func init() {
+	ui.Island("components/Orders.vue", ui.Layout(titledDoc("orders"), shell))(vuka.TypeOf[ctorLoaded]("web.ctorLoaded"))
+}
+
+func TestDeferredByConstructor(t *testing.T) {
+	a := pageApp()
+	a.Live("/ctor", newCtorLoaded)
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	if code, body, _ := do(t, srv.Config.Handler, "GET", "/ctor", ""); code != 200 {
+		t.Fatalf("GET: %d %s", code, body)
+	}
+	c, _ := joined(t, srv, "/ctor")
+	m := must(t, c)
+	if m.Type != live.PatchMsg || len(m.Updates) != 1 {
+		t.Fatalf("the load's patch: %+v", m)
+	}
+	if props, raw, _ := rendered(t, m.Updates[0].HTML); len(props["rows"].([]any)) != 2 {
+		t.Errorf("after the load: %s", raw)
+	}
+}

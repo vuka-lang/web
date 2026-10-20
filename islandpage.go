@@ -80,7 +80,7 @@ func (a *App) pageSpecs(p typePage) ([]*routeSpec, error) {
 	if t.Kind() != reflect.Struct || !ui.IsIsland(t) {
 		return nil, diag.New("E0332", "GET %s (%s): @web.Get on a type serves its component, and %s has no @ui.Island", p.path, where, p.typ.Name).WithHelp("add @ui.Island (or @ui.Island(\"path/to/Component.vue\")) to the type")
 	}
-	if err := ui.CheckIsland(t); err != nil {
+	if err := a.checkIsland(t, p.ctor); err != nil {
 		return nil, failure("E0320", "GET "+p.path+" ("+where+")", "", err)
 	}
 	attrs := flattenAttrs(p.typ.Attrs)
