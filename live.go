@@ -208,6 +208,12 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		islandLayout = a.islandLayout(ls.typ, ls.layout)
 	}
 	site := "web.Live " + s.path
+	var urlFields []string
+	for _, p := range props {
+		if !p.dep {
+			urlFields = append(urlFields, ls.typ.FieldByIndex(p.index).Name)
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rq := a.newRequest(w, r)
 		if a.tb != nil {
@@ -236,12 +242,13 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 			}
 			j.updates = map[ui.Stateful]any{comp: pv.Interface()}
 		}
+		tag := &ui.ComponentNode{Site: site, Props: comp, Routed: true, URL: urlFields}
 		var page ui.Node
 		if islandLayout != nil {
 			rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(c))
-			page = islandLayout(rq.ctx, ui.Component(site, nil, comp))
+			page = islandLayout(rq.ctx, tag)
 		} else {
-			page = layout(ui.Component(site, nil, comp))
+			page = layout(tag)
 		}
 		end()
 		a.page(rq, page)
