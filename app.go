@@ -40,6 +40,7 @@ type App struct {
 	needs   []reflect.Type
 	eager   []*provider
 	checks  []func(*App) error
+	recheck map[reflect.Type]bool // island pages whose check waits for their constructor
 
 	wraps      []routeWrap
 	binders    map[reflect.Type]func(*http.Request) (reflect.Value, error)
