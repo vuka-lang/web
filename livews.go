@@ -314,9 +314,11 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		ws.Close(closeReload, terr.Error())
 		return
 	}
+	defer ws.CloseNow()
 	ws.SetReadLimit(1 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	defer a.recoverSocket(ws, r)
 	c := &conn{app: a, ws: ws, r: r, uri: uri, tok: tok, wake: make(chan struct{}, 1)}
 	if a.tb != nil {
 		if c.tb = a.tb.liveSink(r.URL.Query().Get("tb"), uri); c.tb != nil {

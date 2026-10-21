@@ -471,7 +471,7 @@ func (a *App) build() (http.Handler, error) {
 	if a.tb != nil {
 		h = a.tb.wrap(h)
 	}
-	return a.edge(h), nil
+	return a.recoverHTTP(a.edge(h)), nil
 }
 
 // wrapRoute wraps a compiled route in the middleware WrapRoutes functions

@@ -171,14 +171,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 	limit := a.bodyLimit(s.attrs)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		tw := &trackingWriter{ResponseWriter: w}
-		defer func() {
-			if p := recover(); p != nil {
-				if p == http.ErrAbortHandler || tw.wrote {
-					panic(p)
-				}
-				a.writeError(w, r, fmt.Errorf("panic: %v", p), htmlPage)
-			}
-		}()
+		defer a.recoverRequest(tw, r, htmlPage)
 		if limit > 0 && r.Body != nil && r.Body != http.NoBody {
 			r.Body = http.MaxBytesReader(tw, r.Body, limit)
 		}
@@ -577,7 +570,8 @@ func validateBound(v any, isJSON bool) error {
 // that a handler returning nothing after writing gets no default status.
 type trackingWriter struct {
 	http.ResponseWriter
-	wrote bool
+	wrote    bool
+	hijacked net.Conn
 }
 
 func (w *trackingWriter) WriteHeader(code int) {
@@ -603,8 +597,19 @@ func (w *trackingWriter) Flush() {
 }
 
 func (w *trackingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	w.wrote = true
-	return http.NewResponseController(w.ResponseWriter).Hijack()
+	conn, rw, err := http.NewResponseController(w.ResponseWriter).Hijack()
+	if err == nil {
+		w.wrote, w.hijacked = true, conn
+	}
+	return conn, rw, err
+}
+
+// Push preserves HTTP/2 server push through request tracking and recovery.
+func (w *trackingWriter) Push(target string, opts *http.PushOptions) error {
+	if p, ok := w.ResponseWriter.(http.Pusher); ok {
+		return p.Push(target, opts)
+	}
+	return http.ErrNotSupported
 }
 
 // Unwrap gives http.ResponseController the underlying writer.

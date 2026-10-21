@@ -294,8 +294,23 @@ result) and `{"error": …, "status": …}` elsewhere. `web.NotFound`,
 `Unauthorized`, `Forbidden`, `Conflict`, `web.BadRequest(msg)`,
 `web.Status(code, format, args…)`; `errors.Is(err, web.NotFound)` matches by
 status. `web.Redirect` is also a `ui.Node`, so a page handler can return it.
-Panics answer 500. A handler that wrote the response and then returns an
-error can't change it any more: the error is logged.
+Panics in handlers, middleware, custom routers and page rendering are recovered
+per request. Before the response is committed, they answer 500 through
+`OnError` (HTML on page routes, JSON otherwise; middleware/router failures
+use the request's `Accept` header). Details and a stack trace stay in the
+server log; development responses may include the error message.
+If `OnError` itself panics before writing, a generic plain-text 500 is used.
+
+A panic after writing or flushing a response aborts that response instead of
+appending an error body. `http.ErrAbortHandler` retains its normal abort
+semantics. Streaming and WebSocket upgrades are not buffered; a panic during
+live rendering or a live guard closes the affected socket with code 1011
+and a generic reason, discarding its session. Other requests keep running.
+This does not catch panics in application-created goroutines or turn startup
+configuration errors into successful builds.
+
+A handler that wrote the response and then returns an error can't change it
+any more: the error is logged.
 
 **Forms that fail.** A page answering a POST (or PUT, PATCH, DELETE) is the
 fragment the handler rendered — for htmx, `fetch` and the like — unless the
