@@ -255,3 +255,80 @@ func TestFolderFormsAreOptIn(t *testing.T) {
 	expect(t, h, "GET", "/n/x", "", 400, "")
 	expect(t, h, "GET", "/f/a/b", "", 200, "<pre></pre>")
 }
+
+// guardStore says what guardLayout's Load answers for each {org}, and
+// records the handlers that ran.
+type guardStore struct {
+	errs map[int]error
+	ran  []string
+}
+
+type guardLayout struct {
+	orgParams
+	Children ui.Node
+}
+
+func (l *guardLayout) Load(ctx context.Context, s *guardStore) error { return s.errs[l.Org] }
+
+func (l *guardLayout) Render(ctx context.Context, w io.Writer) error {
+	return ui.El("main", nil, l.Children).Render(ctx, w)
+}
+
+type orgAction struct {
+	orgParams
+	store *guardStore
+}
+
+func newOrgAction(s *guardStore) *orgAction { return &orgAction{store: s} }
+
+func (g *orgAction) Render(context.Context, io.Writer) error { return nil }
+
+func (g *orgAction) Post(ctx context.Context, f renameForm) error {
+	g.store.ran = append(g.store.ran, "post "+itoa(g.Org)+" "+f.Name)
+	return Redirect("/done")
+}
+
+func (g *orgAction) Delete(ctx context.Context) error {
+	g.store.ran = append(g.store.ran, "delete "+itoa(g.Org))
+	return nil
+}
+
+// A route's layouts load before its method handler, whatever it answers:
+// a Load error answers instead, the handler not run.
+func TestFolderLayoutsGuardMethodHandlers(t *testing.T) {
+	s := &guardStore{errs: map[int]error{2: NotFound, 3: Forbidden, 4: Redirect("/login")}}
+	app := New(Only("none"), Provide(func() *guardStore { return s }))
+	app.Post("/g/{org}", (*orgAction).Post, Receiver(newOrgAction), LayoutOf[guardLayout]())
+	app.Delete("/g/{org}", (*orgAction).Delete, Receiver(newOrgAction), LayoutOf[guardLayout]())
+	h := app.Handler()
+	form := []string{"Content-Type", "application/x-www-form-urlencoded"}
+	for _, c := range []struct {
+		org      string
+		code     int
+		location string
+	}{
+		{"2", 404, ""},
+		{"3", 403, ""},
+		{"4", 303, "/login"},
+	} {
+		for _, m := range []string{"POST", "DELETE"} {
+			code, body, hdr := do(t, h, m, "/g/"+c.org, "name=x", form...)
+			if code != c.code || hdr.Get("Location") != c.location {
+				t.Errorf("%s /g/%s: %d %v %s; want %d to %q", m, c.org, code, hdr.Get("Location"), body, c.code, c.location)
+			}
+		}
+	}
+	if len(s.ran) != 0 {
+		t.Fatalf("handlers ran behind a failing Load: %v", s.ran)
+	}
+	code, _, hdr := do(t, h, "POST", "/g/1", "name=x", form...)
+	if code != 303 || hdr.Get("Location") != "/done" {
+		t.Errorf("post: %d %v", code, hdr)
+	}
+	if code, _, _ := do(t, h, "DELETE", "/g/1", ""); code != 204 {
+		t.Errorf("delete: %d", code)
+	}
+	if strings.Join(s.ran, ",") != "post 1 x,delete 1" {
+		t.Errorf("ran %v", s.ran)
+	}
+}

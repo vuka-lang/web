@@ -185,6 +185,14 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		if a.tb != nil {
 			noteRoute(rq.ctx, route, s.where)
 		}
+		var loaded []reflect.Value
+		if len(layouts) > 0 {
+			var err error
+			if loaded, err = a.loadLayouts(rq, layouts, pathNames); err != nil {
+				a.writeError(w, r, err, htmlPage)
+				return
+			}
+		}
 		args := make([]reflect.Value, len(binders))
 		for i, b := range binders {
 			v, err := b(rq)
@@ -208,11 +216,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		}
 		if n, ok := pageResult(val); ok && err == nil && len(layouts) > 0 && wholePage(r) {
 			rq.ctx = titled(rq.ctx, val)
-			wrapped, lerr := a.wrapLayouts(rq, layouts, pathNames, n)
-			if lerr != nil {
-				a.writeError(w, r, lerr, true)
-				return
-			}
+			wrapped := nestLayouts(layouts, loaded, n)
 			val = reflect.ValueOf(&wrapped).Elem()
 		}
 		a.respond(rq, val, err, v, htmlPage)

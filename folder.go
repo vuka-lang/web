@@ -52,8 +52,10 @@ func PageRoute() RouteOption { return routeOpt(func(s *routeSpec) { s.page = tru
 // Load run, if it has one: Load(ctx, deps…) returning nothing or an error,
 // its dependencies provided types; its error answers the request. A Live
 // page's layouts render around it on the request's render; the page's
-// patches render the page. On a handler's route (Post, …) they wrap a
-// ui.Node it returns for a whole page. LayoutOf implies PageRoute.
+// patches render the page. On a handler's route (Post, …) every layout is
+// loaded before the handler runs, whatever it answers, a Load error
+// answering instead; a ui.Node the handler returns for a whole page is
+// wrapped in them. LayoutOf implies PageRoute.
 func LayoutOf[T any]() RouteOption {
 	t := typeOf[T]()
 	return routeOpt(func(s *routeSpec) { s.page, s.layouts = true, append(s.layouts, t) })
@@ -138,6 +140,16 @@ func (a *App) compileLayouts(s *routeSpec, what string) ([]*layoutSpec, error) {
 // wrapLayouts is page inside layouts for the request: each built, bound
 // and loaded, outermost first.
 func (a *App) wrapLayouts(rq *request, layouts []*layoutSpec, pathNames []string, page ui.Node) (ui.Node, error) {
+	xs, err := a.loadLayouts(rq, layouts, pathNames)
+	if err != nil {
+		return nil, err
+	}
+	return nestLayouts(layouts, xs, page), nil
+}
+
+// loadLayouts builds the layouts for the request, outermost first: each
+// bound and loaded.
+func (a *App) loadLayouts(rq *request, layouts []*layoutSpec, pathNames []string) ([]reflect.Value, error) {
 	xs := make([]reflect.Value, len(layouts))
 	for i, l := range layouts {
 		x := reflect.New(l.typ)
@@ -162,6 +174,11 @@ func (a *App) wrapLayouts(rq *request, layouts []*layoutSpec, pathNames []string
 		}
 		xs[i] = x
 	}
+	return xs, nil
+}
+
+// nestLayouts is page inside the loaded layouts xs.
+func nestLayouts(layouts []*layoutSpec, xs []reflect.Value, page ui.Node) ui.Node {
 	n := page
 	for i := len(layouts) - 1; i >= 0; i-- {
 		field(xs[i].Elem(), layouts[i].children).Set(reflect.ValueOf(&n).Elem())
@@ -171,7 +188,7 @@ func (a *App) wrapLayouts(rq *request, layouts []*layoutSpec, pathNames []string
 			n = xs[i].Elem().Interface().(ui.Node)
 		}
 	}
-	return n, nil
+	return n
 }
 
 // bindPage binds v's props for r as bindProps does, except that a path
