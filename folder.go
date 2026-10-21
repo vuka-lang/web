@@ -50,7 +50,9 @@ func PageRoute() RouteOption { return routeOpt(func(s *routeSpec) { s.page = tru
 //
 // Per request each layout is a zero T, its path parameters bound, then its
 // Load run, if it has one: Load(ctx, deps…) returning nothing or an error,
-// its dependencies provided types; its error answers the request. A Live
+// its dependencies provided types; its error answers the request. Layouts
+// and guards (GuardOf) load in the order their options are given, before a
+// stateless page's Mount. A Live
 // page's layouts render around it on the request's render; the page's
 // patches render the page. On a handler's route (Post, …) every layout is
 // loaded before the handler runs, whatever it answers, a Load error
@@ -58,7 +60,37 @@ func PageRoute() RouteOption { return routeOpt(func(s *routeSpec) { s.page = tru
 // wrapped in them. LayoutOf implies PageRoute.
 func LayoutOf[T any]() RouteOption {
 	t := typeOf[T]()
-	return routeOpt(func(s *routeSpec) { s.page, s.layouts = true, append(s.layouts, t) })
+	return routeOpt(func(s *routeSpec) { s.page, s.layouts = true, append(s.layouts, layoutRef{t, false}) })
+}
+
+// GuardOf runs the guard T before a route's page or handler: a struct,
+// rendering nothing, whose Load(ctx context.Context, deps…) error, its
+// dependencies provided types, checks the request:
+//
+//	type Guard struct{ Params }
+//
+//	func (g *Guard) Load(ctx context.Context, perms *Perms) error {
+//		if !perms.Can(ctx, "employers.view", g.Employer) {
+//			return web.Forbidden
+//		}
+//		return nil
+//	}
+//
+// Per request it is a zero T, its path parameters bound as a page's are,
+// then its Load run; guards and layouts load in the order their options are
+// given, before the page mounts or the handler runs, and the first error
+// answers the request as the handler's would: NotFound a 404, Forbidden a
+// 403, a Redirect redirects, as a page or as JSON. A Live page's guards run
+// on its request and on its join. GuardOf implies PageRoute.
+func GuardOf[T any]() RouteOption {
+	t := typeOf[T]()
+	return routeOpt(func(s *routeSpec) { s.page, s.layouts = true, append(s.layouts, layoutRef{t, true}) })
+}
+
+// layoutRef is a layout or guard a route's options name.
+type layoutRef struct {
+	typ   reflect.Type
+	guard bool
 }
 
 // Receiver builds the receiver of a method handler for each request with
@@ -73,9 +105,10 @@ func Receiver(ctor any) RouteOption {
 	return routeOpt(func(s *routeSpec) { s.page, s.recvCtor = true, v })
 }
 
-// layoutSpec is a layout of LayoutOf, compiled.
+// layoutSpec is a layout of LayoutOf, or a guard of GuardOf, compiled.
 type layoutSpec struct {
 	typ      reflect.Type
+	guard    bool
 	ptr      bool // *T is the ui.Node, not T
 	children []int
 	props    []prop
@@ -86,26 +119,35 @@ type layoutSpec struct {
 func (a *App) compileLayouts(s *routeSpec, what string) ([]*layoutSpec, error) {
 	var out []*layoutSpec
 	pathNames := pathParams(s.path)
-	for _, t := range s.layouts {
+	for _, ref := range s.layouts {
+		t := ref.typ
+		opt := "web.LayoutOf"
+		if ref.guard {
+			opt = "web.GuardOf"
+		}
 		fail := func(format string, args ...any) *diag.Diagnostic {
-			return failf("E0321", what, s.where, "web.LayoutOf[%s]: "+format, append([]any{t}, args...)...)
+			return failf("E0321", what, s.where, opt+"[%s]: "+format, append([]any{t}, args...)...)
 		}
-		if t.Kind() != reflect.Struct {
-			return nil, fail("a layout is a struct").WithHelp("declare type Layout struct { Children ui.Node; … }")
-		}
-		l := &layoutSpec{typ: t}
+		l := &layoutSpec{typ: t, guard: ref.guard}
 		switch {
+		case ref.guard && t.Kind() != reflect.Struct:
+			return nil, fail("a guard is a struct").WithHelp("declare type Guard struct { … } with a Load(ctx context.Context, deps…) error method")
+		case ref.guard:
+		case t.Kind() != reflect.Struct:
+			return nil, fail("a layout is a struct").WithHelp("declare type Layout struct { Children ui.Node; … }")
 		case t.Implements(nodeType):
 		case reflect.PointerTo(t).Implements(nodeType):
 			l.ptr = true
 		default:
 			return nil, fail("%s isn't a ui.Node", t).WithHelp("give it a Render(ctx context.Context, w io.Writer) error method, or a view")
 		}
-		f, ok := t.FieldByName("Children")
-		if !ok || f.Type != nodeType || !f.IsExported() {
-			return nil, fail("%s has no field Children ui.Node", t).WithHelp("add Children ui.Node: the page, or the next layout, renders there")
+		if !ref.guard {
+			f, ok := t.FieldByName("Children")
+			if !ok || f.Type != nodeType || !f.IsExported() {
+				return nil, fail("%s has no field Children ui.Node", t).WithHelp("add Children ui.Node: the page, or the next layout, renders there")
+			}
+			l.children = f.Index
 		}
-		l.children = f.Index
 		for _, f := range reflect.VisibleFields(t) {
 			if f.IsExported() && !f.Anonymous && scalar(f.Type) && matchName(pathNames, f.Name) != "" {
 				l.props = append(l.props, prop{index: f.Index, name: f.Name, typ: f.Type, path: true})
@@ -114,7 +156,11 @@ func (a *App) compileLayouts(s *routeSpec, what string) ([]*layoutSpec, error) {
 		if err := a.checkPathProps(t, l.props, pathNames); err != nil {
 			return nil, failure("E0328", what, s.where, err)
 		}
-		if m, ok := reflect.PointerTo(t).MethodByName("Load"); ok {
+		m, ok := reflect.PointerTo(t).MethodByName("Load")
+		if !ok && ref.guard {
+			return nil, fail("%s has no Load method", t).WithHelp("declare func (g *%s) Load(ctx context.Context, deps…) error", t.Name())
+		}
+		if ok {
 			mt := m.Type
 			if mt.NumIn() < 2 || mt.In(1) != contextType || mt.NumOut() > 1 || mt.NumOut() == 1 && mt.Out(0) != errType {
 				return nil, fail("its Load is %s", m.Func.Type()).WithHelp("declare Load(ctx context.Context, deps…) error")
@@ -137,18 +183,8 @@ func (a *App) compileLayouts(s *routeSpec, what string) ([]*layoutSpec, error) {
 	return out, nil
 }
 
-// wrapLayouts is page inside layouts for the request: each built, bound
-// and loaded, outermost first.
-func (a *App) wrapLayouts(rq *request, layouts []*layoutSpec, pathNames []string, page ui.Node) (ui.Node, error) {
-	xs, err := a.loadLayouts(rq, layouts, pathNames)
-	if err != nil {
-		return nil, err
-	}
-	return nestLayouts(layouts, xs, page), nil
-}
-
-// loadLayouts builds the layouts for the request, outermost first: each
-// bound and loaded.
+// loadLayouts builds the layouts and guards for the request in their
+// options' order: each bound and loaded.
 func (a *App) loadLayouts(rq *request, layouts []*layoutSpec, pathNames []string) ([]reflect.Value, error) {
 	xs := make([]reflect.Value, len(layouts))
 	for i, l := range layouts {
@@ -181,6 +217,9 @@ func (a *App) loadLayouts(rq *request, layouts []*layoutSpec, pathNames []string
 func nestLayouts(layouts []*layoutSpec, xs []reflect.Value, page ui.Node) ui.Node {
 	n := page
 	for i := len(layouts) - 1; i >= 0; i-- {
+		if layouts[i].guard {
+			continue
+		}
 		field(xs[i].Elem(), layouts[i].children).Set(reflect.ValueOf(&n).Elem())
 		if layouts[i].ptr {
 			n = xs[i].Interface().(ui.Node)
@@ -297,13 +336,17 @@ func (a *App) compileNodePage(s *routeSpec, t reflect.Type) (http.Handler, error
 		if err == nil {
 			err = a.bindPage(x.Elem(), props, pathNames, r)
 		}
+		var loaded []reflect.Value
+		if err == nil {
+			loaded, err = a.loadLayouts(rq, layouts, pathNames)
+		}
 		if err == nil {
 			err = mountPage(rq.ctx, x)
 		}
 		var page ui.Node
 		if err == nil {
 			rq.ctx = titled(rq.ctx, x)
-			page, err = a.wrapLayouts(rq, layouts, pathNames, x.Interface().(ui.Node))
+			page = nestLayouts(layouts, loaded, x.Interface().(ui.Node))
 		}
 		end()
 		if err != nil {
@@ -366,4 +409,14 @@ func pageResult(v reflect.Value) (ui.Node, bool) {
 		return nil, false
 	}
 	return n, true
+}
+
+// framed reports whether layouts holds a layout, not only guards.
+func framed(layouts []*layoutSpec) bool {
+	for _, l := range layouts {
+		if !l.guard {
+			return true
+		}
+	}
+	return false
 }
