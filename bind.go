@@ -37,6 +37,7 @@ type routeSpec struct {
 	page         bool        // a page as a pages/ folder declares it (PageRoute, LayoutOf, GuardOf, Receiver)
 	layouts      []layoutRef
 	recvCtor     reflect.Value // the receiver's constructor (Receiver)
+	mwOf         []useOf       // UseOf's middleware, resolved when the app is built
 }
 
 type request struct {

@@ -333,6 +333,9 @@ func (a *App) build() (http.Handler, error) {
 			s.view = &v
 		}
 		r.opts.applyTo(s)
+		if t := s.attrType(); t != nil {
+			s.attrs = append(flattenAttrs(vuka.TypeAttrs(t)), s.attrs...)
+		}
 		specs = append(specs, s)
 	}
 	for _, ls := range a.reg.lives {
@@ -364,13 +367,22 @@ func (a *App) build() (http.Handler, error) {
 			continue
 		}
 		seen[key] = s.where
+		outer, mwErr := a.middlewareOf(s)
+		if mwErr != nil {
+			errs = append(errs, mwErr)
+		}
 		h, err := a.compile(s)
 		if err != nil {
 			errs = append(errs, err)
+		}
+		if err != nil || mwErr != nil {
 			continue
 		}
 		for i := len(s.mw) - 1; i >= 0; i-- {
 			h = a.layer(s.mw[i], h)
+		}
+		for i := len(outer) - 1; i >= 0; i-- {
+			h = a.layer(outer[i], h)
 		}
 		h, err = a.wrapRoute(s, h)
 		if err != nil {
