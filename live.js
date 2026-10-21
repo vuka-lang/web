@@ -390,6 +390,7 @@
       if (el.getAttribute(a.name) !== a.value) el.setAttribute(a.name, a.value);
     }
     keep(el, next);
+    if (checkable(el)) el.indeterminate = el.hasAttribute("data-vk-mixed");
   }
 
   function serverValue(el) {
@@ -1061,6 +1062,7 @@
   // bindIn binds every element in root, whose HTML is html, that has
   // bindings, and unbinds those that lost theirs.
   function bindIn(root, html) {
+    if (root) for (const el of root.querySelectorAll("input[data-vk-mixed]")) el.indeterminate = true;
     if (!root || !subs.size && !/ data-vk-(b|show)/.test(html)) return;
     for (const el of [root, ...root.querySelectorAll("*")]) if (bound.has(el) || Array.from(el.attributes).some((a) => /^data-vk-(b|show)(-|$)/.test(a.name))) bind(el);
   }

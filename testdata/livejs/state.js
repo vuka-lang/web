@@ -311,6 +311,18 @@ test("show: a morph keeps it open, with no transition", () => {
   eq(state(p), [false, "display: contents", ""]);
 });
 
+test("select-all mixed state follows initial render and live patches", () => {
+ const html = (attrs) => `<div data-vk-id="c1"><input id="all" type="checkbox" ${attrs}></div>`;
+ const p = joined(html('data-vk-mixed="true" aria-checked="mixed"'));
+ eq(p.$("#all").indeterminate, true, "initial partial selection");
+ p.server({type:"patch", ref:2, updates:[{id:"c1", html:html("checked")}]});
+ eq([p.$("#all").checked, p.$("#all").indeterminate], [true,false], "all selected");
+ p.server({type:"patch", ref:3, updates:[{id:"c1", html:html('data-vk-mixed="true" aria-checked="mixed"')}]});
+ eq([p.$("#all").checked, p.$("#all").indeterminate], [false,true], "one deselected");
+ p.server({type:"patch", ref:4, updates:[{id:"c1", html:html("")}]});
+ eq([p.$("#all").checked, p.$("#all").indeterminate], [false,false], "cleared");
+});
+
 (async () => {
   let failed = 0;
   for (const t of tests) {

@@ -457,13 +457,17 @@ func TestBrowserToolbar(t *testing.T) {
 	}
 	var handle string
 	p.Eval(`(() => { const h = `+tb+`.querySelector(".handle"); const s = getComputedStyle(h); return [h.textContent, s.position, s.color].join(" | "); })()`, &handle)
-	if !strings.Contains(handle, "ms·3 q") || !strings.Contains(handle, "| fixed |") || strings.Contains(handle, "rgb(255, 0, 0)") {
+	if !strings.Contains(handle, "ms·3 q") || !strings.Contains(handle, "| absolute |") || strings.Contains(handle, "rgb(255, 0, 0)") {
 		t.Errorf("the handle: %q", handle)
 	}
 	if !strings.Contains(p.Text("main"), "n=0") {
 		t.Fatalf("the page: %s", p.Text("main"))
 	}
 
+	// A small indicator remains until the edge is approached or focused.
+	p.Wait(`(() => { const h = ` + tb + `.querySelector(".handle"); return Math.abs(innerWidth - h.getBoundingClientRect().left - 6) < 1; })()`)
+	p.Eval(tb+`.querySelector(".handle").focus()`, nil)
+	p.Wait(`(() => { const h = ` + tb + `.querySelector(".handle"); return Math.abs(innerWidth - h.getBoundingClientRect().right) < 1; })()`)
 	p.ClickElement(tb + `.querySelector(".handle")`)
 	p.Wait(tb + `.querySelector('.panel[data-panel="Request"]:not([hidden])')`)
 	text := func() string {

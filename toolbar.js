@@ -19,10 +19,10 @@
   const host = document.createElement("vuka-toolbar");
   const root = host.attachShadow({ mode: "open" });
   root.innerHTML = `<style>${"__CSS__"}</style><div class="vk">
-    <button type="button" class="handle" title="Vuka development toolbar" aria-expanded="false">
+    <div class="dock"><button type="button" class="handle" title="Vuka development toolbar" aria-label="Open development toolbar" aria-expanded="false" aria-controls="vk-toolbar-drawer">
       <span class="mark" aria-hidden="true"></span><span class="state"></span>
-    </button>
-    <aside class="drawer" hidden aria-label="Development toolbar">
+    </button></div>
+    <aside id="vk-toolbar-drawer" class="drawer" hidden aria-label="Development toolbar">
       <div class="bar">
         <span class="mark" aria-hidden="true"></span>
         <select aria-label="Request"></select>
@@ -187,9 +187,11 @@
 
   function toggle(open) {
     drawer.hidden = !open;
+    $(".vk").classList.toggle("is-open", open);
     handle.setAttribute("aria-expanded", String(open));
     remember("open", open ? "1" : "");
-    if (open) { load(); refreshCrons(); }
+    if (open) { load(); refreshCrons(); $(".close").focus(); }
+    else handle.focus();
   }
 
   handle.addEventListener("click", () => toggle(drawer.hidden));
@@ -308,5 +310,5 @@
   drawHandle();
   get("r/" + encodeURIComponent(pageID)).then((r) => { if (!r.error) { page = r; drawHandle(); } }, () => {});
   if (script.hasAttribute("data-vk-build")) watchBuild();
-  if (recall("open")) toggle(true);
+  // Each page starts collapsed; opening is an explicit click or key press.
 })();
