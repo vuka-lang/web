@@ -195,8 +195,21 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	if ls.island {
 		props, err = a.islandBinds(ls.typ, s.path, s.where)
 	}
+	if err == nil && s.page {
+		err = a.checkPathProps(ls.typ, props, pathNames)
+	}
 	if err != nil {
 		return nil, err
+	}
+	var layouts []*layoutSpec
+	if len(s.layouts) > 0 {
+		if layouts, err = a.compileLayouts(s, what); err != nil {
+			return nil, err
+		}
+	}
+	bind := a.bindProps
+	if s.page {
+		bind = a.bindPage
 	}
 	params, err := patchParams(ls.typ)
 	if err != nil {
@@ -234,7 +247,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		end := a.span(rq.ctx, "handler", s.where)
 		c, err := a.newComponent(ls.typ, ls.template, ls.ctor)
 		if err == nil {
-			err = a.bindProps(c.Elem(), props, pathNames, r)
+			err = bind(c.Elem(), props, pathNames, r)
 		}
 		if err != nil {
 			end()
@@ -256,10 +269,24 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		}
 		tag := &ui.ComponentNode{Site: site, Props: comp, Routed: true, URL: urlFields}
 		var page ui.Node
-		if islandLayout != nil {
+		if layouts != nil {
+			if islandLayout != nil {
+				rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(c))
+			} else {
+				rq.ctx = titled(rq.ctx, c)
+			}
+			if page, err = a.wrapLayouts(rq, layouts, pathNames, tag); err != nil {
+				end()
+				a.writeError(w, r, err, true)
+				return
+			}
+		} else if islandLayout != nil {
 			rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(c))
 			page = islandLayout(rq.ctx, tag)
 		} else {
+			if s.page {
+				rq.ctx = titled(rq.ctx, c)
+			}
 			page = layout(tag)
 		}
 		end()
@@ -275,9 +302,10 @@ type prop struct {
 	name       string
 	typ        reflect.Type
 	dep        bool
-	unexported bool // a page-backed island's server-only field
-	query      bool // only from the query parameter (url:"name")
-	path       bool // only from the path segment
+	unexported bool                      // a page-backed island's server-only field
+	query      bool                      // only from the query parameter (url:"name")
+	path       bool                      // only from the path segment
+	check      func(reflect.Value) error // a path parameter's validate: tag (PageRoute)
 }
 
 func (a *App) liveProps(t reflect.Type, where string) ([]prop, error) {
