@@ -34,8 +34,8 @@ type routeSpec struct {
 	island       *islandPage // a stateless page backed by its island: its GET, or its calls' POST
 	attrs        []any       // typed attributes, for WrapRoutes
 	html         bool        // answers with a page; set by compile
-	page         bool        // a page as a pages/ folder declares it (PageRoute, LayoutOf, Receiver)
-	layouts      []reflect.Type
+	page         bool        // a page as a pages/ folder declares it (PageRoute, LayoutOf, GuardOf, Receiver)
+	layouts      []layoutRef
 	recvCtor     reflect.Value // the receiver's constructor (Receiver)
 }
 

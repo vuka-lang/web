@@ -269,17 +269,21 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		}
 		tag := &ui.ComponentNode{Site: site, Props: comp, Routed: true, URL: urlFields}
 		var page ui.Node
-		if layouts != nil {
+		if framed(layouts) {
 			if islandLayout != nil {
 				rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(c))
 			} else {
 				rq.ctx = titled(rq.ctx, c)
 			}
-			if page, err = a.wrapLayouts(rq, layouts, pathNames, tag); err != nil {
-				end()
-				a.writeError(w, r, err, true)
-				return
-			}
+		}
+		loaded, err := a.loadLayouts(rq, layouts, pathNames)
+		if err != nil {
+			end()
+			a.writeError(w, r, err, true)
+			return
+		}
+		if framed(layouts) {
+			page = nestLayouts(layouts, loaded, tag)
 		} else if islandLayout != nil {
 			rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(c))
 			page = islandLayout(rq.ctx, tag)
