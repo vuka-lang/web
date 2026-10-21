@@ -83,6 +83,7 @@ type liveSpec struct {
 	ctor            reflect.Value // its constructor, when registered with one
 	layout          func(ui.Node) ui.Node
 	mw              []Middleware
+	mwOf            []useOf    // UseOf's middleware, resolved when the app is built
 	attrs           []any      // the type's typed attributes
 	island          bool       // a page backed by its island (@web.Live or @web.Get on an @ui.Island type)
 	routeOpts       []routeOpt // Attrs, Wrap, Params given with it
@@ -90,7 +91,7 @@ type liveSpec struct {
 
 // route is the page's GET route.
 func (ls *liveSpec) route() *routeSpec {
-	s := &routeSpec{method: http.MethodGet, path: ls.path, where: "live page " + ls.name, live: ls, mw: slices.Clone(ls.mw), attrs: slices.Clone(ls.attrs)}
+	s := &routeSpec{method: http.MethodGet, path: ls.path, where: "live page " + ls.name, live: ls, mw: slices.Clone(ls.mw), mwOf: slices.Clone(ls.mwOf), attrs: slices.Clone(ls.attrs)}
 	if ls.registered {
 		s.attrs = append(flattenAttrs(vuka.TypeAttrs(ls.typ)), s.attrs...)
 	}

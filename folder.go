@@ -105,6 +105,100 @@ func Receiver(ctor any) RouteOption {
 	return routeOpt(func(s *routeSpec) { s.page, s.recvCtor = true, v })
 }
 
+// UseOf wraps the route in mw, HTTP middleware: a func(next http.Handler)
+// http.Handler, or its constructor, func(deps…) web.Middleware, its
+// dependencies provided types, resolved when the app is built; what vuka's
+// folder routes register for a folder's Middleware. Several wrap in the
+// order given, the first outermost, and they wrap the whole route — outside
+// its Use middleware, its guards and layouts, and its binding, so a path
+// parameter's 404 happens inside them. Not calling next answers the request
+// itself. On a Live page it wraps the GET and the join, never the socket's
+// events.
+func UseOf(mw any) RouteOption { return useOf{fn: reflect.ValueOf(mw)} }
+
+// useOf is UseOf's middleware, resolved when the app is built.
+type useOf struct{ fn reflect.Value }
+
+func (u useOf) Attrs() []any { return []any{u} }
+
+var middlewareType = typeOf[Middleware]()
+
+// middlewareOf resolves a route's UseOf middleware, the first given
+// outermost: each a Middleware as given, or built by its constructor, its
+// provided dependencies injected.
+func (a *App) middlewareOf(s *routeSpec) ([]Middleware, error) {
+	if len(s.mwOf) == 0 {
+		return nil, nil
+	}
+	what := s.method + " " + s.path + " (" + whereName(s.where) + ")"
+	out := make([]Middleware, 0, len(s.mwOf))
+	for _, u := range s.mwOf {
+		fn := u.fn
+		if !fn.IsValid() || fn.Kind() != reflect.Func || fn.IsNil() {
+			return nil, failf("E0410", what, s.where, "web.UseOf takes middleware, not %v", valueName(fn)).
+				WithHelp("pass a func(next http.Handler) http.Handler, or its constructor: func(deps…) web.Middleware")
+		}
+		t := fn.Type()
+		if t.ConvertibleTo(middlewareType) {
+			out = append(out, fn.Convert(middlewareType).Interface().(Middleware))
+			continue
+		}
+		if t.IsVariadic() || t.NumOut() != 1 || !t.Out(0).ConvertibleTo(middlewareType) {
+			return nil, failf("E0410", what, s.where, "web.UseOf(%s): neither middleware nor its constructor", funcName(fn)).
+				WithHelp("pass a func(next http.Handler) http.Handler, or its constructor: func(deps…) web.Middleware")
+		}
+		in := make([]reflect.Value, t.NumIn())
+		for i := range in {
+			pt := t.In(i)
+			if !a.c.has(pt) {
+				return nil, failf("E0407", what, s.where, "no provider for %s, needed by %s", pt, funcName(fn)).
+					WithHelp("provide it: web.Provide(NewX), or @web.Service on the type")
+			}
+			if err := a.c.check(pt, s.where); err != nil {
+				return nil, err
+			}
+			a.needs = append(a.needs, pt)
+			v, err := a.c.get(pt)
+			if err != nil {
+				return nil, err
+			}
+			in[i] = v
+		}
+		mw := fn.Call(in)[0]
+		if mw.IsNil() {
+			return nil, failf("E0410", what, s.where, "%s returned a nil middleware", funcName(fn))
+		}
+		out = append(out, mw.Convert(middlewareType).Interface().(Middleware))
+	}
+	return out, nil
+}
+
+func valueName(v reflect.Value) string {
+	if !v.IsValid() {
+		return "nil"
+	}
+	return v.Type().String()
+}
+
+// attrType is the type whose registered attributes (vuka.RegisterType) the
+// route takes, beyond a Live page's or a controller's: a stateless folder
+// page's struct, or a method handler's receiver built by Receiver.
+func (s *routeSpec) attrType() reflect.Type {
+	if !s.page {
+		return nil
+	}
+	if s.recvCtor.IsValid() {
+		if t, err := ctorOf(s.recvCtor.Type()); err == nil {
+			return t
+		}
+		return nil
+	}
+	if s.recv == nil && s.method == http.MethodGet {
+		return nodePage(s.fn)
+	}
+	return nil
+}
+
 // layoutSpec is a layout of LayoutOf, or a guard of GuardOf, compiled.
 type layoutSpec struct {
 	typ      reflect.Type

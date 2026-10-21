@@ -21,6 +21,7 @@ type routeOpts struct {
 	live  []LiveOption
 	types []func(*vuka.Type) // type decorators (ui.Island), for a page's type
 	mw    []Middleware
+	mwOf  []useOf
 	view  *declView
 	attrs []any
 }
@@ -40,6 +41,9 @@ func collect(opts []RouteOption, own bool) *routeOpts {
 				continue
 			case Uses:
 				o.mw = append(o.mw, x.middleware()...)
+				continue
+			case useOf:
+				o.mwOf = append(o.mwOf, x)
 				continue
 			case Templates:
 				var v declView
@@ -67,6 +71,7 @@ func (o *routeOpts) applyTo(s *routeSpec) {
 		return
 	}
 	s.mw = append(s.mw, o.mw...)
+	s.mwOf = append(s.mwOf, o.mwOf...)
 	if o.view != nil {
 		s.view = o.view
 	}
@@ -126,7 +131,7 @@ func (r *registry) live(path string, page any, opts []RouteOption, own bool) {
 		f(o.pageType(ls.typ, page))
 	}
 	ls.attrs, ls.registered = o.attrs, true
-	ls.mw = o.mw
+	ls.mw, ls.mwOf = o.mw, o.mwOf
 	for _, lo := range o.live {
 		lo.liveOption(ls)
 	}
