@@ -32,7 +32,9 @@ type Rest string
 // bound, before its mount hook, which its session runs as it renders. On
 // Get, the constructor's struct is a stateless page, a ui.Node: the mount
 // hook its LiveSchema declares (ui.MountPage), if any, runs once its fields
-// are bound, and the page renders. LayoutOf implies PageRoute.
+// are bound, and the page renders. LayoutOf implies PageRoute. On a
+// function handler (a folder's method func, GET in [id].vuka) a scalar
+// parameter bound from a path segment that doesn't parse answers 404 too.
 func PageRoute() RouteOption { return routeOpt(func(s *routeSpec) { s.page = true }) }
 
 // LayoutOf wraps a route's page in the layout T, a stateless struct

@@ -334,3 +334,30 @@ func TestFolderLayoutsGuardMethodHandlers(t *testing.T) {
 		t.Errorf("ran %v", s.ran)
 	}
 }
+
+// orgGET is a folder's method func, GET in api/orgs/[org].vuka: its scalar
+// binds the segment of its name.
+func orgGET(ctx context.Context, org int, s *orgStore) (string, error) {
+	n, ok := s.names[org]
+	if !ok {
+		return "", NotFound
+	}
+	return n, nil
+}
+
+// TestFolderMethodFuncs: vuka's pages/route.go registers a method func on
+// the app with its parameters' names; a segment that doesn't parse names
+// no record, 404, as a page's does, while a hand-written route's scalar
+// that doesn't parse stays 400.
+func TestFolderMethodFuncs(t *testing.T) {
+	routes := OptionFunc(func(app *App) {
+		app.Get("/api/orgs/{org}", orgGET, PageRoute(), Params("ctx", "org", "s"))
+	})
+	app := folderApp(routes)
+	app.Get("/plain/{org}", orgGET, Params("ctx", "org", "s"))
+	h := app.Handler()
+	expect(t, h, "GET", "/api/orgs/2", "", 200, `"Globex"`)
+	expect(t, h, "GET", "/api/orgs/9", "", 404, "")
+	expect(t, h, "GET", "/api/orgs/x", "", 404, "")
+	expect(t, h, "GET", "/plain/x", "", 400, "")
+}
