@@ -408,12 +408,10 @@ func (a *App) nameByPath(params []vuka.Param, pathNames []string) {
 			unnamed = append(unnamed, i)
 		}
 	}
-	off := len(pathNames) - len(unnamed)
+	off := max(len(pathNames)-len(unnamed), 0) // more scalars than segments: the first take them
 	for j, i := range unnamed {
-		if k := off + j; off < 0 && j < len(pathNames) {
-			params[i].Name = pathNames[j]
-		} else if off >= 0 {
-			params[i].Name = pathNames[k]
+		if off+j < len(pathNames) {
+			params[i].Name = pathNames[off+j]
 		}
 	}
 }
