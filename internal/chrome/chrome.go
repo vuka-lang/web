@@ -361,17 +361,39 @@ func (p *Page) Click(sel string) {
 	p.ClickElement(fmt.Sprintf(`document.querySelector(%q)`, sel))
 }
 
-// ClickElement clicks the middle of the element a JavaScript expression
-// finds (waiting for it) with the mouse: one in a shadow root, say.
+// ClickElement clicks the element a JavaScript expression gives, in its
+// middle. One partly outside the viewport is clicked as a person does: the
+// pointer moves onto its visible part first, and the click waits for it to
+// stop moving, so one that slides in on hover (the toolbar's handle) is
+// clicked where it lands.
 func (p *Page) ClickElement(expr string) {
 	p.b.t.Helper()
-	var at struct{ X, Y float64 }
 	p.Wait(expr)
 	p.front()
+	// The centre of the element's part in the viewport, its box as a key.
 	js := fmt.Sprintf(`(() => { const el = %s; el.scrollIntoView({block: "center"});
-		const r = el.getBoundingClientRect(); return {X: r.x + r.width / 2, Y: r.y + r.height / 2}; })()`, expr)
+		const r = el.getBoundingClientRect();
+		const x0 = Math.max(r.left, 0), x1 = Math.min(r.right, innerWidth), y0 = Math.max(r.top, 0), y1 = Math.min(r.bottom, innerHeight);
+		return {X: (x0 + x1) / 2, Y: (y0 + y1) / 2, Box: [r.left, r.top, r.width, r.height].join(","),
+			Out: r.left < 0 || r.top < 0 || r.right > innerWidth || r.bottom > innerHeight}; })()`, expr)
+	var at struct {
+		X, Y float64
+		Box  string
+		Out  bool
+	}
 	if err := p.Eval(js, &at); err != nil {
 		p.b.t.Fatal(err)
+	}
+	for end := time.Now().Add(Timeout); at.Out; {
+		p.must("Input.dispatchMouseEvent", map[string]any{"type": "mouseMoved", "x": at.X, "y": at.Y}, nil)
+		time.Sleep(50 * time.Millisecond)
+		prev := at.Box
+		if err := p.Eval(js, &at); err != nil {
+			p.b.t.Fatal(err)
+		}
+		if at.Box == prev || time.Now().After(end) {
+			break
+		}
 	}
 	for _, typ := range []string{"mouseMoved", "mousePressed", "mouseReleased"} {
 		p.must("Input.dispatchMouseEvent", map[string]any{"type": typ, "x": at.X, "y": at.Y, "button": "left", "clickCount": 1}, nil)
