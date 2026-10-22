@@ -464,8 +464,12 @@ func TestBrowserToolbar(t *testing.T) {
 		t.Fatalf("the page: %s", p.Text("main"))
 	}
 
-	// A small indicator remains until the edge is approached or focused.
-	p.Wait(`(() => { const h = ` + tb + `.querySelector(".handle"); return Math.abs(innerWidth - h.getBoundingClientRect().left - 6) < 1; })()`)
+	// A small indicator remains until the edge is approached or focused: 6px
+	// with a mouse, a 44px touch target where nothing hovers (headless Chrome
+	// on Linux reports hover: none).
+	p.Wait(`(() => { const h = ` + tb + `.querySelector(".handle");
+		const peek = matchMedia("(hover: none), (pointer: coarse)").matches ? 44 : 6;
+		return Math.abs(innerWidth - h.getBoundingClientRect().left - peek) < 1; })()`)
 	p.Eval(tb+`.querySelector(".handle").focus()`, nil)
 	p.Wait(`(() => { const h = ` + tb + `.querySelector(".handle"); return Math.abs(innerWidth - h.getBoundingClientRect().right) < 1; })()`)
 	p.ClickElement(tb + `.querySelector(".handle")`)
