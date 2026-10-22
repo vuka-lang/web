@@ -1,0 +1,52 @@
+package pages
+
+import (
+	"context"
+	"strings"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/islands/registry"
+
+	Applicants "../web/components/Applicants.vue"
+)
+
+// Applicants is a page backed by a component: its markup is the component's
+// tag alone, so Applicants.vue is its template. The exported fields are what
+// the component reads (useLive: live.rows.value); Q, bound, is one it sets
+// as the visitor types, kept in the address's ?q=, and onChange runs after.
+// db is the server's own.
+type Applicants struct {
+	ui.Live
+	Q    string               `json:"q"` @ui.Bind @ui.URL("q")
+	Rows []registry.Applicant `json:"rows"`
+	db   *registry.Registry
+}
+
+func NewApplicants(db *registry.Registry) *Applicants { return &Applicants{db: db} }
+
+@ui.Mount
+func (a *Applicants) mount(_ context.Context) error {
+	a.Rows = a.find(a.Q)
+	return nil
+}
+
+@ui.OnChange
+func (a *Applicants) onChange(_ context.Context, _ ui.Changed) error {
+	if a.Q != "" && len(a.Q) < 2 {
+		return web.Invalid{"q": "type at least 2 letters"}
+	}
+	a.Rows = a.find(a.Q)
+	return nil
+}
+
+func (a *Applicants) find(q string) []registry.Applicant {
+	var out []registry.Applicant
+	for _, x := range a.db.All {
+		if strings.Contains(strings.ToLower(x.Name), strings.ToLower(q)) {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+<Applicants q={Q} rows={Rows} client:load />

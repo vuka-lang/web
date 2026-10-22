@@ -1,0 +1,20 @@
+package components
+
+import "github.com/vuka-lang/ui"
+
+// Menu's open state is its own instance's: the page's two menus open apart.
+type Menu struct {
+	Label string
+	open  ui.State[bool]
+}
+<div class="menu-box">
+	<button class="menu-btn" type="button" aria-expanded={open} onClick={open = !open}>
+		{Label}
+	</button>
+	<ui.Show when={open}>
+		<ul class="panel">
+			<li>One</li>
+			<li>Two</li>
+		</ul>
+	</ui.Show>
+</div>

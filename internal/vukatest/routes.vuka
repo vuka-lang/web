@@ -45,6 +45,4 @@ decorator tagged(c) {
 func badge(ctx context.Context, label string) string { return label }
 
 @web.Get("/hello")
-func hello(r *http.Request, who string) ui.Node {
-	return <p>hello {who}</p>
-}
+func hello(r *http.Request, who string) ui.Node { return Hello{Who: who} }

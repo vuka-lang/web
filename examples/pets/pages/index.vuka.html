@@ -1,0 +1,11 @@
+// Package pages is the pets app's pages, each file's path its URL.
+package pages
+
+import "github.com/vuka-lang/web/examples/pets/views"
+
+// Home is the app's first page.
+type Home struct{}
+<views.Layout title="Home">
+	<h1>Welcome</h1>
+	<p>Try <a href="/pets">the pets</a> or <code>GET /api/pets</code>.</p>
+</views.Layout>

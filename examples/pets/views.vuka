@@ -1,0 +1,30 @@
+package main
+
+import (
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/pets/model"
+	"github.com/vuka-lang/web/examples/pets/store"
+)
+
+// PetList fills views.PetsPage's parameters by name: title, pets.
+type PetList struct {
+	Title string
+	Pets  []model.Pet
+}
+
+@web.Get("/pets")
+@web.Template("views/pets.templ")
+func ListPets(s *store.PetStore) Result[PetList] {
+	pets := s.All()?
+	return Ok(PetList{Title: "All pets", Pets: pets})
+}
+
+@web.Template("views/pet.html")
+@web.Get("/pets/{id}")
+func ShowPet(id int, s *store.PetStore) Result[model.Pet] { return s.Find(id) }
+
+@web.Post("/pets")
+func AddPet(in model.NewPet, s *store.PetStore) (web.Redirect, error) {
+	p := s.Add(in)?
+	return web.Redirect("/pets/" + itoa(p.ID)), nil
+}

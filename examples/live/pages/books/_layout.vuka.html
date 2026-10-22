@@ -1,0 +1,16 @@
+package books
+
+import (
+	"context"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web/examples/live/components"
+)
+
+// Layout is the books' document: the example's, titled by the page, its
+// own styles added.
+type Layout struct {
+	Children ui.Node
+}
+
+<components.Shell title={ui.PageTitle(ctx)} head={<style>.book h1 { font-family: Georgia, serif } .book .author { color: #555 }</style>}>{Children}</components.Shell>

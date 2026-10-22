@@ -1,0 +1,19 @@
+// Package pages is the app's pages, each file's path its URL.
+package pages
+
+import (
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/web/examples/auth/components"
+)
+
+// Login is the page auth sends visitors to; it must be public. Next is
+// where to go once signed in, ?next=.
+@auth.Public
+type Login struct {
+	Next string
+}
+<components.Shell title="Sign in">
+	<h1>Sign in</h1>
+	<auth.LoginForm next={Next} error={auth.LoginError(web.Request(ctx))} />
+</components.Shell>

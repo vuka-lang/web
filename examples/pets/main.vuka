@@ -1,4 +1,6 @@
-// Command pets is a small web app built with github.com/vuka-lang/web.
+// Command pets is a small web app built with github.com/vuka-lang/web: its
+// pages are the files under pages/, its JSON API and template views the
+// handlers beside main.
 package main
 
 import (
@@ -7,6 +9,8 @@ import (
 	"log"
 
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/pets/pages"
+	"github.com/vuka-lang/web/examples/pets/store"
 	"github.com/vuka-lang/web/mail"
 )
 
@@ -16,13 +20,13 @@ var static embed.FS
 // services are the app's, which its pages, handlers and hooks take as
 // parameters.
 func services(app *web.App) {
-	app.Service(NewPetStore)
-	app.Service(NewOwners)
+	app.Service(store.NewPetStore)
+	app.Service(store.NewOwners)
 }
 
 func main() {
-	app := web.New(mail.Provide()) // reads .env files first: see .env.example
-	app.Provide(OpenDB)
+	app := web.New(pages.Routes(), mail.Provide()) // reads .env files first: see .env.example
+	app.Provide(store.OpenDB)
 	services(app)
 	assets, _ := fs.Sub(static, "static")
 	app.Static("/assets", assets)

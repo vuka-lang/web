@@ -10,6 +10,8 @@ import (
 
 	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/web/crontest"
+	"github.com/vuka-lang/web/examples/pets/pages"
+	"github.com/vuka-lang/web/examples/pets/store"
 	"github.com/vuka-lang/web/mail/mailtest"
 )
 
@@ -30,7 +32,7 @@ func get(t *testing.T, srv *httptest.Server, method, path, body string, header .
 }
 
 func TestPets(t *testing.T) {
-	app := web.New(web.Provide(OpenDB, mailtest.New()), web.OptionFunc(services))
+	app := web.New(pages.Routes(), web.Provide(store.OpenDB, mailtest.New()), web.OptionFunc(services))
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 	for _, c := range []struct {
@@ -63,7 +65,7 @@ func TestPets(t *testing.T) {
 
 func TestSignup(t *testing.T) {
 	m := mailtest.New()
-	app := web.New(web.Provide(OpenDB, m), web.OptionFunc(services))
+	app := web.New(pages.Routes(), web.Provide(store.OpenDB, m), web.OptionFunc(services))
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 	form := []string{"Content-Type", "application/x-www-form-urlencoded"}
@@ -85,9 +87,8 @@ func TestSignup(t *testing.T) {
 	}
 
 	// The cron forgets sign-ups nobody confirmed within a day.
-	owners, _ := web.Resolve[*Owners](app)
-	old := owners.Add("Cy", "cy@example.com")
-	owners.db.owners[old.Token] = Owner{Name: "Cy", Token: old.Token, Joined: time.Now().Add(-25 * time.Hour)}
+	owners, _ := web.Resolve[*store.Owners](app)
+	old := owners.AddAt("Cy", "cy@example.com", time.Now().Add(-25*time.Hour))
 	if err := crontest.Run(app, "forgetUnconfirmed"); err != nil {
 		t.Fatal(err)
 	}

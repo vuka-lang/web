@@ -1,0 +1,53 @@
+package pages
+
+import (
+	"context"
+	"fmt"
+	"slices"
+
+	"github.com/vuka-lang/ui"
+)
+
+// Chores is a live list whose menu opens in the browser, whose deletes ask
+// first, and which pushes a flash to its status line after each delete.
+type Chores struct {
+	ui.Live
+	chores []string
+	picked string
+	done   int
+}
+
+@ui.Mount
+func (c *Chores) mount(ctx context.Context) error { c.chores = []string{"wash", "cook", "read"}; return nil }
+
+func (c *Chores) Pick(e ui.Event) { c.picked = e.Value }
+
+func (c *Chores) Delete(e ui.Event) {
+	c.chores = slices.DeleteFunc(c.chores, func(s string) bool { return s == e.Value })
+	c.done++
+	c.PushJS(ui.JS.On(ui.Ref("status")).AddClass("flash").SetAttr("data-done", fmt.Sprint(c.done)))
+}
+<section class="chores">
+	<button class="pick" type="button" onClick={ui.JS.RemoveClass(ui.Ref("menu"), "hidden")}>Pick one</button>
+	<ul ref="menu" class="menu hidden">
+		for _, ch := range chores {
+			<li key={ch}>
+				<button type="button" value={ch} onClick={ui.JS.AddClass(ui.Ref("menu"), "hidden").Push(c.Pick)}>
+					{ch}
+				</button>
+			</li>
+		}
+	</ul>
+	<output>{picked}</output>
+	<ul class="list">
+		for _, ch := range chores {
+			<li key={ch} id={"chore-" + ch}>
+				{ch}
+				<button class="del" type="button" value={ch} onClick={ui.JS.Confirm("Delete " + ch + "?").Push(c.Delete)}>
+					delete
+				</button>
+			</li>
+		}
+	</ul>
+	<p ref="status" class="status">{len(chores)} left</p>
+</section>

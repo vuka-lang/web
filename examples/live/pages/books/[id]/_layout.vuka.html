@@ -1,0 +1,26 @@
+// Package book is a book's pages, /books/{id}.
+package book
+
+import (
+	"context"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/live/library"
+)
+
+// Layout frames a book's pages, inside the books' document. Its field ID
+// declares the folder's parameter, {id}: digits, and Load answers 404 for
+// a book the shelf doesn't have, before the page mounts.
+type Layout struct {
+	ID       int
+	Children ui.Node
+}
+
+func (l *Layout) Load(ctx context.Context) error {
+	if l.ID < 1 || l.ID > len(library.Books) {
+		return web.NotFound
+	}
+	return nil
+}
+<div class="book-frame">{Children}</div>

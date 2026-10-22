@@ -1,19 +1,36 @@
 // Command live shows stateful components served live by
 // github.com/vuka-lang/web: a counter page, a todo list, a chat whose tabs see
 // each other's messages, a counter inside an ordinary page, and a paged list
-// of books with a page per book, moved between over one connection.
+// of books with a page per book, moved between over one connection. Its
+// pages are the files under pages/.
 package main
 
 import (
 	"log"
 
+	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/live/components"
+	"github.com/vuka-lang/web/examples/live/library"
+	"github.com/vuka-lang/web/examples/live/pages"
+	"github.com/vuka-lang/web/examples/live/rooms"
 )
 
 func main() {
-	app := web.New(web.LiveLayout(livePage))
-	app.Service(NewChatLog)
-	if err := app.Run(""); err != nil { // ":$PORT", else ":8080"
+	if err := newApp().Run(""); err != nil { // ":$PORT", else ":8080"
 		log.Fatal(err)
 	}
 }
+
+// newApp is the app with its pages, the chat's log and the live pages'
+// layout; the tests add their options.
+func newApp(opts ...web.Option) *web.App {
+	return web.New(append([]web.Option{pages.Routes(), web.LiveLayout(livePage), web.Provide(rooms.NewLog)}, opts...)...)
+}
+
+// livePage is the layout of the live pages without a layout of their own.
+func livePage(page ui.Node) ui.Node { return components.Shell{Title: "Live", Children: page} }
+
+// BooksJSON is the list as JSON: not a page, so a link to it is a page load.
+@web.Get("/books.json")
+func BooksJSON() []library.Book { return library.Books }

@@ -364,7 +364,7 @@ compiles it and imports it for you:
 
 ```
 examples/pets/
-  pages.vuka        @web.Template("views/pets.templ"), @web.Template("views/pet.html")
+  views.vuka        @web.Template("views/pets.templ"), @web.Template("views/pet.html")
   model/pet.go      package model: Pet, shared by handlers and views
   views/layout.templ  package views: Layout
   views/pets.templ    package views: PetsPage, composed with @Layout
@@ -855,7 +855,7 @@ func Tabs() ui.Node {
 A live page's renders leave what the browser set alone; a component sets a
 state from the server with `c.PushJS(tab.Set("logs"))`. Guide:
 [client state](https://vuka-lang.github.io/ui/state); example:
-`examples/live/state.vuka`.
+`examples/live/pages/state`.
 
 ## Dependency injection
 

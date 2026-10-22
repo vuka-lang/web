@@ -6,6 +6,8 @@ import (
 
 	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/web/examples/auth/accounts"
+	"github.com/vuka-lang/web/examples/auth/notices"
 )
 
 // The API: a browser's session cookie or a bearer token from
@@ -13,15 +15,15 @@ import (
 
 @web.Get("/api/notices")
 @auth.Requires("notices.read")
-func ListNotices(n *Notices) []Notice { return n.All() }
+func ListNotices(n *notices.Notices) []notices.Notice { return n.All() }
 
 @web.Post("/api/notices")
 @auth.Requires("notices.write")
-func PostNotice(ctx context.Context, me auth.Identity, in NoticeForm, n *Notices) Result[Notice] {
+func PostNotice(ctx context.Context, me auth.Identity, in notices.Form, n *notices.Notices) Result[notices.Notice] {
 	if strings.TrimSpace(in.Text) == "" {
 		return Err(web.BadRequest("text is required"))
 	}
-	x := n.Add(name(&me), in.Text)
-	web.Broadcast(ctx, "notices", changed{})
+	x := n.Add(accounts.Name(&me), in.Text)
+	web.Broadcast(ctx, "notices", notices.Changed{})
 	return Ok(x)
 }

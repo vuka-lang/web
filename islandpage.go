@@ -179,12 +179,22 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 	ip.binds = binds
 	pathNames := pathParams(s.path)
 	layout := a.islandLayout(ip.typ, nil)
+	// A page under pages/: its folders' layouts and guards (LayoutOf,
+	// GuardOf) load and wrap it.
+	layouts, err := a.compileLayouts(s, s.method+" "+s.path+" ("+whereName(s.where)+")")
+	if err != nil {
+		return nil, err
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rq := a.newRequest(w, r)
 		end := a.span(rq.ctx, "handler", s.where)
 		x, err := a.newComponent(ip.typ, reflect.Value{}, ip.ctor)
 		if err == nil {
 			err = a.bindProps(x.Elem(), binds, pathNames, r)
+		}
+		var loaded []reflect.Value
+		if err == nil {
+			loaded, err = a.loadLayouts(rq, layouts, pathNames)
 		}
 		if err != nil {
 			end()
@@ -204,7 +214,12 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 		}
 		end()
 		rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(x))
-		a.page(rq, layout(rq.ctx, ui.IslandPage(x.Interface(), ui.CallAt(r.URL.Path, a.signProps(rq.ctx, ip, r.URL.Path, props)))))
+		page := ui.IslandPage(x.Interface(), ui.CallAt(r.URL.Path, a.signProps(rq.ctx, ip, r.URL.Path, props)))
+		if framed(layouts) {
+			a.page(rq, nestLayouts(layouts, loaded, page))
+			return
+		}
+		a.page(rq, layout(rq.ctx, page))
 	}), nil
 }
 
@@ -246,9 +261,26 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 			paths = append(paths, b)
 		}
 	}
+	// A page under pages/: its folders' guards check each call as they do
+	// its GET.
+	gs := *s
+	gs.layouts = nil
+	for _, ref := range s.layouts {
+		if ref.guard {
+			gs.layouts = append(gs.layouts, ref)
+		}
+	}
+	guards, err := a.compileLayouts(&gs, s.method+" "+s.path+" ("+whereName(s.where)+")")
+	if err != nil {
+		return nil, err
+	}
 	cop := http.NewCrossOriginProtection()
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rq := a.newRequest(w, r)
+		if _, err := a.loadLayouts(rq, guards, pathNames); err != nil {
+			a.writeError(w, r, err, false)
+			return
+		}
 		var call pageCall
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&call); err != nil {
 			a.writeError(w, r, BadRequest("invalid call: "+err.Error()), false)

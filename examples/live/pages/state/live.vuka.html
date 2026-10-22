@@ -1,0 +1,31 @@
+package state
+
+import (
+	"context"
+
+	"github.com/vuka-lang/ui"
+)
+
+// Board is a live page with client state: what the browser opened stays
+// open when the server renders the board again, and the server sets a
+// state from a method.
+type Board struct {
+	ui.Live
+	tab  ui.State[string]
+	open ui.State[bool]
+	n    int
+}
+
+@ui.Mount
+func (b *Board) mount(ctx context.Context) error { b.tab = "a"; return nil }
+
+func (b *Board) Bump() { b.n++ }
+
+func (b *Board) ToB() { b.tab = "b" }
+<div class="board">
+	<button id="open" type="button" onClick={open = !open}>Open</button>
+	<p id="opened" hidden={!open}>opened</p>
+	<button id="bump" type="button" onClick={Bump}>{n}</button>
+	<button id="tob" type="button" onClick={ToB}>To b</button>
+	<p id="tab">{tab}</p>
+</div>

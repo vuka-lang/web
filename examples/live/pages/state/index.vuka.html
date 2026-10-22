@@ -1,0 +1,26 @@
+// Package state is pages of client state: /state, which never connects,
+// and /state/live, a live page with client state.
+package state
+
+import (
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web/examples/live/components"
+)
+
+// theme is the page's state: declared at package level, every component on
+// the page reads this one value.
+var theme ui.State[string]
+
+// State is a page of client state only — menus, tabs, a filter, a
+// tooltip: the browser keeps their states, and the page never connects.
+type State struct{}
+<components.Shell title="State">
+	<h1>State</h1>
+	<components.Menu label="First" />
+	<components.Menu label="Second" />
+	<components.Tabs />
+	<components.Filter />
+	<p class={ui.Class{"theme": true, "dark": theme == "dark"}} id="theme">Theme: {theme}</p>
+	<button type="button" id="dark" onClick={theme = "dark"}>Dark</button>
+	<components.Tip />
+</components.Shell>

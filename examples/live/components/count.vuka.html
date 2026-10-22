@@ -1,0 +1,9 @@
+package components
+
+import "github.com/vuka-lang/ui"
+
+// Count gets its parent's state: the same state, not a copy.
+type Count struct {
+	Kind ui.State[string]
+}
+<p id="count" hidden={Kind == ""}>only {Kind}s</p>

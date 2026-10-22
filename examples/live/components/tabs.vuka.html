@@ -1,0 +1,18 @@
+package components
+
+import "github.com/vuka-lang/ui"
+
+// Tabs picks a panel, the environment until another is picked; one
+// expression may read several states.
+type Tabs struct {
+	tab    ui.State[string]
+	pinned ui.State[bool]
+}
+<section class="tabs">
+	<button type="button" id="tab-env" aria-selected={tab != "logs"} onClick={tab = "env"}>Environment</button>
+	<button type="button" id="tab-logs" aria-selected={tab == "logs"} onClick={tab = "logs"; pinned = false}>Logs</button>
+	<button type="button" id="pin" onClick={pinned = !pinned}>Pin</button>
+	<div id="env" hidden={tab == "logs"}>KEY=value</div>
+	<div id="logs" hidden={tab != "logs"}>started</div>
+	<p id="pinned" hidden={!pinned || tab == "logs"}>pinned to the environment</p>
+</section>

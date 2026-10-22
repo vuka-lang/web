@@ -1,0 +1,14 @@
+package components
+
+import "github.com/vuka-lang/ui"
+
+// Tip is a popover shown by a state, in the browser's top layer.
+type Tip struct {
+	tip ui.State[bool]
+}
+<div>
+	<button type="button" id="tip-btn" onClick={tip = !tip}>Tip</button>
+	<ui.Show when={tip}>
+		<div id="tip" popover="manual" class="panel">A tip</div>
+	</ui.Show>
+</div>

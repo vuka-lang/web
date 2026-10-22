@@ -1,0 +1,12 @@
+package views
+
+// Welcome is the welcome email's HTML; the Mailer makes its text part.
+type Welcome struct {
+	Name string
+	Link string
+}
+<div style="font-family: system-ui, sans-serif">
+	<h1>Welcome, {Name}</h1>
+	<p>Thanks for signing up to Pets. Confirm your address within a day:</p>
+	<p><a href={Link}>Confirm my address</a></p>
+</div>

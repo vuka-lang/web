@@ -1,59 +1,11 @@
 // Package gatetest checks auth's gates on live events with the code Vuka
-// generates: the registry it fills is what web's dispatch reads.
+// generates: the registry it fills is what web's dispatch reads. Locked and
+// Page are in locked.vuka.html and page.vuka.html.
 //
 //vuka:nolink
 package gatetest
 
-import (
-	"context"
-	"sync/atomic"
-
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web/auth"
-)
+import "sync/atomic"
 
 // Runs counts the gated work done.
 var Runs atomic.Int64
-
-// Locked is gated on its type: every event of it needs admin, a function
-// literal's included, though it calls no method.
-@auth.Requires("admin")
-type Locked struct {
-	ui.Live
-	n int
-}
-
-func (l *Locked) Render() ui.Node {
-	return <button class="locked" onClick={func() { l.n++; Runs.Add(1) }}>{l.n}</button>
-}
-
-// Page is open to anyone signed in; its Clear is for admins.
-type Page struct {
-	ui.Live
-}
-
-@auth.Requires("admin")
-func (p *Page) Clear() { Runs.Add(1) }
-
-@auth.Requires("admin")
-func (p *Page) ClearCtx(ctx context.Context) error {
-	Runs.Add(1)
-	return nil
-}
-
-// Spawn starts a goroutine calling a gated method, given no context.
-func (p *Page) Spawn(ctx context.Context) {
-	done := make(chan struct{})
-	go func() { p.Clear(); close(done) }()
-	<-done
-}
-
-func (p *Page) Render() ui.Node {
-	return <main>
-		<button onClick={p.Clear}>clear</button>
-		<button onClick={func() { p.Clear() }}>clear, from a literal</button>
-		<button onClick={p.ClearCtx}>clear with the page's context</button>
-		<button onClick={p.Spawn}>clear on a goroutine</button>
-		<Locked />
-	</main>
-}

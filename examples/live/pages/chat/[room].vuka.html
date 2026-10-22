@@ -1,0 +1,71 @@
+// Package chat is the chat's rooms, /chat/{room}.
+package chat
+
+import (
+	"context"
+	"strings"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/live/rooms"
+)
+
+// Chat is a room at /chat/{room}: Room binds from the path, log is injected.
+type Chat struct {
+	ui.Live
+	Room  string
+	log   *rooms.Log
+	lines []string
+	name  string
+}
+
+func NewChat(log *rooms.Log) *Chat { return &Chat{log: log} }
+
+func (c *Chat) topic() string { return "chat:" + c.Room }
+
+@ui.Mount
+func (c *Chat) mount(ctx context.Context) error {
+	c.Subscribe(c.topic())
+	c.lines = c.log.History(c.Room)
+	return nil
+}
+
+func (c *Chat) Update(m rooms.Said)   { c.lines = append(c.lines, m.Who+": "+m.Text) }
+func (c *Chat) Update(j rooms.Joined) { c.lines = append(c.lines, j.Who+" joined") }
+
+func (c *Chat) SetName(ctx context.Context, f rooms.Form) error {
+	name := strings.TrimSpace(f.Text)
+	if name == "" {
+		return web.BadRequest("pick a name")
+	}
+	c.name = name
+	c.log.Add(c.Room, name+" joined")
+	return web.Broadcast(ctx, c.topic(), rooms.Joined{Who: name})
+}
+
+func (c *Chat) Send(ctx context.Context, f rooms.Form) error {
+	if strings.TrimSpace(f.Text) == "" {
+		return nil
+	}
+	c.log.Add(c.Room, c.name+": "+f.Text)
+	return web.Broadcast(ctx, c.topic(), rooms.Said{Who: c.name, Text: f.Text})
+}
+<section class="chat">
+	<h2>#{Room}</h2>
+	<ul class="lines">
+		for i, l := range lines {
+			<li key={i}>{l}</li>
+		}
+	</ul>
+	if name == "" {
+		<form class="name" onSubmit={SetName}>
+			<input name="text" placeholder="Your name" autocomplete="off" />
+			<button>Join</button>
+		</form>
+	} else {
+		<form class="say" onSubmit={Send}>
+			<input name="text" placeholder={"Say something, " + name} autocomplete="off" />
+			<button>Send</button>
+		</form>
+	}
+</section>
