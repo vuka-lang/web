@@ -11,7 +11,7 @@ import (
 // Applicants is a page backed by a component: its template is
 // Applicants.vue. The exported fields are what the component reads
 // (useLive: live.rows.value); Q, bound, is one it sets as the visitor types,
-// kept in the address's ?q=, and Changed runs after. db is the server's own.
+// kept in the address's ?q=, and onChange runs after. db is the server's own.
 // Without ui.Live the page is stateless: each update carries the page's
 // signed props back and gets the new ones.
 @web.Get("/applicants")
@@ -34,12 +34,19 @@ func NewRegistry() *Registry {
 	return &Registry{all: []Applicant{{"Ada", "engineer"}, {"Grace", "admiral"}, {"Alan", "mathematician"}}}
 }
 
-func (a *Applicants) Mount(ctx context.Context) error {
+// LiveSchema declares the hooks: a stateless page has no ui.Live, which
+// gives a live page's the attributes @ui.Mount and @ui.OnChange.
+func (a *Applicants) LiveSchema(l *ui.LiveSchema) {
+	l.Mount(a.mount)
+	l.OnChange(a.onChange)
+}
+
+func (a *Applicants) mount(_ context.Context) error {
 	a.Rows = a.find(a.Q)
 	return nil
 }
 
-func (a *Applicants) Changed(ctx context.Context) error {
+func (a *Applicants) onChange(_ context.Context, _ ui.Changed) error {
 	if a.Q != "" && len(a.Q) < 2 {
 		return web.Invalid{"q": "type at least 2 letters"}
 	}

@@ -53,7 +53,8 @@ type booksLive struct {
 	query string
 }
 
-func (b *booksLive) Mount(ctx context.Context) error {
+func (b *booksLive) LiveSchema(l *ui.LiveSchema) { l.Mount(b.mount) }
+func (b *booksLive) mount(ctx context.Context) error {
 	b.pager = NewPager(5, func(ctx context.Context, page, size int) (ui.Page[bookRow], error) {
 		return PaginateSource[bookRow](ctx, bookSource{q: b.query}, page, size)
 	})

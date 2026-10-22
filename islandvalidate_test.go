@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"html"
 	"net/http/httptest"
 	"strings"
@@ -28,9 +29,10 @@ type courses struct {
 	Calls   int    `json:"calls"`
 }
 
-func (c *courses) Changed()                         { c.Changes++ }
-func (c *courses) Filter(f courseFilter) error      { c.Calls++; c.Years = f.Years; return nil }
-func (c *courses) Pick(levels []*courseLevel) error { c.Calls++; return nil }
+func (c *courses) LiveSchema(l *ui.LiveSchema)                    { l.OnChange(c.onChange) }
+func (c *courses) onChange(_ context.Context, _ ui.Changed) error { c.Changes++; return nil }
+func (c *courses) Filter(f courseFilter) error                    { c.Calls++; c.Years = f.Years; return nil }
+func (c *courses) Pick(levels []*courseLevel) error               { c.Calls++; return nil }
 
 type liveCourses struct {
 	ui.Live
@@ -40,9 +42,10 @@ type liveCourses struct {
 	Calls   int    `json:"calls"`
 }
 
-func (c *liveCourses) Render() ui.Node              { return ui.IslandPage(c) }
-func (c *liveCourses) Changed()                     { c.Changes++ }
-func (c *liveCourses) Filter(f *courseFilter) error { c.Calls++; c.Years = f.Years; return nil }
+func (c *liveCourses) Render() ui.Node                                { return ui.IslandPage(c) }
+func (c *liveCourses) LiveSchema(l *ui.LiveSchema)                    { l.OnChange(c.onChange) }
+func (c *liveCourses) onChange(_ context.Context, _ ui.Changed) error { c.Changes++; return nil }
+func (c *liveCourses) Filter(f *courseFilter) error                   { c.Calls++; c.Years = f.Years; return nil }
 
 type badRule struct {
 	Q string `json:"q" bind:"q" validate:"max=five"`

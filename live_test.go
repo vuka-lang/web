@@ -26,8 +26,9 @@ type counter struct {
 	n     int
 }
 
-func (c *counter) Mount() { c.n = c.Start }
-func (c *counter) Inc()   { c.n++ }
+func (c *counter) LiveSchema(l *ui.LiveSchema)   { l.Mount(c.mount) }
+func (c *counter) mount(_ context.Context) error { c.n = c.Start; return nil }
+func (c *counter) Inc()                          { c.n++ }
 func (c *counter) Render() ui.Node {
 	return ui.El("div", nil, ui.El("span", nil, ui.Text(c.Label), ui.Text(c.n)),
 		ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(c.Inc)}}, ui.Text("+")))
@@ -67,8 +68,9 @@ type chat struct {
 	log  []string
 }
 
-func (c *chat) Mount()        { c.Subscribe("room:" + c.Room) }
-func (c *chat) Update(m said) { c.log = append(c.log, m.Text) }
+func (c *chat) LiveSchema(l *ui.LiveSchema)   { l.Mount(c.mount) }
+func (c *chat) mount(_ context.Context) error { c.Subscribe("room:" + c.Room); return nil }
+func (c *chat) Update(m said)                 { c.log = append(c.log, m.Text) }
 func (c *chat) Render() ui.Node {
 	return ui.El("form", []ui.Attr{{Name: "onSubmit", Value: ui.On(c.Send)}}, ui.Text(strings.Join(c.log, "|")))
 }
@@ -93,7 +95,8 @@ type pagerParams struct {
 	Page int
 }
 
-func (p *pager) Mount() { p.mounts++ }
+func (p *pager) LiveSchema(l *ui.LiveSchema)   { l.Mount(p.mount) }
+func (p *pager) mount(_ context.Context) error { p.mounts++; return nil }
 func (p *pager) Update(q pagerParams) error {
 	if q.Page < 0 {
 		return Status(http.StatusNotFound, "no such page")

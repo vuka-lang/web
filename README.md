@@ -388,8 +388,10 @@ type Counter struct {
 	n     int
 }
 
-func (c *Counter) Mount() { c.n = c.Start }
-func (c *Counter) Inc()   { c.n++ }
+@ui.Mount
+func (c *Counter) mount(ctx context.Context) error { c.n = c.Start; return nil }
+
+func (c *Counter) Inc() { c.n++ }
 
 func (c *Counter) Render() ui.Node {
 	return <div><output>{c.n}</output><button onClick={c.Inc}>+</button></div>
@@ -510,7 +512,9 @@ type Chat struct {
 	lines []string
 }
 
-func (c *Chat) Mount()          { c.Subscribe("chat:" + c.Room) }
+@ui.Mount
+func (c *Chat) mount(ctx context.Context) error { c.Subscribe("chat:" + c.Room); return nil }
+
 func (c *Chat) Update(m Said)   { c.lines = append(c.lines, m.Who+": "+m.Text) }
 func (c *Chat) Update(j Joined) { c.lines = append(c.lines, j.Who+" joined") }
 
@@ -591,8 +595,10 @@ type ShelfParams struct {
 	Page int // ?page=
 }
 
-func (s *Shelf) Mount()                { s.show(s.Page) }   // the first URL
-func (s *Shelf) Update(p ShelfParams)  { s.show(p.Page) }   // each patch
+@ui.Mount
+func (s *Shelf) mount(ctx context.Context) error { s.show(s.Page); return nil } // the first URL
+
+func (s *Shelf) Update(p ShelfParams) { s.show(p.Page) } // each patch
 ```
 
 From a handler, `c.PushPatch(href)` and `c.PushNavigate(href)` move the page

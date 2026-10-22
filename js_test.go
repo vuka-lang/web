@@ -16,6 +16,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/uigen"
 	"github.com/vuka-lang/web/internal/chrome"
 	"github.com/vuka-lang/web/internal/testenv"
 )
@@ -88,7 +89,11 @@ type jsDemo struct {
 	saved  int
 }
 
-func (d *jsDemo) Mount()          { d.items, d.tone = []string{"a", "b", "c"}, "calm" }
+func (d *jsDemo) LiveSchema(l *ui.LiveSchema) { l.Mount(d.mount) }
+func (d *jsDemo) mount(_ context.Context) error {
+	d.items, d.tone = []string{"a", "b", "c"}, "calm"
+	return nil
+}
 func (d *jsDemo) Pick(e ui.Event) { d.picked = e.Value }
 func (d *jsDemo) Delete(e ui.Event) {
 	d.items = slices.DeleteFunc(d.items, func(s string) bool { return s == e.Value })
@@ -494,19 +499,19 @@ func TestBrowserBusyForm(t *testing.T) {
 // A page of client state shown with ui.Show: an auto popover the browser
 // may close, two panels swapped by one state, and a panel with a transition.
 func stateShowPage() ui.Node {
-	tip := ui.NewState("tip", false)
-	a := ui.NewState("a", true)
-	fade := ui.NewState("fade", true)
+	tip := uigen.State("tip", false)
+	a := uigen.State("a", true)
+	fade := uigen.State("fade", true)
 	return ui.El("main", nil,
 		ui.El("style", nil, ui.Text(".fade { transition: opacity .3s } .fade[data-closed] { opacity: 0 }")),
-		ui.El("button", attrs("id", "tip-btn", "type", "button", "onClick", ui.On(tip.Toggle()),
+		ui.El("button", attrs("id", "tip-btn", "type", "button", "onClick", ui.On(uigen.Toggle(ui.JS, tip)),
 			"aria-expanded", ui.BindExpr(tip.Get(), `{"$":0}`, tip)), ui.Text("?")),
 		ui.Show(ui.ShowProps{When: tip, Children: ui.El("div", attrs("id", "tip", "popover", "auto", "style", "inset: auto 0 0 auto; margin: 0"), ui.Text("A tip"))}),
 		ui.El("p", attrs("id", "outside", "style", "margin-top: 200px"), ui.Text("outside")),
-		ui.El("button", attrs("id", "swap", "type", "button", "onClick", ui.On(a.Toggle())), ui.Text("swap")),
+		ui.El("button", attrs("id", "swap", "type", "button", "onClick", ui.On(uigen.Toggle(ui.JS, a))), ui.Text("swap")),
 		ui.Show(ui.ShowProps{When: a, Children: ui.El("div", attrs("id", "pa"), ui.Text("A"))}),
 		ui.Show(ui.ShowProps{When: ui.BindExpr(!a.Get(), `["!",{"$":0}]`, a), Children: ui.El("div", attrs("id", "pb"), ui.Text("B"))}),
-		ui.El("button", attrs("id", "fade-btn", "type", "button", "onClick", ui.On(fade.Toggle())), ui.Text("fade")),
+		ui.El("button", attrs("id", "fade-btn", "type", "button", "onClick", ui.On(uigen.Toggle(ui.JS, fade))), ui.Text("fade")),
 		ui.Show(ui.ShowProps{When: fade, Children: ui.El("div", attrs("id", "pf", "class", "fade"), ui.Text("F"))}),
 	)
 }

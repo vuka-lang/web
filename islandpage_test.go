@@ -39,7 +39,8 @@ type applicants struct {
 	secret string
 }
 
-func (a *applicants) Mount(ctx context.Context) error {
+func (a *applicants) LiveSchema(l *ui.LiveSchema) { l.Mount(a.mount) }
+func (a *applicants) mount(_ context.Context) error {
 	a.Mounts++
 	a.secret = "never sent"
 	a.Rows = a.db.find(a.Q)
@@ -254,9 +255,14 @@ type levels struct {
 	db      *applicantDB
 }
 
-func (l *levels) Mount() { l.Rows = l.db.find(l.Q) }
+func (l *levels) LiveSchema(s *ui.LiveSchema) {
+	s.Mount(l.mount)
+	s.OnChange(l.onChange)
+}
 
-func (l *levels) Changed(ctx context.Context) error {
+func (l *levels) mount(_ context.Context) error { l.Rows = l.db.find(l.Q); return nil }
+
+func (l *levels) onChange(_ context.Context, _ ui.Changed) error {
 	if l.Q == "x" {
 		return Invalid{"q": "no x"}
 	}
@@ -276,8 +282,17 @@ type liveLevels struct {
 }
 
 func (l *liveLevels) Render() ui.Node { return ui.IslandPage(l) }
-func (l *liveLevels) Mount()          { l.Rows = l.db.find(l.Q) }
-func (l *liveLevels) Changed()        { l.Changes++; l.Rows = l.db.find(l.Q) }
+func (l *liveLevels) LiveSchema(s *ui.LiveSchema) {
+	s.Mount(l.mount)
+	s.OnChange(l.onChange)
+}
+
+func (l *liveLevels) mount(_ context.Context) error { l.Rows = l.db.find(l.Q); return nil }
+func (l *liveLevels) onChange(_ context.Context, _ ui.Changed) error {
+	l.Changes++
+	l.Rows = l.db.find(l.Q)
+	return nil
+}
 
 type clashing struct {
 	List []string `json:"search"`

@@ -23,10 +23,15 @@ type shelf struct {
 }
 
 func (s *shelf) Render() ui.Node { return ui.IslandPage(s) }
-func (s *shelf) Mount()          { s.Books = s.db.find(s.Q) }
-func (s *shelf) Changed()        { s.Books = s.db.find(s.Q) }
-func (s *shelf) Search(q string) { s.Q, s.Books = q, s.db.find(q) }
-func (s *shelf) Title() string   { return "Shelf " + s.Q }
+func (s *shelf) LiveSchema(l *ui.LiveSchema) {
+	l.Mount(s.mount)
+	l.OnChange(s.onChange)
+}
+
+func (s *shelf) mount(_ context.Context) error                  { s.Books = s.db.find(s.Q); return nil }
+func (s *shelf) onChange(_ context.Context, _ ui.Changed) error { s.Books = s.db.find(s.Q); return nil }
+func (s *shelf) Search(q string)                                { s.Q, s.Books = q, s.db.find(q) }
+func (s *shelf) Title() string                                  { return "Shelf " + s.Q }
 
 // plainShelf has no layout of its own.
 type plainShelf struct {
@@ -177,10 +182,12 @@ type navB struct {
 	N string `json:"n"`
 }
 
-func (p *navA) Render() ui.Node { return ui.IslandPage(p) }
-func (p *navB) Render() ui.Node { return ui.IslandPage(p) }
-func (p *navA) Mount()          { p.N = "a" }
-func (p *navB) Mount()          { p.N = "b" }
+func (p *navA) Render() ui.Node               { return ui.IslandPage(p) }
+func (p *navB) Render() ui.Node               { return ui.IslandPage(p) }
+func (p *navA) LiveSchema(l *ui.LiveSchema)   { l.Mount(p.mount) }
+func (p *navA) mount(_ context.Context) error { p.N = "a"; return nil }
+func (p *navB) LiveSchema(l *ui.LiveSchema)   { l.Mount(p.mount) }
+func (p *navB) mount(_ context.Context) error { p.N = "b"; return nil }
 
 func sidebar(ctx context.Context, page ui.Node) ui.Node {
 	path := Request(ctx).URL.Path

@@ -272,9 +272,10 @@ type feed struct {
 	news int
 }
 
-func (f *feed) Mount()          { f.Subscribe("news") }
-func (f *feed) Update(n int)    { f.news = n }
-func (f *feed) Render() ui.Node { return ui.El("p", nil, ui.Text(fmt.Sprint("news=", f.news))) }
+func (f *feed) LiveSchema(l *ui.LiveSchema)   { l.Mount(f.mount) }
+func (f *feed) mount(_ context.Context) error { f.Subscribe("news"); return nil }
+func (f *feed) Update(n int)                  { f.news = n }
+func (f *feed) Render() ui.Node               { return ui.El("p", nil, ui.Text(fmt.Sprint("news=", f.news))) }
 
 // A live page whose sign-in ended closes at the next broadcast, without a
 // message of its own; one whose perms changed closes once rechecked.

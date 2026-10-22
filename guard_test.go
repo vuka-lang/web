@@ -81,7 +81,8 @@ type guardedPage struct {
 
 func newGuardedPage(l *accessLog) *guardedPage { return &guardedPage{log: l} }
 
-func (p *guardedPage) Mount() { p.log.note("mount") }
+func (p *guardedPage) LiveSchema(l *ui.LiveSchema)   { l.Mount(p.mount) }
+func (p *guardedPage) mount(_ context.Context) error { p.log.note("mount"); return nil }
 
 func (p *guardedPage) Render(ctx context.Context, w io.Writer) error {
 	return ui.El("p", nil, ui.Text("org "+itoa(p.Org))).Render(ctx, w)
