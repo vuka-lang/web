@@ -224,7 +224,7 @@ func TestLiveJoinSendsOnce(t *testing.T) {
 			}
 		}
 		return ui.El("html", nil, ui.El("body", nil, ui.Component("greeter", 0, &greeter{joins: &joins}))), nil
-	}, web.Params("ctx", "m"))
+	})
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 

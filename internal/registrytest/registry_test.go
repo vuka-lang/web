@@ -77,11 +77,11 @@ func regGated() string { return "gated" }
 
 func init() {
 	vuka.RegisterFunc(regGated, role("admin"))
-	web.Routes.Service(newRegGreeter)
+	vuka.RegisterParams(regGreet, "g", "name") // as the compiler records a handler's names
 	web.Routes.Controller("/reg/admin", newRegAdmin)
-	web.Routes.Get("/{id}", (*regAdmin).Show, web.Params("id"))
-	web.Routes.Get("/reg/pets/{id}", regShow, web.Params("id", "s"))
-	web.Routes.Get("/reg/greet", regGreet, web.Params("g", "name"), web.Use(regHeader))
+	web.Routes.Get("/{id}", (*regAdmin).Show)
+	web.Routes.Get("/reg/pets/{id}", regShow)
+	web.Routes.Get("/reg/greet", regGreet, web.Use(regHeader))
 	web.Routes.Get("/reg/gated", regGated)
 	web.Routes.Live("/reg/counter", newRegCounter)
 }
@@ -109,13 +109,13 @@ func regApps() map[string]*web.App {
 	own := web.New(web.Only("none"), web.Provide(newStore), gate).
 		Service(newRegGreeter).
 		Controller("/reg/admin", newRegAdmin).
-		Get("/{id}", (*regAdmin).Show, web.Params("id")).
-		Get("/reg/pets/{id}", regShow, web.Params("id", "s")).
-		Get("/reg/greet", regGreet, web.Params("g", "name"), web.Use(regHeader)).
+		Get("/{id}", (*regAdmin).Show).
+		Get("/reg/pets/{id}", regShow).
+		Get("/reg/greet", regGreet, web.Use(regHeader)).
 		Get("/reg/gated", regGated).
 		Live("/reg/counter", newRegCounter)
 	return map[string]*web.App{
-		"Routes": web.New(web.Only("github.com/vuka-lang/web/internal/registrytest"), web.Provide(newStore), gate),
+		"Routes": web.New(web.Only("github.com/vuka-lang/web/internal/registrytest"), web.Provide(newStore), gate).Service(newRegGreeter),
 		"App":    own,
 	}
 }

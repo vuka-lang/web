@@ -27,10 +27,12 @@ func OpenDB() *DB {
 func (db *DB) Start(context.Context) error { log.Print("db: open"); return nil }
 func (db *DB) Stop(context.Context) error  { log.Print("db: closed"); return nil }
 
-@web.Service
+// PetStore is a service, registered in main.
 type PetStore struct {
 	db *DB
 }
+
+func NewPetStore(db *DB) *PetStore { return &PetStore{db: db} }
 
 func (s *PetStore) All() Result[[]model.Pet] {
 	s.db.mu.Lock()

@@ -1,8 +1,9 @@
 # web
 
-A web framework for [Vuka](https://github.com/vuka-lang/vuka): routes, views,
-services and controllers are declared with decorators, parameters bind by
-name, and `web.New()` gathers everything into an app.
+A web framework for [Vuka](https://github.com/vuka-lang/vuka): routes, views
+and controllers are declared with decorators, services registered with
+`app.Service`, every hook's and handler's parameters filled by type, and
+`web.New()` gathers everything into an app.
 
 ```vuka
 package main
@@ -12,8 +13,9 @@ import (
 	"github.com/vuka-lang/web"
 )
 
-@web.Service
-type PetStore struct{ db *DB }            // built from its fields, a lazy singleton
+type PetStore struct{ db *DB }
+
+func NewPetStore(db *DB) *PetStore { return &PetStore{db} } // a service: app.Service
 
 @web.Get("/pets")
 @web.Template("views/pets.templ")         // a templ component renders the result
@@ -38,9 +40,10 @@ type PetAdmin struct{ store *PetStore }
 func (a *PetAdmin) Index() Result[[]Pet] { return a.store.All() }
 
 func main() {
-	app := web.New()       // every route, service and controller declared at init
-	app.Provide(OpenDB)    // more constructors, fx-style
-	app.Run(":8080")       // graceful shutdown on SIGINT/SIGTERM
+	app := web.New()            // every route and controller declared at init
+	app.Service(NewPetStore)    // the app's services: a lazy singleton each
+	app.Provide(OpenDB)         // more constructors and values, fx-style
+	app.Run(":8080")            // graceful shutdown on SIGINT/SIGTERM
 }
 ```
 
@@ -58,7 +61,6 @@ go get github.com/vuka-lang/web
 | `@web.Get(path)`, `Post`, `Put`, `Patch`, `Delete`, `Handle(method, path)` | a route; works on functions and controller methods — on an `@ui.Island` type, a stateless page backed by that component (below) |
 | `@web.Template(file [, name])` | render the result with a view (below); before or after the route decorator |
 | `@web.Use(mw…)` | HTTP middleware for this route, `func(http.Handler) http.Handler` |
-| `@web.Service` | a struct becomes a dependency |
 | `@web.Controller(prefix)` | a struct becomes a dependency whose route methods are served under `prefix` |
 | `@web.Live(path, opts…)` | a stateful component becomes a live page (below) — an `@ui.Island` type embedding `ui.Live`, a live page backed by that component; `web.Style`, `web.Script`, `web.CSS`, `web.JS` give it styles and scripts (below) |
 | `@web.Cron(spec)` | the function runs on a schedule (below) |
@@ -857,13 +859,66 @@ state from the server with `c.PushJS(tab.Set("logs"))`. Guide:
 
 ## Dependency injection
 
+A service is a struct with a constructor whose parameters are its own
+dependencies, registered in `main`:
+
+```go
+type Todos struct {
+	db   *DB
+	mu   sync.Mutex
+	rows []Todo
+}
+
+func NewTodos(db *DB) *Todos { return &Todos{db: db} }
+
+app := web.New()
+app.Service(NewTodos)
+app.Provide(OpenDB) // constructors and ready values of any type
+```
+
 The container holds constructors — `func(deps…) T` or `func(deps…) (T, error)`
-— and ready values (anything that isn't a function). `@web.Service` and
-`@web.Controller` structs are constructed from their fields (Vuka's
-`vuka.Type.New`; tag a field `inject:"-"` to leave it out). Every value is a
-lazy singleton per app; dependencies match by exact type (provide a
-constructor returning the interface to inject an interface). Missing
-providers, cycles and duplicates are Build errors.
+— and ready values (anything that isn't a function). Every value is a lazy
+singleton per app; dependencies match by exact type (provide a constructor
+returning the interface to inject an interface). Missing providers, cycles
+and duplicates are Build errors. A `@web.Controller` struct is constructed
+by the constructor Vuka writes, which takes its pointer and interface
+fields (or by its own `New`).
+
+### Parameters, by type
+
+Hooks and handlers declare what they need by parameter type, and each
+parameter is filled from the one source its type names — the same rule for
+a route's handler, a controller's method, a live page's hooks (`@ui.Mount`,
+`@ui.OnChange`, `@ui.Loads`) and event handlers, a layout's or guard's
+`Load`, and a middleware's constructor:
+
+| Parameter | Filled from |
+|---|---|
+| `context.Context` | the request's, or the live session's |
+| a struct, or pointer to one | the form or JSON body (a route), the event's form fields (a live handler); `validate:` tags checked, 422 |
+| `url.Values` | the form's fields, as sent |
+| a string, number, bool or `TextUnmarshaler` | a route: the path segment of its name, else the query parameter; a live handler: the event's value |
+| `*http.Request`, `http.ResponseWriter` | the request (a live page's: the one it joined with) |
+| `*auth.Identity` (a `ParamFrom` type) | the signed-in visitor |
+| a type `app.Service` or `web.Provide` registered | the container |
+
+A parameter nothing fills is a Build error with the file, the line and its
+type — E0407 for a pointer or interface nothing provides, E0405 for a type
+a request or an event can't carry:
+
+```
+error[E0407]: GET / (live page pages.Index): Index.Add's 2nd parameter, *sql.DB, is not provided
+ --> index.vuka.html:41
+  = help: register it in main with app.Service(NewX), or web.Provide(NewX)
+```
+
+A live page's exported methods are checked as event handlers: a method
+taking two values from the page's own Go (`p.Toggle(id, done)` in a
+closure) is no event, and only a missing service is reported for it. A
+scalar's name comes from the compiler, which records it
+(`vuka.RegisterParams`); a handler registered from Go binds its scalars to
+the path's segments in order, the last scalar the last segment, and takes
+the query in a struct.
 
 ### Lifecycle
 
@@ -1240,8 +1295,7 @@ interface — where users and their passwords live — and every route, live
 page and live event then needs a sign-in unless marked public:
 
 ```vuka
-@web.Service
-type Users struct{ db *DB }
+type Users struct{ db *DB } // registered in main: app.Service(NewUsers)
 
 func (u *Users) FindLogin(ctx context.Context, login string) (*auth.Identity, string, error) { … } // + the encoded password
 func (u *Users) Load(ctx context.Context, id string) (*auth.Identity, error) { … }
@@ -1439,21 +1493,23 @@ Login throttling and the per-address live connection cap count by it.
 
 Everything works from Go without decorators, with the calls they are:
 `@web.Get("/pets/{id}")` on `ShowPet` is `web.Routes.Get("/pets/{id}",
-ShowPet, web.Params("id", "store"))` at init, and an `App`'s methods of the
-same names register on that app alone. Reflection can't see parameter names,
-so scalar parameters are named with `web.Params` (the receiver excluded);
-structs, request values and dependencies bind as usual.
+ShowPet)` at init, after `vuka.RegisterParams(ShowPet, "id", "store")`
+recording the names reflection can't see, and an `App`'s methods of the
+same names register on that app alone. A handler registered from Go binds
+its scalars to the path's segments in order, the last scalar the last
+segment, and takes the query in a struct; structs, request values and
+dependencies bind by type as usual.
 
 ```go
 app := web.New()
 app.Service(NewStore)
-app.Get("/pets/{id}", ShowPet, web.Params("id", "store"), auth.Required())
+app.Get("/pets/{id}", ShowPet, auth.Required()) // func ShowPet(id int, s *Store)
 app.Post("/pets", func(in NewPet, s *Store) (Pet, error) { … })
 app.Get("/page", page, web.Template(vuka.File("views/page.html")), web.Use(mw))
 app.Live("/board", NewBoard)
 app.Live("/applicants", NewApplicants, ui.Island(ui.Layout(layouts.Page("Applicants"))))
 app.Controller("/admin/pets", NewPetAdmin)
-app.Get("/{id}", (*PetAdmin).Show, web.Params("id"))
+app.Get("/{id}", (*PetAdmin).Show)
 ```
 
 A page's constructor builds each page's component, its parameters of

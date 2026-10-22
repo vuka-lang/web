@@ -48,6 +48,8 @@ github.com/vuka-lang/ui v1.5.1-0.20261022141038-2a566b34a821 h1:RJQBtXytpG4vG+ze
 github.com/vuka-lang/ui v1.5.1-0.20261022141038-2a566b34a821/go.mod h1:RGeRDyJ4rq5+TUAh/3qeu6o6W+GhFnMVLdOlGu+JMbw=
 github.com/vuka-lang/ui v1.5.1-0.20261022151940-cfb9ef549c3e h1:G3ERXWdW42cLEltbjZb2B+nr8AR6fTRv8zqxlOh82OI=
 github.com/vuka-lang/ui v1.5.1-0.20261022151940-cfb9ef549c3e/go.mod h1:RGeRDyJ4rq5+TUAh/3qeu6o6W+GhFnMVLdOlGu+JMbw=
+github.com/vuka-lang/ui v1.5.1-0.20261022154417-398d512bd879 h1:fBsoAxrXGEqsRC0keRlpb8MmkwdPdOShqKP6Lxiuexw=
+github.com/vuka-lang/ui v1.5.1-0.20261022154417-398d512bd879/go.mod h1:RGeRDyJ4rq5+TUAh/3qeu6o6W+GhFnMVLdOlGu+JMbw=
 github.com/vuka-lang/vuka v0.30.0 h1:v0e1H1ZB8aWhWqEJ7HsU4il17dzz2WpN163VNfih/EY=
 github.com/vuka-lang/vuka v0.30.0/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
 github.com/vuka-lang/vuka v0.32.1-0.20261018220625-a9d037d539b2 h1:65r0eA5WV/j3XL3S2EoHbF+JLQU08ie6RIMIMgOdvFQ=
@@ -70,6 +72,12 @@ github.com/vuka-lang/vuka v1.5.1-0.20261022144921-0a8f3947f533 h1:zjTMKVszQwPzRG
 github.com/vuka-lang/vuka v1.5.1-0.20261022144921-0a8f3947f533/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
 github.com/vuka-lang/vuka v1.5.1-0.20261022152614-f009cd3c364d h1:BceDx2gWJdYC6+eKRuNhSZcRJlc2/PVLTTYvObNHyRU=
 github.com/vuka-lang/vuka v1.5.1-0.20261022152614-f009cd3c364d/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
+github.com/vuka-lang/vuka v1.5.1-0.20261022154455-1808db21a060 h1:H7pFV3+rVFZdE8fV3fqGxjI3L3GeBAtmokb115wPEgI=
+github.com/vuka-lang/vuka v1.5.1-0.20261022154455-1808db21a060/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
+github.com/vuka-lang/vuka v1.5.1-0.20261022155706-e97e8d5a1aa0 h1:vDLW0Dkcbqj3KYxugfttNvsiqd6sWtvMLfYYA5yqgj4=
+github.com/vuka-lang/vuka v1.5.1-0.20261022155706-e97e8d5a1aa0/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
+github.com/vuka-lang/vuka v1.5.1-0.20261022163744-b9fa93fa1c09 h1:AznOfZRIR2Pow3n2WMCDODzkYc4FWInokARnz5/E3ZA=
+github.com/vuka-lang/vuka v1.5.1-0.20261022163744-b9fa93fa1c09/go.mod h1:X+ml+FftmyBqmfBxh4mMOUVaUZS3preV80KzmYpGlpE=
 golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
 golang.org/x/crypto v0.55.0/go.mod h1:uq0V9dE/fzQuJtbnL+2EhWOE63vo164FY8xqEnV9xis=
 golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=

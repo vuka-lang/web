@@ -16,10 +16,12 @@ type Dog struct {
 	Age  int
 }
 
-@web.Service
+// Kennel is a service: tests register it with app.Service.
 type Kennel struct {
-	dogs map[string]Dog `inject:"-"`
+	dogs map[string]Dog
 }
+
+func NewKennel() *Kennel { return &Kennel{} }
 
 @web.Template("cards.templ", "Card")
 @web.Get("/dogs/{name}")

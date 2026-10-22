@@ -10,7 +10,7 @@
 // Everything a decorator declares is a call of the Routes registry, and an
 // App's methods of the same names register on it alone:
 //
-//	app.Get("/pets/{id}", ShowPet, web.Params("id", "store"))
+//	app.Get("/pets/{id}", ShowPet)
 package web
 
 import (
@@ -49,7 +49,6 @@ type registry struct {
 	routes      []declRoute
 	views       map[string]declView
 	uses        map[string][]Middleware
-	services    []declService
 	controllers []declController
 	lives       []*liveSpec
 	pages       []typePage
@@ -57,22 +56,22 @@ type registry struct {
 	errs        []error // the registrations' mistakes, which Build reports
 }
 
-type declService struct {
-	typ *vuka.Type
-	own bool
-}
-
-// Registry holds what an app is made of: routes, live pages, controllers and
-// services. Routes is the package's, filled at init by the declarations of
-// every package the program links; New gives each app a copy, and an App's
-// methods of the same names add to its own:
+// Registry holds what an app is made of: routes, live pages and
+// controllers. Routes is the package's, filled at init by the declarations
+// of every package the program links; New gives each app a copy, and an
+// App's methods of the same names add to its own:
 //
 //	func init() {
-//		web.Routes.Get("/pets/{id}", ShowPet, web.Params("id", "store"))
+//		web.Routes.Get("/pets/{id}", ShowPet)
 //		web.Routes.Live("/board", NewBoard)
 //	}
 //
-//	app.Get("/pets/{id}", ShowPet, web.Params("id", "store"))
+//	app.Get("/pets/{id}", ShowPet)
+//
+// A handler registered from Go binds its scalar parameters to the path's
+// segments in order; one the compiler registers binds them by name, which
+// it records (vuka.RegisterParams), from the path or the query. Services
+// are the app's: app.Service in main.
 //
 // It is what the decorators are: @web.Get("/pets/{id}") on ShowPet is the
 // call above.
@@ -81,8 +80,8 @@ type Registry struct {
 	r  registry
 }
 
-// Routes is the registry of the program's declared routes, pages,
-// controllers and services.
+// Routes is the registry of the program's declared routes, pages and
+// controllers.
 var Routes = &Registry{r: registry{views: map[string]declView{}, uses: map[string][]Middleware{}}}
 
 func (*Registry) vukaRegistry() {}
@@ -94,9 +93,9 @@ func (g *Registry) record(f func(*registry)) *Registry {
 	return g
 }
 
-// Handle registers fn for method and path: a handler, its parameters bound
-// from the request (scalars by the names Params gives them), or the
-// constructor of an @ui.Island struct (a page backed by its island).
+// Handle registers fn for method and path: a handler, its parameters filled
+// by type (see inject.go), or the constructor of an @ui.Island struct (a
+// page backed by its island).
 func (g *Registry) Handle(method, path string, fn any, opts ...RouteOption) *Registry {
 	return g.record(func(r *registry) { r.handle(method, path, fn, opts, false) })
 }
@@ -132,12 +131,6 @@ func (g *Registry) Controller(prefix string, ctor any, opts ...RouteOption) *Reg
 	return g.record(func(r *registry) { r.controller(prefix, ctor, opts, false) })
 }
 
-// Service provides the struct ctor builds as a dependency, a lazy
-// singleton, as @web.Service does.
-func (g *Registry) Service(ctor any) *Registry {
-	return g.record(func(r *registry) { r.service(ctor, false) })
-}
-
 func declKey(d *vuka.Decl) string {
 	return fmt.Sprintf("%s\x00%s\x00%s:%d", d.Pkg, d.Name, d.File, d.Line)
 }
@@ -150,7 +143,6 @@ func snapshot() registry {
 	reg := &Routes.r
 	s := registry{
 		routes:      append([]declRoute(nil), reg.routes...),
-		services:    append([]declService(nil), reg.services...),
 		controllers: append([]declController(nil), reg.controllers...),
 		lives:       append([]*liveSpec(nil), reg.lives...),
 		pages:       append([]typePage(nil), reg.pages...),
@@ -244,15 +236,6 @@ func Use(mw ...Middleware) Uses {
 
 func (u Uses) apply(a *App) { a.mw = append(a.mw, u.middleware()...) }
 
-// Service makes a struct a dependency: a lazy singleton built from its fields,
-// each injected by type.
-func Service(t *vuka.Type) {
-	if t.New == nil {
-		panic(diag.New("E0418", "@web.Service on %s, which isn't a struct", t.Name).WithHelp("put it on a struct type"))
-	}
-	record(func(r *registry) { r.services = append(r.services, declService{typ: t}) })
-}
-
 // Controller makes a struct a service whose route methods are served under
 // prefix.
 func Controller(prefix string) func(*vuka.Type) {
@@ -304,7 +287,7 @@ func OnStop(fn func(context.Context) error) Option { return OptionFunc(func(a *A
 // Check adds a check Build runs; see App.Check.
 func Check(fn func(*App) error) Option { return OptionFunc(func(a *App) { a.Check(fn) }) }
 
-// Only limits the declared routes, services and controllers an app takes to
+// Only limits the declared routes and controllers an app takes to
 // those of the given packages (import paths; "main" for the main package).
 func Only(pkgs ...string) Option {
 	return OptionFunc(func(a *App) {

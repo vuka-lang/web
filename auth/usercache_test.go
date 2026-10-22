@@ -27,7 +27,7 @@ func cachingApp(t *testing.T, ttl time.Duration) (*client, *countingUsers) {
 	t.Helper()
 	u := &countingUsers{Users: users()}
 	app := newApp(t, u.Users, func(c *auth.Config) { c.Users, c.UserCache = u, ttl })
-	app.Get("/refresh", func(ctx context.Context) error { return auth.Refresh(ctx, "1") }, web.Params("ctx"), web.Attrs(auth.Public()))
+	app.Get("/refresh", func(ctx context.Context) error { return auth.Refresh(ctx, "1") }, web.Attrs(auth.Public()))
 	c := serve(t, app)
 	c.login("ada@example.com", "correct horse", "")
 	return c, u

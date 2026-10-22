@@ -118,7 +118,7 @@ type publicUser interface{ Public(id *Identity) any }
 type Config struct {
 	// Users is the app's Users: a value, or a constructor the app's
 	// container builds (func(deps…) Users). Nil: the one provided type
-	// implementing Users, such as a @web.Service.
+	// implementing Users, such as a service registered with app.Service.
 	Users any
 
 	// PublicByDefault makes routes without a gate public, as they are
@@ -390,7 +390,7 @@ func (a *Auth) check(app *web.App) error {
 	if u, ok := a.cfg.Users.(Users); ok {
 		a.users = u
 	} else if u, err := web.Implementation[Users](app); err != nil {
-		errs = append(errs, fmt.Errorf("auth: no Users: give auth.Config.Users, or declare a @web.Service implementing auth.Users (%v)", err))
+		errs = append(errs, fmt.Errorf("auth: no Users: give auth.Config.Users, or register a service implementing auth.Users with app.Service (%v)", err))
 	} else {
 		a.users = u
 	}

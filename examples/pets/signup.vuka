@@ -22,10 +22,12 @@ type Owner struct {
 	Confirmed   bool
 }
 
-@web.Service
+// Owners is a service, registered in main.
 type Owners struct {
 	db *DB
 }
+
+func NewOwners(db *DB) *Owners { return &Owners{db: db} }
 
 func (o *Owners) Add(name, email string) Owner {
 	ow := Owner{Name: name, Email: email, Token: rand.Text(), Joined: time.Now()}

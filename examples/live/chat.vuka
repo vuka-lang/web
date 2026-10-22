@@ -18,12 +18,14 @@ type ChatForm struct {
 	Text string `form:"text"`
 }
 
-// ChatLog keeps each room's history, so a page joining late sees it.
-@web.Service
+// ChatLog keeps each room's history, so a page joining late sees it: a
+// service, registered in main.
 type ChatLog struct {
-	mu    sync.Mutex          `inject:"-"`
-	rooms map[string][]string `inject:"-"`
+	mu    sync.Mutex
+	rooms map[string][]string
 }
+
+func NewChatLog() *ChatLog { return &ChatLog{} }
 
 func (l *ChatLog) Add(room, line string) {
 	l.mu.Lock()

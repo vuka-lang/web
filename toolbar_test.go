@@ -207,6 +207,23 @@ func fetchRecord(t testing.TB, h http.Handler, id string) (map[string]any, strin
 	return out, html
 }
 
+// tbShowPet's names are recorded as the compiler records a handler's: q
+// binds the query by its name.
+func tbShowPet(ctx context.Context, id int, q string, s *tbStore) ui.Node {
+	for i := range 4 {
+		NoteStatement(ctx, Statement{SQL: "SELECT * FROM owners WHERE id = ?", Args: []any{i}, Start: time.Now(), Duration: time.Millisecond, Rows: -1})
+	}
+	NoteStatement(ctx, Statement{SQL: "SELECT * FROM pets WHERE id = ?", Args: []any{id}, Start: time.Now(), Duration: 3 * time.Millisecond, Rows: -1})
+	NoteStatement(ctx, Statement{SQL: "UPDATE pets SET seen = 1", Err: errors.New("database is locked"), Start: time.Now(), Rows: 0})
+	slog.InfoContext(ctx, "showing a pet", "id", id)
+	slog.Warn("no context, the same goroutine") // reaches the request through its goroutine
+	Note(ctx, "Cache", lookup{"pet:7", true})
+	Note(ctx, "Plain", map[string]int{"a": 1})
+	return fullPage(ui.El("p", nil, ui.Text(greet(q))))
+}
+
+func init() { vuka.RegisterParams(tbShowPet, "ctx", "id", "q", "s") }
+
 func TestToolbarRecord(t *testing.T) {
 	withToolbar(t)
 	AddPanel("Cache", func(notes []any) ui.Node {
@@ -221,18 +238,7 @@ func TestToolbarRecord(t *testing.T) {
 	t.Cleanup(func() { panels = nil })
 
 	a := New(Only("none"), Dev(), Use(stamp), Provide(&tbStore{}))
-	a.Get("/pets/{id}", func(ctx context.Context, id int, q string, s *tbStore) ui.Node {
-		for i := range 4 {
-			NoteStatement(ctx, Statement{SQL: "SELECT * FROM owners WHERE id = ?", Args: []any{i}, Start: time.Now(), Duration: time.Millisecond, Rows: -1})
-		}
-		NoteStatement(ctx, Statement{SQL: "SELECT * FROM pets WHERE id = ?", Args: []any{id}, Start: time.Now(), Duration: 3 * time.Millisecond, Rows: -1})
-		NoteStatement(ctx, Statement{SQL: "UPDATE pets SET seen = 1", Err: errors.New("database is locked"), Start: time.Now(), Rows: 0})
-		slog.InfoContext(ctx, "showing a pet", "id", id)
-		slog.Warn("no context, the same goroutine") // reaches the request through its goroutine
-		Note(ctx, "Cache", lookup{"pet:7", true})
-		Note(ctx, "Plain", map[string]int{"a": 1})
-		return fullPage(ui.El("p", nil, ui.Text(greet(q))))
-	}, Params("ctx", "id", "q", "s"), Wrap(stamp))
+	a.Get("/pets/{id}", tbShowPet, Wrap(stamp))
 	h := a.Handler()
 
 	res := tbDo(t, h, "GET", "/pets/7?q=Ada", "Cookie", "session=secret")
@@ -245,7 +251,7 @@ func TestToolbarRecord(t *testing.T) {
 	}
 	for _, want := range []string{
 		// Request
-		"<code>GET /pets/{id}</code>", "web.TestToolbarRecord.func", "toolbar_test.go:",
+		"<code>GET /pets/{id}</code>", "web.tbShowPet", "toolbar_test.go:",
 		"<code>id</code></td><td class=\"dim\">path</td><td><code class=\"wrap\">7</code>",
 		"<code>q</code></td><td class=\"dim\">query</td><td><code class=\"wrap\">Ada</code>",
 		"<code>s</code></td><td class=\"dim\">dependency</td><td><code class=\"wrap\">*web.tbStore</code>",
@@ -254,7 +260,7 @@ func TestToolbarRecord(t *testing.T) {
 		"<b>6</b> statements", "<b>4</b> repeated", "<b>1</b> failed", "<b>N+1</b> — this statement ran 4 times",
 		"<span class=\"times\">×4</span>", "database is locked", "<b>SELECT</b> * <b>FROM</b> pets",
 		// Timeline
-		"<span class=\"kind\">middleware</span> web.stamp", "<span class=\"kind\">handler</span> web.TestToolbarRecord<",
+		"<span class=\"kind\">middleware</span> web.stamp", "<span class=\"kind\">handler</span> web.tbShowPet<",
 		"<span class=\"kind\">decorator</span> @audit", "<span class=\"kind\">func</span> greet",
 		"<span class=\"kind\">render</span> page", "<span class=\"kind\">sql</span> SELECT * FROM owners",
 		// Logs

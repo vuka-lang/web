@@ -49,7 +49,7 @@ type request struct {
 
 func (a *App) newRequest(w http.ResponseWriter, r *http.Request) *request {
 	rq := &request{w: w, r: r, app: a}
-	rq.ctx = context.WithValue(r.Context(), ctxKey{}, rq)
+	rq.ctx = ui.WithInjector(context.WithValue(r.Context(), ctxKey{}, rq), injector{a})
 	return rq
 }
 
@@ -139,6 +139,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		})
 	}
 	pathNames, body := pathParams(s.path), false
+	a.nameByPath(s.params, pathNames)
 	shown := make([]tbParam, len(binders), len(binders)+len(s.params)) // what the toolbar shows of each argument
 	for i, p := range s.params {
 		b, err := a.param(s, p, pathNames, &body)
@@ -325,6 +326,7 @@ func isResult(t reflect.Type) bool {
 	return t.PkgPath() == "github.com/vuka-lang/vuka" && strings.HasPrefix(t.Name(), "Result[")
 }
 
+// param binds a route handler's parameter by its type (see inject.go).
 func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) (binder, error) {
 	t := p.Type
 	if f, ok := a.binders[t]; ok {
@@ -343,9 +345,22 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 		}
 		a.needs = append(a.needs, t)
 		return func(*request) (reflect.Value, error) { return a.c.get(t) }, nil
+	case formType.ConvertibleTo(t) && t.Kind() == reflect.Map:
+		if *body {
+			return nil, diag.New("E0405", "a handler takes the request's form once, and this is the second").WithHelp("take one struct or url.Values")
+		}
+		*body = true
+		return func(rq *request) (reflect.Value, error) {
+			v, err := formValues(rq)
+			if err != nil {
+				return v, err
+			}
+			return v.Convert(t), nil
+		}, nil
 	case scalar(t):
 		if p.Name == "" || p.Name == "_" {
-			return nil, diag.New("E0405", "a scalar parameter binds by name, and this one has none").WithHelp("in plain Go, name it with web.Params")
+			return nil, diag.New("E0405", "a scalar binds the path segment its position gives, and the path has none left for it").
+				WithHelp("take the query in a struct, func(q Query), or add the segment to the path")
 		}
 		name, inPath := p.Name, slices.Contains(pathNames, p.Name)
 		return func(rq *request) (reflect.Value, error) {
@@ -369,7 +384,7 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 		}, nil
 	case bindable(t):
 		if *body {
-			return nil, diag.New("E0405", "a handler binds one struct from the request, and this is the second").WithHelp("join them in one struct, or provide one of them")
+			return nil, diag.New("E0405", "a handler binds one struct from the request, and this is the second").WithHelp("join them in one struct, or register one of them with app.Service")
 		}
 		*body = true
 		if err := ui.CheckValidate(t); err != nil {
@@ -377,9 +392,28 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 		}
 		return structBinder(t, pathNames, a.router), nil
 	case t.Kind() == reflect.Pointer || t.Kind() == reflect.Interface:
-		return nil, diag.New("E0407", "no provider for %s, needed by %s", t, whereName(s.where)).WithHelp("provide it: web.Provide(NewX), or @web.Service on the type")
+		return nil, diag.New("E0407", "not provided; needed by %s", whereName(s.where)).WithHelp(provideHelp)
 	}
-	return nil, diag.New("E0405", "can't be bound from a request").WithHelp("bind scalars by name, one struct from the body, and provided types")
+	return nil, diag.New("E0405", "can't come from a request").WithHelp("take the context, the request, its form (a struct or url.Values), scalars from the path and query, and what the app provides")
+}
+
+// nameByPath names the scalar parameters the compiler didn't (a handler
+// registered from Go): they bind the path's segments in order, the last
+// of them taking the last segment, as a nested route's handler takes the
+// segments its own path adds.
+func (a *App) nameByPath(params []vuka.Param, pathNames []string) {
+	var unnamed []int
+	for i, p := range params {
+		if p.Name == "" && scalar(p.Type) && a.binders[p.Type] == nil && !a.c.has(p.Type) {
+			unnamed = append(unnamed, i)
+		}
+	}
+	off := max(len(pathNames)-len(unnamed), 0) // more scalars than segments: the first take them
+	for j, i := range unnamed {
+		if off+j < len(pathNames) {
+			params[i].Name = pathNames[off+j]
+		}
+	}
 }
 
 // bindable reports whether t is a struct, or pointer to one, with exported

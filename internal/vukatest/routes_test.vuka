@@ -11,7 +11,7 @@ import (
 const pkg = "github.com/vuka-lang/web/internal/vukatest"
 
 func TestTranspiled(t *testing.T) {
-	h := web.New(web.Only(pkg)).Handler()
+	h := web.New(web.Only(pkg)).Service(NewKennel).Handler()
 	for path, want := range map[string]string{
 		"/dogs/rex":     "<b>rex</b> <i>3</i>",
 		"/badge?label=x": "<span>x</span>",
@@ -31,8 +31,8 @@ func TestTranspiled(t *testing.T) {
 type Missing interface{ M() }
 
 func TestBuildErrors(t *testing.T) {
-	err := web.New(web.Only(pkg)).Get("/bad", func(m Missing) int { return 0 }).Build()
-	if err == nil || !strings.Contains(err.Error(), "no provider for vukatest.Missing") {
+	err := web.New(web.Only(pkg)).Service(NewKennel).Get("/bad", func(m Missing) int { return 0 }).Build()
+	if err == nil || !strings.Contains(err.Error(), "parameter #1 vukatest.Missing: not provided") {
 		t.Errorf("Build: %v", err)
 	}
 	if r := web.New(web.Only("elsewhere")).Handler(); r == nil {

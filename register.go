@@ -17,7 +17,7 @@ import (
 // routeOpts are what a registration's options give it.
 type routeOpts struct {
 	own   bool       // registered on an App: Only doesn't apply
-	spec  []routeOpt // Params, Wrap, …
+	spec  []routeOpt // Wrap, Attrs, …
 	live  []LiveOption
 	types []func(*vuka.Type) // type decorators (ui.Island), for a page's type
 	mw    []Middleware
@@ -152,15 +152,6 @@ func (r *registry) controller(prefix string, ctor any, opts []RouteOption, own b
 	r.controllers = append(r.controllers, declController{prefix: prefix, typ: ty, own: own, registered: true})
 }
 
-func (r *registry) service(ctor any, own bool) {
-	t, err := ctorOf(reflect.TypeOf(ctor))
-	if err != nil {
-		r.fail(diag.New("E0418", "Service(%T): %v", ctor, err).WithHelp("pass the service's constructor: func(deps…) *Service"))
-		return
-	}
-	r.services = append(r.services, declService{typ: (*routeOpts)(nil).pageType(t, ctor), own: own})
-}
-
 // ctorOf is the struct a constructor builds: func(…) *T or func(…) (*T, error).
 func ctorOf(t reflect.Type) (reflect.Type, error) {
 	if t == nil || t.Kind() != reflect.Func {
@@ -221,7 +212,11 @@ func funcDecl(fn any) (*vuka.Decl, error) {
 		}
 	}
 	for i := skip; i < t.NumIn(); i++ {
-		d.Params = append(d.Params, vuka.Param{Type: t.In(i)})
+		p := vuka.Param{Type: t.In(i)}
+		if j := i - skip; j < len(ref.Params) {
+			p.Name = ref.Params[j] // as the compiler recorded them (vuka.RegisterParams)
+		}
+		d.Params = append(d.Params, p)
 	}
 	for i := 0; i < t.NumOut(); i++ {
 		d.Results = append(d.Results, t.Out(i))

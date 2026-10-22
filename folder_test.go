@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/vuka"
 	"github.com/vuka-lang/vuka/diag"
 )
 
@@ -226,7 +227,7 @@ func TestFolderBuildErrors(t *testing.T) {
 	}{
 		{"E0321", func(a *App) { a.Get("/x", newFilesPage, LayoutOf[int]()) }, "a layout is a struct"},
 		{"E0321", func(a *App) { a.Get("/x", newFilesPage, LayoutOf[childless]()) }, "no field Children ui.Node"},
-		{"E0407", func(a *App) { a.Get("/x", newFilesPage, LayoutOf[badLayout]()) }, "no provider for *web.applicantDB"},
+		{"E0407", func(a *App) { a.Get("/x", newFilesPage, LayoutOf[badLayout]()) }, "web.badLayout.Load's 2nd parameter, *web.applicantDB: not provided\n --> folder_test.go:"},
 		{"E0410", func(a *App) { a.Post("/x/{org}", (*orgEdit).Post, Receiver(newOrgIndex)) }, "builds a *web.orgIndex"},
 		{"E0328", func(a *App) {
 			a.Get("/x/{bad}", func() *badParam { return &badParam{} }, PageRoute())
@@ -336,7 +337,9 @@ func TestFolderLayoutsGuardMethodHandlers(t *testing.T) {
 }
 
 // orgGET is a folder's method func, GET in api/orgs/[org].vuka: its scalar
-// binds the segment of its name.
+// binds the segment of its name, which pages/route.go records.
+func init() { vuka.RegisterParams(orgGET, "ctx", "org", "s") }
+
 func orgGET(ctx context.Context, org int, s *orgStore) (string, error) {
 	n, ok := s.names[org]
 	if !ok {
@@ -346,15 +349,15 @@ func orgGET(ctx context.Context, org int, s *orgStore) (string, error) {
 }
 
 // TestFolderMethodFuncs: vuka's pages/route.go registers a method func on
-// the app with its parameters' names; a segment that doesn't parse names
+// the app, its parameters' names recorded; a segment that doesn't parse names
 // no record, 404, as a page's does, while a hand-written route's scalar
 // that doesn't parse stays 400.
 func TestFolderMethodFuncs(t *testing.T) {
 	routes := OptionFunc(func(app *App) {
-		app.Get("/api/orgs/{org}", orgGET, PageRoute(), Params("ctx", "org", "s"))
+		app.Get("/api/orgs/{org}", orgGET, PageRoute())
 	})
 	app := folderApp(routes)
-	app.Get("/plain/{org}", orgGET, Params("ctx", "org", "s"))
+	app.Get("/plain/{org}", orgGET)
 	h := app.Handler()
 	expect(t, h, "GET", "/api/orgs/2", "", 200, `"Globex"`)
 	expect(t, h, "GET", "/api/orgs/9", "", 404, "")

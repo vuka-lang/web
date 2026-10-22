@@ -217,7 +217,7 @@ func (a *App) compileCron(c *cronSpec) (*cronJob, error) {
 			r, deref = reflect.PointerTo(r), true
 		}
 		if !a.c.has(r) {
-			return nil, fail("the receiver %s is not a @web.Service or a provided type", c.recv)
+			return nil, fail("the receiver %s is not a service (app.Service) or a provided type", c.recv)
 		}
 		deps = append(deps, r)
 	}

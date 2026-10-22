@@ -18,7 +18,7 @@ import (
 func init() { livetree.Install() }
 
 func server(t *testing.T, opts ...web.Option) *httptest.Server {
-	srv := httptest.NewServer(web.New(append([]web.Option{web.LiveLayout(livePage)}, opts...)...).Handler())
+	srv := httptest.NewServer(web.New(append([]web.Option{web.LiveLayout(livePage)}, opts...)...).Service(NewChatLog).Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
