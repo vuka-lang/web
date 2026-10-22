@@ -65,7 +65,8 @@ type orgIndex struct {
 
 func newOrgIndex(s *orgStore) *orgIndex { return &orgIndex{store: s} }
 
-func (p *orgIndex) Mount(ctx context.Context) error {
+func (p *orgIndex) LiveSchema(l *ui.LiveSchema) { l.Mount(p.mount) }
+func (p *orgIndex) mount(_ context.Context) error {
 	p.name = p.store.names[p.Org]
 	return nil
 }
@@ -85,9 +86,10 @@ type permitPage struct {
 
 func newPermitPage() *permitPage { return &permitPage{} }
 
-func (p *permitPage) Mount()        { p.n = p.Permit * 10 }
-func (p *permitPage) Inc()          { p.n++ }
-func (p *permitPage) Title() string { return "Permit " + itoa(p.Permit) }
+func (p *permitPage) LiveSchema(l *ui.LiveSchema)   { l.Mount(p.mount) }
+func (p *permitPage) mount(_ context.Context) error { p.n = p.Permit * 10; return nil }
+func (p *permitPage) Inc()                          { p.n++ }
+func (p *permitPage) Title() string                 { return "Permit " + itoa(p.Permit) }
 func (p *permitPage) Render() ui.Node {
 	return ui.El("div", nil, ui.El("span", nil, ui.Text(fmt.Sprint("permit ", p.Org, "/", p.Permit, " n=", p.n))),
 		ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(p.Inc)}}, ui.Text("+")))

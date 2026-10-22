@@ -27,8 +27,9 @@ type meter struct {
 	n int   // clicks, for the browser test
 }
 
-func (c *meter) Mount() { c.m = meterMounts.Add(1) }
-func (c *meter) Inc()   { c.n++ }
+func (c *meter) LiveSchema(l *ui.LiveSchema)   { l.Mount(c.mount) }
+func (c *meter) mount(_ context.Context) error { c.m = meterMounts.Add(1); return nil }
+func (c *meter) Inc()                          { c.n++ }
 func (c *meter) Render() ui.Node {
 	return ui.El("div", nil,
 		ui.El("span", nil, ui.Text(fmt.Sprintf("m%d n%d", c.m, c.n))),

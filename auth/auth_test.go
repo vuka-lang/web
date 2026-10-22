@@ -145,10 +145,12 @@ type whoami struct {
 	who string
 }
 
-func (w *whoami) Mount(ctx context.Context) {
+func (w *whoami) LiveSchema(l *ui.LiveSchema) { l.Mount(w.mount) }
+func (w *whoami) mount(ctx context.Context) error {
 	if id := auth.Current(ctx); id != nil {
 		w.who = id.ID
 	}
+	return nil
 }
 func (w *whoami) Render() ui.Node { return ui.El("p", nil, ui.Text("who="+w.who)) }
 

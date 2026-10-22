@@ -17,7 +17,8 @@ import (
 //		pager *web.Pager[Book]
 //	}
 //
-//	func (b *Books) Mount(ctx context.Context) error {
+//	@ui.Mount
+//	func (b *Books) mount(ctx context.Context) error {
 //		b.pager = web.NewPager(20, func(ctx context.Context, page, size int) (ui.Page[Book], error) {
 //			return web.Paginate(ctx, orm.For[Book](), page, size)
 //		})

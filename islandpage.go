@@ -36,13 +36,15 @@ import (
 //		db   *DB                 // the server's own: injected, never sent
 //	}
 //
-//	func (a *Applicants) Mount(ctx context.Context) error          { … }
+//	@ui.Mount
+//	func (a *Applicants) mount(ctx context.Context) error           { … }
+//
 //	func (a *Applicants) Search(ctx context.Context, q string) error { … }
 //
 // The page renders the component, mounted on load, with the exported fields
 // as its props. The component calls the exported methods (useLive<T>() in
 // it), and sets the fields tagged bind: (live.q.set(v)), after which the
-// server runs Changed. A live page (ui.Live embedded) is a live view whose markup is the
+// server runs its @ui.OnChange hook. A live page (ui.Live embedded) is a live view whose markup is the
 // island: a method runs as a live event on the server's instance, and the
 // fields it changes reach the component as new props, with no remount. A
 // stateless page keeps nothing: a call posts the method and its arguments
@@ -50,7 +52,7 @@ import (
 // the props the page was rendered with — signed for the page and the
 // visitor, so they can't be forged or replayed by someone else — to the
 // page's URL; the server builds the struct again from them, injects
-// its dependencies, runs Mount and the method, and answers with the new
+// its dependencies, runs its mount hook and the method, and answers with the new
 // props. Calls are refused cross-origin and pass the type's gates.
 
 // typePage is a type a route decorator names: a page backed by its island.
@@ -163,25 +165,6 @@ func settable(f reflect.Value) reflect.Value {
 	return f
 }
 
-// mountPage runs x's Mount — Mount(), Mount(ctx), either returning an error.
-func mountPage(ctx context.Context, x reflect.Value) error {
-	m := x.MethodByName("Mount")
-	if !m.IsValid() {
-		return nil
-	}
-	var in []reflect.Value
-	if m.Type().NumIn() == 1 && m.Type().In(0) == reflect.TypeFor[context.Context]() {
-		in = append(in, reflect.ValueOf(ctx))
-	} else if m.Type().NumIn() > 0 {
-		return diag.New("E0333", "%s's Mount is %s", x.Type().Elem(), m.Type()).WithHelp("declare Mount() or Mount(ctx context.Context), returning nothing or an error")
-	}
-	out := m.Call(in)
-	if len(out) == 1 && out[0].Type() == errType && !out[0].IsNil() {
-		return out[0].Interface().(error)
-	}
-	return nil
-}
-
 // compileIslandPage is a stateless page's GET: the struct built for the
 // request, mounted, and rendered as its island with its signed props.
 func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
@@ -208,7 +191,7 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 			a.writeError(w, r, err, true)
 			return
 		}
-		if err := mountPage(rq.ctx, x); err != nil {
+		if err := ui.MountPage(rq.ctx, x.Interface()); err != nil {
 			end()
 			a.writeError(w, r, err, true)
 			return
@@ -241,7 +224,7 @@ var (
 )
 
 // compileIslandCall is a stateless page's calls: the struct built again
-// from the signed props, its dependencies injected, Mount and the method
+// from the signed props, its dependencies injected, its mount hook and the method
 // run, and the props it leaves sent back, signed.
 func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 	ip := s.island
@@ -302,7 +285,7 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 			err = a.bindProps(x.Elem(), append(slicesClone(paths), deps...), pathNames, r)
 		}
 		if err == nil {
-			err = mountPage(rq.ctx, x)
+			err = ui.MountPage(rq.ctx, x.Interface())
 		}
 		if err == nil && call.Load {
 			loads.Load(rq.ctx, x, func(err error) string { return a.loadErrorText(r, ip, err) })

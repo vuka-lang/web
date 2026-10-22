@@ -27,20 +27,27 @@ type orders struct {
 	db     *applicantDB
 }
 
-func (o *orders) Mount() { o.Title = "Orders" }
+func (o *orders) LiveSchema(l *ui.LiveSchema) {
+	l.Mount(o.mount)
+	l.Loads("stats", o.loadStats)
+	l.Loads("lists", o.loadLists)
+	l.Loads("recent", o.loadRecent)
+}
 
-func (o *orders) LoadStats(ctx context.Context) error {
+func (o *orders) mount(_ context.Context) error { o.Title = "Orders"; return nil }
+
+func (o *orders) loadStats(_ context.Context) error {
 	o.Stats = map[string]int{"open": len(o.db.names)}
 	o.Loads++ // not the group's: dropped
 	return nil
 }
 
-func (o *orders) LoadLists(ctx context.Context) error {
+func (o *orders) loadLists(_ context.Context) error {
 	o.Rows = o.db.find("a")
 	return nil
 }
 
-func (o *orders) LoadRecent(ctx context.Context) error {
+func (o *orders) loadRecent(_ context.Context) error {
 	return errors.New("recent: connection refused")
 }
 
@@ -58,9 +65,16 @@ type liveOrders struct {
 }
 
 func (o *liveOrders) Render() ui.Node { return ui.IslandPage(o) }
-func (o *liveOrders) Mount()          { o.Title = "Orders" }
+func (o *liveOrders) LiveSchema(l *ui.LiveSchema) {
+	l.Mount(o.mount)
+	l.Loads("stats", o.loadStats)
+	l.Loads("rows", o.loadRows)
+	l.Loads("recent", o.loadRecent)
+}
 
-func (o *liveOrders) LoadStats(ctx context.Context) error {
+func (o *liveOrders) mount(_ context.Context) error { o.Title = "Orders"; return nil }
+
+func (o *liveOrders) loadStats(ctx context.Context) error {
 	select {
 	case <-time.After(300 * time.Millisecond):
 	case <-ctx.Done():
@@ -70,12 +84,12 @@ func (o *liveOrders) LoadStats(ctx context.Context) error {
 	return nil
 }
 
-func (o *liveOrders) LoadRows(ctx context.Context) error {
+func (o *liveOrders) loadRows(_ context.Context) error {
 	o.Rows = o.db.find("a")
 	return nil
 }
 
-func (o *liveOrders) LoadRecent(ctx context.Context) error {
+func (o *liveOrders) loadRecent(_ context.Context) error {
 	return errors.New("recent: connection refused")
 }
 
@@ -188,11 +202,17 @@ type ordersParams struct {
 	Page int
 }
 
-func (o *patchedOrders) Render() ui.Node               { return ui.IslandPage(o) }
-func (o *patchedOrders) Mount(ctx context.Context)     { o.Subscribe("orders") }
-func (o *patchedOrders) Update(p ordersParams)         { o.Page = p.Page }
-func (o *patchedOrders) LoadStats(ctx context.Context) { o.Stats = 7 }
-func (o *patchedOrders) LoadRows(ctx context.Context) error {
+func (o *patchedOrders) Render() ui.Node { return ui.IslandPage(o) }
+func (o *patchedOrders) LiveSchema(l *ui.LiveSchema) {
+	l.Mount(o.mount)
+	l.Loads("stats", o.loadStats)
+	l.Loads("rows", o.loadRows)
+}
+
+func (o *patchedOrders) mount(_ context.Context) error     { o.Subscribe("orders"); return nil }
+func (o *patchedOrders) Update(p ordersParams)             { o.Page = p.Page }
+func (o *patchedOrders) loadStats(_ context.Context) error { o.Stats = 7; return nil }
+func (o *patchedOrders) loadRows(ctx context.Context) error {
 	select {
 	case <-time.After(200 * time.Millisecond):
 	case <-ctx.Done():
@@ -249,8 +269,9 @@ type slowDash struct {
 	Rows []string `json:"rows" defer:""`
 }
 
-func (d *slowDash) Render() ui.Node { return ui.IslandPage(d) }
-func (d *slowDash) LoadRows()       { d.Rows = []string{"Ada"} }
+func (d *slowDash) Render() ui.Node                  { return ui.IslandPage(d) }
+func (d *slowDash) LiveSchema(l *ui.LiveSchema)      { l.Loads("rows", d.loadRows) }
+func (d *slowDash) loadRows(_ context.Context) error { d.Rows = []string{"Ada"}; return nil }
 
 func init() {
 	ui.Island("components/SlowDash.vue", ui.Layout(fullPage, shell))(vuka.TypeOf[slowDash]("web.slowDash"))
@@ -276,43 +297,4 @@ func TestBrowserDeferredBeforeMount(t *testing.T) {
 
 	p := chrome.Launch(t).Open(srv.URL + "/slow?x=1")
 	p.WaitText("vk-island", `{"rows":["Ada"],"pending":false}`)
-}
-
-// ctorLoaded's loader is declared by its constructor, which runs after the
-// app's start-up checks.
-type ctorLoaded struct {
-	ui.Live
-	Rows []string `json:"rows"`
-}
-
-func newCtorLoaded() *ctorLoaded {
-	p := &ctorLoaded{}
-	p.Loads("rows", (*ctorLoaded).loadRows)
-	return p
-}
-
-func (p *ctorLoaded) LiveSchema(l *ui.LiveSchema) { l.Field(&p.Rows, ui.Defer("rows")) }
-func (p *ctorLoaded) loadRows()                   { p.Rows = []string{"a", "b"} }
-func (p *ctorLoaded) Render() ui.Node             { return ui.IslandPage(p) }
-
-func init() {
-	ui.Island("components/Orders.vue", ui.Layout(titledDoc("orders"), shell))(vuka.TypeOf[ctorLoaded]("web.ctorLoaded"))
-}
-
-func TestDeferredByConstructor(t *testing.T) {
-	a := pageApp()
-	a.Live("/ctor", newCtorLoaded)
-	srv := httptest.NewServer(a.Handler())
-	defer srv.Close()
-	if code, body, _ := do(t, srv.Config.Handler, "GET", "/ctor", ""); code != 200 {
-		t.Fatalf("GET: %d %s", code, body)
-	}
-	c, _ := joined(t, srv, "/ctor")
-	m := must(t, c)
-	if m.Type != live.PatchMsg || len(m.Updates) != 1 {
-		t.Fatalf("the load's patch: %+v", m)
-	}
-	if props, raw, _ := rendered(t, m.Updates[0].HTML); len(props["rows"].([]any)) != 2 {
-		t.Errorf("after the load: %s", raw)
-	}
 }

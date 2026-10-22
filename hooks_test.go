@@ -252,8 +252,9 @@ func TestToolbarRequestNotes(t *testing.T) {
 
 type redirectMount struct{ ui.Live }
 
-func (r *redirectMount) Mount(ctx context.Context) error { return Redirect("/login") }
-func (r *redirectMount) Render() ui.Node                 { return ui.El("p", nil, ui.Text("x")) }
+func (r *redirectMount) LiveSchema(l *ui.LiveSchema)   { l.Mount(r.mount) }
+func (r *redirectMount) mount(_ context.Context) error { return Redirect("/login") }
+func (r *redirectMount) Render() ui.Node               { return ui.El("p", nil, ui.Text("x")) }
 
 // A redirect returned from a live view's Mount redirects, rather than 500ing.
 func TestLiveMountRedirect(t *testing.T) {

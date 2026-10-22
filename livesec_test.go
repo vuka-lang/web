@@ -31,7 +31,8 @@ type secOrder struct {
 	ID string
 }
 
-func (o *secOrder) Mount() error {
+func (o *secOrder) LiveSchema(l *ui.LiveSchema) { l.Mount(o.mount) }
+func (o *secOrder) mount(_ context.Context) error {
 	secOrders.Lock()
 	secOrders.mounts = append(secOrders.mounts, o.ID)
 	secOrders.Unlock()
@@ -152,7 +153,8 @@ type secErrs struct {
 	Fail string // ?fail=mount
 }
 
-func (p *secErrs) Mount() error {
+func (p *secErrs) LiveSchema(l *ui.LiveSchema) { l.Mount(p.mount) }
+func (p *secErrs) mount(_ context.Context) error {
 	if p.Fail == "mount" {
 		return errors.New(`dial tcp 10.0.0.7:5432: password authentication failed for user "app"`)
 	}

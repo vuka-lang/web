@@ -28,11 +28,11 @@ type Rest string
 // parameter, of its name); a path parameter that doesn't parse or fails its
 // validate: tag answers 404. A page whose pointer has Title() string titles
 // the document: ui.PageTitle reads it in the layouts. A stateless page's
-// Title is read after its Mount; a Live page's once its fields are bound,
-// before Mount, which its session runs as it renders. On Get, the
-// constructor's struct is a stateless page, a ui.Node: its Mount, Mount()
-// or Mount(ctx) returning nothing or an error, runs once its fields are
-// bound, and the page renders. LayoutOf implies PageRoute.
+// Title is read after its mount hook; a Live page's once its fields are
+// bound, before its mount hook, which its session runs as it renders. On
+// Get, the constructor's struct is a stateless page, a ui.Node: the mount
+// hook its LiveSchema declares (ui.MountPage), if any, runs once its fields
+// are bound, and the page renders. LayoutOf implies PageRoute.
 func PageRoute() RouteOption { return routeOpt(func(s *routeSpec) { s.page = true }) }
 
 // LayoutOf wraps a route's page in the layout T, a stateless struct
@@ -52,7 +52,7 @@ func PageRoute() RouteOption { return routeOpt(func(s *routeSpec) { s.page = tru
 // Load run, if it has one: Load(ctx, deps…) returning nothing or an error,
 // its dependencies provided types; its error answers the request. Layouts
 // and guards (GuardOf) load in the order their options are given, before a
-// stateless page's Mount. A Live
+// stateless page's mount hook. A Live
 // page's layouts render around it on the request's render; the page's
 // patches render the page. On a handler's route (Post, …) every layout is
 // loaded before the handler runs, whatever it answers, a Load error
@@ -401,11 +401,8 @@ func (a *App) compileNodePage(s *routeSpec, t reflect.Type) (http.Handler, error
 	if err := a.checkCtor(s.fn, s.where); err != nil {
 		return nil, err
 	}
-	if m, ok := reflect.PointerTo(t).MethodByName("Mount"); ok {
-		mt := m.Type
-		if mt.NumIn() > 2 || mt.NumIn() == 2 && mt.In(1) != contextType || mt.NumOut() > 1 || mt.NumOut() == 1 && mt.Out(0) != errType {
-			return nil, failf("E0333", what, s.where, "%s's Mount is %s", t, m.Func.Type()).WithHelp("declare Mount() or Mount(ctx context.Context), returning nothing or an error")
-		}
+	if err := ui.CheckHooks(t); err != nil {
+		return nil, failure("E0337", what, s.where, err)
 	}
 	pathNames := pathParams(s.path)
 	props, err := a.liveProps(t, s.where)
@@ -435,7 +432,7 @@ func (a *App) compileNodePage(s *routeSpec, t reflect.Type) (http.Handler, error
 			loaded, err = a.loadLayouts(rq, layouts, pathNames)
 		}
 		if err == nil {
-			err = mountPage(rq.ctx, x)
+			err = ui.MountPage(rq.ctx, x.Interface())
 		}
 		var page ui.Node
 		if err == nil {

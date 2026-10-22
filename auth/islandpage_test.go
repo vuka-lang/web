@@ -21,15 +21,17 @@ type roster struct {
 	Names []string `json:"names"`
 }
 
-func (r *roster) Mount(ctx context.Context) { r.Names = []string{"Ada"} }
-func (r *roster) Add(name string)           { r.Names = append(r.Names, name) }
+func (r *roster) LiveSchema(l *ui.LiveSchema)   { l.Mount(r.mount) }
+func (r *roster) mount(_ context.Context) error { r.Names = []string{"Ada"}; return nil }
+func (r *roster) Add(name string)               { r.Names = append(r.Names, name) }
 
 // tally defers its counts: their load is a call, gated as the page is.
 type tally struct {
 	Counts map[string]int `json:"counts" defer:""`
 }
 
-func (b *tally) LoadCounts(ctx context.Context) error {
+func (b *tally) LiveSchema(l *ui.LiveSchema) { l.Loads("counts", b.loadCounts) }
+func (b *tally) loadCounts(_ context.Context) error {
 	b.Counts = map[string]int{"open": 2}
 	return nil
 }
