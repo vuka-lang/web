@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // envLoad is one reading of a list of env files from one directory.

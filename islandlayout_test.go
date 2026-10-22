@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/diag"
-	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
+	"github.com/vuka-lang/web/v2/internal/chrome"
 )
 
 // Pages backed by a component, routed with Live, and their layouts.

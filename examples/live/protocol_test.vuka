@@ -11,10 +11,10 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/web/internal/liveproto"
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web/examples/live/pages"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/web/v2/internal/liveproto"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2/examples/live/pages"
 )
 
 func protocolPage(context.Context) ui.Node {

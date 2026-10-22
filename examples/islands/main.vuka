@@ -11,9 +11,9 @@ package main
 import (
 	"log"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/examples/islands/pages"
-	"github.com/vuka-lang/web/examples/islands/registry"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/examples/islands/pages"
+	"github.com/vuka-lang/web/v2/examples/islands/registry"
 )
 
 func main() {

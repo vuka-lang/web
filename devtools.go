@@ -74,7 +74,7 @@ func (a *App) newDevTools() *devTools {
 		if hasVukaTool(t.root) {
 			t.islands = filepath.Join(t.root, filepath.FromSlash(islandsDir))
 		} else {
-			t.missing = append(t.missing, "islands: go get -tool github.com/vuka-lang/vuka/cmd/vuka")
+			t.missing = append(t.missing, "islands: go get -tool github.com/vuka-lang/vuka/cmd/vuka/v2")
 		}
 	}
 	if a.noCSS || os.Getenv(CSSEnv) != "" {
@@ -229,7 +229,7 @@ func registersIslands(root string) bool {
 	return found
 }
 
-var toolLine = regexp.MustCompile(`(?m)^\s*(?:tool\s+)?github\.com/vuka-lang/vuka/cmd/vuka\s*$`)
+var toolLine = regexp.MustCompile(`(?m)^\s*(?:tool\s+)?github\.com/vuka-lang/vuka/cmd/vuka/v2\s*$`)
 
 // hasVukaTool reports whether the vuka command is at hand: a tool of the
 // module (go get -tool), or on PATH.

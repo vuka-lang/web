@@ -33,8 +33,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2"
 )
 
 // Identity is who a request comes from.

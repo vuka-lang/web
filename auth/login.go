@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/v2"
 )
 
 // ErrInvalidLogin is a login's error whether the login is unknown or the

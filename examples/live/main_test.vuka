@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/internal/chrome"
-	"github.com/vuka-lang/web/internal/livetree"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/internal/chrome"
+	"github.com/vuka-lang/web/v2/internal/livetree"
 )
 
 // Until the Vuka live session speaks protocol v2, the tests answer v2 joins

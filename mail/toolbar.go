@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2"
 )
 
 // The development toolbar's Mail panel: the messages a request (or a cron

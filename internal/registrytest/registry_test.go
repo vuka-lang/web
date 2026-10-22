@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/web/v2"
 )
 
 type role string
@@ -115,7 +115,7 @@ func regApps() map[string]*web.App {
 		Get("/reg/gated", regGated).
 		Live("/reg/counter", newRegCounter)
 	return map[string]*web.App{
-		"Routes": web.New(web.Only("github.com/vuka-lang/web/internal/registrytest"), web.Provide(newStore), gate).Service(newRegGreeter),
+		"Routes": web.New(web.Only("github.com/vuka-lang/web/v2/internal/registrytest"), web.Provide(newStore), gate).Service(newRegGreeter),
 		"App":    own,
 	}
 }

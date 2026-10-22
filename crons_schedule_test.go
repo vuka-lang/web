@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/crontest"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/crontest"
 )
 
 // runs records a cron's runs by the clock's time.

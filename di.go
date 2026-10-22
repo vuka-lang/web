@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // Starter is a provided value with work to do when the app starts: Run calls

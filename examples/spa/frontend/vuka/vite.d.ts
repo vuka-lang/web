@@ -6,7 +6,7 @@ export const HOT_FILE: string
 export const ENV_GLOBAL: string
 
 /**
- * The Vite plugin for frontends served by a github.com/vuka-lang/web app:
+ * The Vite plugin for frontends served by a github.com/vuka-lang/web/v2 app:
  * it announces the dev server to the app, writes the build manifest the app
  * caches by, and turns import.meta.env.KEY into the app's value for KEY.
  */

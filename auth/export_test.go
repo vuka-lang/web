@@ -3,7 +3,7 @@ package auth
 import (
 	"context"
 
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/v2"
 )
 
 // SetStrictGates sets what an app built with Config.LaxGates (on false)

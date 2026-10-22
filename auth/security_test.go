@@ -13,11 +13,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/auth"
-	"github.com/vuka-lang/web/auth/authtest"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/auth"
+	"github.com/vuka-lang/web/v2/auth/authtest"
 	"golang.org/x/crypto/bcrypt"
 )
 

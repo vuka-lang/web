@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/v2"
 )
 
 // Policy decides Check for one type of object: may this identity do perm

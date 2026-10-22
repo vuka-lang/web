@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // whereSpan is the place a "Name at file:line" description names.

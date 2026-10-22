@@ -50,7 +50,7 @@ jobs:
         run: |
           if git ls-remote --exit-code --heads https://github.com/vuka-lang/ui "$BRANCH" >/dev/null; then
             git clone --quiet --depth=1 --branch "$BRANCH" https://github.com/vuka-lang/ui "$RUNNER_TEMP/ui"
-            go mod edit -replace github.com/vuka-lang/ui="$RUNNER_TEMP/ui"
+            go mod edit -replace github.com/vuka-lang/ui/v2="$RUNNER_TEMP/ui"
           fi
       - name: gofmt
         run: |

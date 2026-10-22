@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 type vAddress struct {

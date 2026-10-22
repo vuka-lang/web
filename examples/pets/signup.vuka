@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/examples/pets/store"
-	"github.com/vuka-lang/web/examples/pets/views"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/examples/pets/store"
+	"github.com/vuka-lang/web/v2/examples/pets/views"
 )
 
 // ConfirmSignup is the link of the welcome email: it confirms the address

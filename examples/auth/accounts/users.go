@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/web/v2/auth"
 )
 
 // Account is a user as the app keeps it. A real app reads its database.

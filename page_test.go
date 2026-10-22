@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 // benchRow and benchPage are a 12 KB page as the compiler lowers its JSX: a

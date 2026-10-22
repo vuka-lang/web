@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/internal/chrome"
 )
 
 func server(t *testing.T) *httptest.Server {

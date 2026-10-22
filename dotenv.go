@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"strings"
 
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // dotenv parses a .env file. Each value is expanded as it is read, from the

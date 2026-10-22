@@ -9,8 +9,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/live"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/live"
 )
 
 // Session is one connected page's live session.

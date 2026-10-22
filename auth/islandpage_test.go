@@ -10,11 +10,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/auth"
-	"github.com/vuka-lang/web/auth/authtest"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/auth"
+	"github.com/vuka-lang/web/v2/auth/authtest"
 )
 
 type roster struct {

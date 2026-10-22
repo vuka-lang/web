@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2/internal/chrome"
 )
 
 // The join of a live page adopts the session its GET mounted (livepark.go):

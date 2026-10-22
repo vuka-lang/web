@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/web/internal/liveproto"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/web/v2/internal/liveproto"
 )
 
 // Close codes of a live connection the runtime doesn't retry: 4001 asks it to

@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/internal/chrome"
-	"github.com/vuka-lang/web/mail"
-	"github.com/vuka-lang/web/mail/mailtest"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/internal/chrome"
+	"github.com/vuka-lang/web/v2/mail"
+	"github.com/vuka-lang/web/v2/mail/mailtest"
 )
 
 type signup struct {

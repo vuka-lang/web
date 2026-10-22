@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/auth"
 )
 
 // vault is what Vuka generates for a live page whose gated methods are
@@ -46,7 +46,7 @@ func init() {
 	vuka.RegisterFunc((*vault).ClearCtx, adminOnly.Attrs()...)
 	vuka.RegisterFunc((*vault).Far, adminOnly.Attrs()...)
 	vuka.RegisterType[locked](adminOnly.Attrs()...)
-	live.AllowPush("github.com/vuka-lang/web/auth_test.vault", "Clear")
+	live.AllowPush("github.com/vuka-lang/web/v2/auth_test.vault", "Clear")
 }
 
 func elsewhere(c *vuka.Call) {

@@ -3,8 +3,8 @@ package livetree
 import (
 	"context"
 
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/web/internal/liveproto"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/web/v2/internal/liveproto"
 )
 
 // Install makes the web framework answer v2 joins with this stand-in, unless

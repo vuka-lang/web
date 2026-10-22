@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/web/mail"
+	"github.com/vuka-lang/web/v2/mail"
 )
 
 // New is a log-driver Mailer that logs nothing, its sender

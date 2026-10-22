@@ -5,10 +5,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
-// fakeQuery mimics github.com/vuka-lang/orm's QuerySet[T]: value receiver,
+// fakeQuery mimics github.com/vuka-lang/orm/v2's QuerySet[T]: value receiver,
 // Limit/Offset chain and return the same type, Count and All take a context.
 // If Paginate works over it, it works over a real orm.QuerySet[T].
 type fakeQuery struct {

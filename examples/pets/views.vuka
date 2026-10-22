@@ -1,9 +1,9 @@
 package main
 
 import (
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/examples/pets/model"
-	"github.com/vuka-lang/web/examples/pets/store"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/examples/pets/model"
+	"github.com/vuka-lang/web/v2/examples/pets/store"
 )
 
 // PetList fills views.PetsPage's parameters by name: title, pets.

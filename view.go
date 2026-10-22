@@ -12,10 +12,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/templx"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/templx"
 
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 type view struct {

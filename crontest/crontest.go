@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/cron"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/cron"
 )
 
 // Run runs the app's cron name now, its dependencies built by the app, and

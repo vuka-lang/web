@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/auth"
 )
 
 // As signs every request of the app in as id — pages, APIs, live pages and

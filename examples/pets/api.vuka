@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/examples/pets/model"
-	"github.com/vuka-lang/web/examples/pets/store"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/examples/pets/model"
+	"github.com/vuka-lang/web/v2/examples/pets/store"
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }

@@ -2,7 +2,7 @@
 // /books/{id}, all in a layout of their own.
 package books
 
-import "github.com/vuka-lang/web"
+import "github.com/vuka-lang/web/v2"
 
 // ShelfParams is what a patch of the shelf's URL brings to Update.
 type ShelfParams struct {

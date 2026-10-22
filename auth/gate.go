@@ -11,9 +11,9 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/web/v2"
 )
 
 const wrapperName = "auth.Module"

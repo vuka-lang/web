@@ -1,4 +1,4 @@
-// The Vite plugin for frontends served by a github.com/vuka-lang/web app
+// The Vite plugin for frontends served by a github.com/vuka-lang/web/v2 app
 // (web.Frontend). vuka run, vuka build and web.Dev copy it into the frontend's
 // directory as vuka/vite.js; in vite.config:
 //

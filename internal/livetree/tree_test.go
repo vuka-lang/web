@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/web/internal/testenv"
+	"github.com/vuka-lang/web/v2/internal/testenv"
 )
 
 // The browser runtime's v2 code (live.js) runs in node over messages this

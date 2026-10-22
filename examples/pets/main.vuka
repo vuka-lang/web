@@ -1,4 +1,4 @@
-// Command pets is a small web app built with github.com/vuka-lang/web: its
+// Command pets is a small web app built with github.com/vuka-lang/web/v2: its
 // pages are the files under pages/, its JSON API and template views the
 // handlers beside main.
 package main
@@ -8,10 +8,10 @@ import (
 	"io/fs"
 	"log"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/examples/pets/pages"
-	"github.com/vuka-lang/web/examples/pets/store"
-	"github.com/vuka-lang/web/mail"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/examples/pets/pages"
+	"github.com/vuka-lang/web/v2/examples/pets/store"
+	"github.com/vuka-lang/web/v2/mail"
 )
 
 //go:embed static
