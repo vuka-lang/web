@@ -33,7 +33,7 @@ func State(r *http.Request) ui.Node {
 		<Tabs />
 		<Filter />
 		<p class={ui.Class{"theme": true, "dark": theme == "dark"}} id="theme">Theme: {theme}</p>
-		<button type="button" id="dark" onClick={theme.Set("dark")}>Dark</button>
+		<button type="button" id="dark" onClick={theme = "dark"}>Dark</button>
 		<Tip />
 	</Shell>
 }
@@ -42,7 +42,7 @@ func State(r *http.Request) ui.Node {
 func Menu(label string) ui.Node {
 	open := ui.State(false)
 	return <div class="menu-box">
-		<button class="menu-btn" type="button" aria-expanded={open} onClick={open.Toggle()}>
+		<button class="menu-btn" type="button" aria-expanded={open} onClick={open = !open}>
 			{label}
 		</button>
 		<ui.Show when={open}>
@@ -59,9 +59,9 @@ func Tabs() ui.Node {
 	tab := ui.State("env")
 	pinned := ui.State(false)
 	return <section class="tabs">
-		<button type="button" id="tab-env" aria-selected={tab == "env"} onClick={tab.Set("env")}>Environment</button>
-		<button type="button" id="tab-logs" aria-selected={tab == "logs"} onClick={tab.Set("logs").Set(pinned, false)}>Logs</button>
-		<button type="button" id="pin" onClick={pinned.Toggle()}>Pin</button>
+		<button type="button" id="tab-env" aria-selected={tab == "env"} onClick={tab = "env"}>Environment</button>
+		<button type="button" id="tab-logs" aria-selected={tab == "logs"} onClick={tab = "logs"; pinned = false}>Logs</button>
+		<button type="button" id="pin" onClick={pinned = !pinned}>Pin</button>
 		<div id="env" hidden={tab != "env"}>KEY=value</div>
 		<div id="logs" hidden={tab != "logs"}>started</div>
 		<p id="pinned" hidden={!pinned || tab != "env"}>pinned to the environment</p>
@@ -73,9 +73,9 @@ func Tabs() ui.Node {
 func Filter() ui.Node {
 	f := ui.State(Filters{Sort: "name"})
 	return <section class="filter">
-		<button type="button" id="dogs" onClick={f.Kind.Set("dog")}>Dogs</button>
-		<button type="button" id="cats" onClick={f.Set(Filters{Kind: "cat", Sort: "age"})}>Cats by age</button>
-		<button type="button" id="all" onClick={f.Reset()}>All</button>
+		<button type="button" id="dogs" onClick={f.Kind = "dog"}>Dogs</button>
+		<button type="button" id="cats" onClick={f = Filters{Kind: "cat", Sort: "age"}}>Cats by age</button>
+		<button type="button" id="all" onClick={f = Filters{Sort: "name"}}>All</button>
 		<p id="kind">{f.Kind} {f.Sort}</p>
 		<ul>
 			{for _, p := range pets {
@@ -95,7 +95,7 @@ func Count(kind ui.State[string]) ui.Node {
 func Tip() ui.Node {
 	tip := ui.State(false)
 	return <div>
-		<button type="button" id="tip-btn" onClick={tip.Toggle()}>Tip</button>
+		<button type="button" id="tip-btn" onClick={tip = !tip}>Tip</button>
 		<ui.Show when={tip}>
 			<div id="tip" popover="manual" class="panel">A tip</div>
 		</ui.Show>
@@ -117,12 +117,12 @@ func (b *Board) mount(ctx context.Context) error { b.tab = ui.State("a"); return
 
 func (b *Board) Bump() { b.n++ }
 
-func (b *Board) ToB() { b.PushJS(b.tab.Set("b")) }
+func (b *Board) ToB() { b.tab = "b" }
 
 func (b *Board) Render() ui.Node {
 	open := ui.State(false)
 	return <div class="board">
-		<button id="open" type="button" onClick={open.Toggle()}>Open</button>
+		<button id="open" type="button" onClick={open = !open}>Open</button>
 		<p id="opened" hidden={!open}>opened</p>
 		<button id="bump" type="button" onClick={b.Bump}>{b.n}</button>
 		<button id="tob" type="button" onClick={b.ToB}>To b</button>

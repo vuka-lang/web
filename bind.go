@@ -360,6 +360,9 @@ func (a *App) param(s *routeSpec, p vuka.Param, pathNames []string, body *bool) 
 				return v, nil
 			}
 			if err := setText(v, vals); err != nil {
+				if inPath && s.page {
+					return v, NotFound // a folder route's segment that doesn't parse names nothing
+				}
 				return v, BadRequest(fmt.Sprintf("%s: %v", name, err))
 			}
 			return v, nil
