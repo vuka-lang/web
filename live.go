@@ -191,6 +191,9 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	if err := a.checkCtor(ls.ctor, s.where); err != nil {
 		return nil, err
 	}
+	if err := a.checkParams(ls.typ, what, s.where); err != nil {
+		return nil, err
+	}
 	pathNames := pathParams(s.path)
 	props, err := a.liveProps(ls.typ, s.where)
 	if ls.island {

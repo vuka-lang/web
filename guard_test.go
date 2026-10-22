@@ -250,7 +250,7 @@ func TestGuardBuildErrors(t *testing.T) {
 		{"E0321", GuardOf[int](), "web.GuardOf[int]: a guard is a struct"},
 		{"E0321", GuardOf[loadless](), "has no Load method"},
 		{"E0321", GuardOf[guardBadLoad](), "its Load is"},
-		{"E0407", GuardOf[guardNeeds](), "no provider for *web.applicantDB"},
+		{"E0407", GuardOf[guardNeeds](), "web.guardNeeds.Load's 2nd parameter, *web.applicantDB: not provided"},
 	} {
 		a := New(Only("none"))
 		a.Get("/x", newFilesPage, c.opt)

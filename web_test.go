@@ -376,7 +376,7 @@ func (a Admin) Value() string                { return "value " + a.svc.db.name }
 
 func TestServicesAndControllers(t *testing.T) {
 	const p = "github.com/vuka-lang/web" // the types' package
-	Service(vuka.TypeWith[PetService]("web.PetService", func(db *DB) *PetService { return &PetService{db} }))
+	newPetService := func(db *DB) *PetService { return &PetService{db} }
 	Controller("/admin/pets")(vuka.TypeWith[Admin]("web.Admin", func(svc *PetService) *Admin { return &Admin{svc} }))
 	method := func(name string, fn any, params ...string) *vuka.Decl {
 		return vuka.MethodDecl(vuka.Decl{Name: "Admin." + name, Pkg: p, File: "t.vuka", Line: int(line.Add(1)), Func: fn}, params...)
@@ -385,7 +385,7 @@ func TestServicesAndControllers(t *testing.T) {
 	route(Get("/{id}"), method("Show", (*Admin).Show, "id"))
 	route(Get("/value"), method("Value", Admin.Value))
 	route(Get("/svc"), decl(p, "svc", func(s *PetService) string { return s.db.name }, "s"))
-	h := New(Only(p), Provide(&DB{"pg"})).Handler()
+	h := New(Only(p), Provide(&DB{"pg"})).Service(newPetService).Handler()
 	expect(t, h, "GET", "/admin/pets", "", 200, `"admin pg"`)
 	expect(t, h, "GET", "/admin/pets/3", "", 200, `"pet 3"`)
 	expect(t, h, "GET", "/admin/pets/value", "", 200, `"value pg"`)
@@ -394,7 +394,7 @@ func TestServicesAndControllers(t *testing.T) {
 		t.Errorf("GET /admin/pets/: %d %q; want a redirect to the controller's prefix", code, hdr.Get("Location"))
 	}
 
-	err := New(Only(p)).Build()
+	err := New(Only(p)).Service(newPetService).Build()
 	if err == nil || !strings.Contains(err.Error(), "no provider for *web.DB, needed by service web.PetService, needed by controller web.Admin, needed by Admin.Index at t.vuka:") {
 		t.Errorf("Build: %v", err)
 	}
@@ -507,11 +507,11 @@ type Query struct {
 
 func TestPlainGo(t *testing.T) {
 	a := New(Only(pkgOf(t)), Provide(NewStore))
-	a.Get("/pets/{id}", func(s *Store, id int) (Pet, error) { return s.Find(id).Get() }, Params("", "id"))
+	a.Get("/pets/{id}", func(s *Store, id int) (Pet, error) { return s.Find(id).Get() })
 	a.Get("/search", func(q Query, r *http.Request) string { return fmt.Sprint(q.Q, q.Page, r.Method) })
 	a.Post("/pets", func(in NewPet) (Pet, error) { return Pet{3, in.Name}, nil })
 	a.Get("/page", func() Page { return Page{Title: "T"} }, View(vuka.FileOf("plain:p.html", "<p>{{.Title}}</p>")))
-	a.Delete("/pets/{id}", func(id int) error { return nil }, Params("id"), Wrap(func(h http.Handler) http.Handler {
+	a.Delete("/pets/{id}", func(id int) error { return nil }, Wrap(func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Header().Set("X-Wrapped", "1"); h.ServeHTTP(w, r) })
 	}))
 	h := a.Handler()
@@ -523,8 +523,14 @@ func TestPlainGo(t *testing.T) {
 		t.Errorf("DELETE: %d %v", code, hd)
 	}
 
-	err := New(Only(pkgOf(t))).Get("/x/{id}", func(id int) int { return id }).Build()
-	if err == nil || !strings.Contains(err.Error(), "parameter #1 int: a scalar parameter binds by name") {
+	// From Go, scalars bind the path's segments in order, the last
+	// scalar the last segment; one with no segment left is an error.
+	h = New(Only(pkgOf(t))).Get("/orgs/{org}/pets/{id}", func(id int) int { return id }).
+		Get("/x/{a}/{b}", func(a string, s *http.Request, b int) string { return fmt.Sprint(a, b) }).Handler()
+	expect(t, h, "GET", "/orgs/o/pets/9", "", 200, "9")
+	expect(t, h, "GET", "/x/z/4", "", 200, `"z4"`)
+	err := New(Only(pkgOf(t))).Get("/x/{id}", func(id, page int) int { return id }).Build()
+	if err == nil || !strings.Contains(err.Error(), "parameter #2 int: a scalar binds the path segment its position gives, and the path has none left for it") {
 		t.Errorf("unnamed scalar: %v", err)
 	}
 }
@@ -544,16 +550,16 @@ func TestStartupErrors(t *testing.T) {
 		t.Fatal("no error")
 	}
 	for _, want := range []string{
-		"error[E0405]: GET /a (main.a): parameter #1 int: a scalar parameter binds by name, and this one has none\n --> t.vuka:",
-		"parameter #1 int: a scalar parameter binds by name",
+		"error[E0405]: GET /a (main.a): parameter #1 int: a scalar binds the path segment its position gives, and the path has none left for it\n --> t.vuka:",
 		"parameter y web.NewPet: a handler binds one struct from the request, and this is the second",
-		"parameter ch chan int: can't be bound from a request",
+		"parameter ch chan int: can't come from a request",
 		"error[E0406]: GET /d (main.d): results func() (int, int)\n --> t.vuka:",
 		"= help: a handler returns nothing, error, T, (T, error) or Result[T]",
-		"parameter c web.Cache: no provider for web.Cache",
+		"error[E0407]: GET /e (main.e): parameter c web.Cache: not provided; needed by main.e\n --> t.vuka:",
+		"= help: register it in main with app.Service(NewX), or web.Provide(NewX)",
 		"error[E0401]: GET /a is declared twice: by main.a and by main.a2\n --> t.vuka:",
 		": declared here first",
-		"parameter m *web.Opaque: no provider for *web.Opaque",
+		"parameter m *web.Opaque: not provided",
 		"the receiver *web.Repo is not a @web.Controller or a provided type",
 	} {
 		if !strings.Contains(err.Error(), want) {

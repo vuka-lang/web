@@ -175,14 +175,14 @@ func newApp(t *testing.T, u *authtest.Users, edit func(*auth.Config), opts ...we
 	app.Get("/open", page("open"), open)
 	app.Get("/private", page("private"))
 	app.Get("/api/private", func() map[string]string { return map[string]string{"ok": "private"} })
-	app.Get("/orders", func(me *auth.Identity) string { return "orders of " + me.ID }, web.Attrs(auth.Requires("orders.write")), web.Params("me"))
+	app.Get("/orders", func(me *auth.Identity) string { return "orders of " + me.ID }, web.Attrs(auth.Requires("orders.write")))
 	app.Get("/admin", func() string { return "admin" }, web.Attrs(auth.RequiresAny("admin", "billing")))
-	app.Post("/orders", func(me auth.Identity) string { return "created by " + me.ID }, web.Attrs(auth.Requires("orders.write")), web.Params("me"))
-	app.Get("/id", func(me auth.Identity) string { return "id " + me.ID }, open, web.Params("me"))
-	app.Get("/id-or-nil", func(me *auth.Identity) string { return fmt.Sprint("id ", me != nil) }, open, web.Params("me"))
+	app.Post("/orders", func(me auth.Identity) string { return "created by " + me.ID }, web.Attrs(auth.Requires("orders.write")))
+	app.Get("/id", func(me auth.Identity) string { return "id " + me.ID }, open)
+	app.Get("/id-or-nil", func(me *auth.Identity) string { return fmt.Sprint("id ", me != nil) }, open)
 	app.Get("/check/{owner}", func(ctx context.Context, owner string) error {
 		return auth.Check(ctx, "orders.delete", &order{Owner: owner})
-	}, web.Params("ctx", "owner"), open)
+	}, open)
 	app.Live("/board", &board{})
 	app.Live("/advised", &advised{})
 	app.Live("/shelf", &shelf{})
@@ -1053,7 +1053,7 @@ func TestAuthtest(t *testing.T) {
 			app = newApp(t, u, nil, authtest.As(admin))
 		} else {
 			app = web.New(web.Only("none"), web.NoDotEnv(), authtest.As(admin), auth.Module(auth.Config{Users: u, Roles: map[string][]string{"admin": {"admin"}}}))
-			app.Get("/orders", func(me *auth.Identity) string { return "orders of " + me.ID }, web.Attrs(auth.Requires("orders.write")), web.Params("me"))
+			app.Get("/orders", func(me *auth.Identity) string { return "orders of " + me.ID }, web.Attrs(auth.Requires("orders.write")))
 			app.Live("/staff", &whoami{}, web.Attrs(auth.Requires("admin")))
 			app.Get("/login", page("login"), web.Attrs(auth.Public()))
 		}
@@ -1182,13 +1182,13 @@ func TestIdentityString(t *testing.T) {
 func TestLoginPageRerendered(t *testing.T) {
 	app := newApp(t, users(), func(c *auth.Config) { c.LoginPath = "/signin" })
 	open := web.Attrs(auth.Public())
-	app.Get("/signin", func(r *http.Request) ui.Node { return auth.LoginPage(auth.LoginPageProps{Request: r}) }, open, web.Params("r"))
+	app.Get("/signin", func(r *http.Request) ui.Node { return auth.LoginPage(auth.LoginPageProps{Request: r}) }, open)
 	app.Post("/signin", func(ctx context.Context, r *http.Request) ui.Node {
 		if _, err := auth.Login(ctx, r.PostFormValue("login"), r.PostFormValue("password")); err != nil {
 			return auth.LoginPage(auth.LoginPageProps{Request: r, Error: auth.LoginMessage(err)})
 		}
 		return web.Redirect(r.PostFormValue("next"))
-	}, open, web.Params("ctx", "r"))
+	}, open)
 	c := serve(t, app)
 	post := func(login, password string) answer {
 		f := url.Values{"login": {login}, "password": {password}, "next": {"/orders"}}

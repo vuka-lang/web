@@ -121,7 +121,7 @@ func (c *container) walk(t reflect.Type, chain []string, path []reflect.Type, do
 		for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
 			chain[i], chain[j] = chain[j], chain[i]
 		}
-		return diag.New("E0407", "no provider for %s, needed by %s", t, strings.Join(chain, ", needed by ")).WithHelp("provide it: web.Provide(NewX), or @web.Service on the type")
+		return diag.New("E0407", "no provider for %s, needed by %s", t, strings.Join(chain, ", needed by ")).WithHelp(provideHelp)
 	}
 	for _, in := range p.in {
 		if err := c.walk(in, append(chain[:len(chain):len(chain)], p.source), append(path, t), done); err != nil {

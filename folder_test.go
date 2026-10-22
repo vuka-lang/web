@@ -226,7 +226,7 @@ func TestFolderBuildErrors(t *testing.T) {
 	}{
 		{"E0321", func(a *App) { a.Get("/x", newFilesPage, LayoutOf[int]()) }, "a layout is a struct"},
 		{"E0321", func(a *App) { a.Get("/x", newFilesPage, LayoutOf[childless]()) }, "no field Children ui.Node"},
-		{"E0407", func(a *App) { a.Get("/x", newFilesPage, LayoutOf[badLayout]()) }, "no provider for *web.applicantDB"},
+		{"E0407", func(a *App) { a.Get("/x", newFilesPage, LayoutOf[badLayout]()) }, "web.badLayout.Load's 2nd parameter, *web.applicantDB: not provided\n --> folder_test.go:"},
 		{"E0410", func(a *App) { a.Post("/x/{org}", (*orgEdit).Post, Receiver(newOrgIndex)) }, "builds a *web.orgIndex"},
 		{"E0328", func(a *App) {
 			a.Get("/x/{bad}", func() *badParam { return &badParam{} }, PageRoute())

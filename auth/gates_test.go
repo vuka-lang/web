@@ -210,7 +210,7 @@ func TestGatesOutsideEvents(t *testing.T) {
 // the route's own gate.
 func TestGatesInRequests(t *testing.T) {
 	app := newApp(t, users(), nil)
-	app.Get("/vault/clear", func(ctx context.Context) error { return (&vault{}).ClearCtx(ctx) }, web.Params("ctx"), web.Attrs(auth.Public()))
+	app.Get("/vault/clear", func(ctx context.Context) error { return (&vault{}).ClearCtx(ctx) }, web.Attrs(auth.Public()))
 	c := serve(t, app)
 	if r := c.do("GET", "/vault/clear", ""); r.status != 401 {
 		t.Errorf("anonymous: %d", r.status)

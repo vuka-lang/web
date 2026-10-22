@@ -185,7 +185,7 @@ func (a *App) Use(mw ...Middleware) *App {
 }
 
 // RouteOption configures a registration (App.Get, Registry.Live, …): one
-// of web's (Params, Template, Use, Layout, Wrap, Attrs), another package's
+// of web's (Template, Use, Layout, Wrap, Attrs), another package's
 // (an auth gate, ui.Island) or any value carrying typed attributes, which
 // become the route's, as attributes written on a decorated handler are.
 type RouteOption interface{ Attrs() []any }
@@ -194,18 +194,6 @@ type RouteOption interface{ Attrs() []any }
 type routeOpt func(*routeSpec)
 
 func (o routeOpt) Attrs() []any { return []any{o} }
-
-// Params names a handler's parameters in order (a method's receiver
-// excluded), which reflection can't see: scalar parameters bind by name.
-func Params(names ...string) RouteOption {
-	return routeOpt(func(s *routeSpec) {
-		for i := range s.params {
-			if i < len(names) {
-				s.params[i].Name = names[i]
-			}
-		}
-	})
-}
 
 // View renders the route's result with a view, as Template does.
 func View(f vuka.File, name ...string) RouteOption { return Template(f, name...) }
@@ -231,11 +219,22 @@ func (a *App) Controller(prefix string, ctor any, opts ...RouteOption) *App {
 	return a
 }
 
-// Service provides the struct ctor builds as a lazy singleton, as
-// Routes.Service does for every app.
+// Service registers a service: ctor, func(deps…) *T or func(deps…) (*T,
+// error) with T a struct, builds the app's one T, when something first
+// needs it, its parameters filled from the container. Hooks, handlers,
+// constructors, layouts' and guards' Load and middleware constructors then
+// take *T as a parameter. It is how an app declares its services.
+//
+//	app := web.New()
+//	app.Service(NewTodos) // func NewTodos(db *DB) *Todos
 func (a *App) Service(ctor any) *App {
 	a.mutable("Service")
-	a.reg.service(ctor, true)
+	t, err := ctorOf(reflect.TypeOf(ctor))
+	if err != nil {
+		a.c.errs = append(a.c.errs, diag.New("E0418", "Service(%T): %v", ctor, err).WithHelp("pass the service's constructor: func(deps…) *Service"))
+		return a
+	}
+	a.c.provide(ctor, "service "+t.String())
 	return a
 }
 
@@ -281,11 +280,6 @@ func (a *App) take(pkg string) bool { return a.only == nil || a.only[pkg] }
 func (a *App) build() (http.Handler, error) {
 	prefixes := map[reflect.Type]string{}
 	typeAttrs := map[reflect.Type][]any{}
-	for _, sv := range a.reg.services {
-		if t := sv.typ; sv.own || a.take(t.Reflect.PkgPath()) {
-			a.c.provide(t.New, "service "+t.Name)
-		}
-	}
 	for _, c := range a.reg.controllers {
 		if c.own || a.take(c.typ.Reflect.PkgPath()) {
 			a.c.provide(c.typ.New, "controller "+c.typ.Name)
