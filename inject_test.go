@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"database/sql"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -53,6 +54,29 @@ func (s *injShelf) Render() ui.Node {
 	return ui.El("form", []ui.Attr{{Name: "onSubmit", Value: ui.On(s.Add)}}, ui.El("p", nil, ui.Text(s.shown)))
 }
 
+// injNote is a stateless page: the mount hook its LiveSchema declares, as
+// the compiler writes it from @ui.Mount, takes what the app injects too.
+type injNote struct{ shown string }
+
+func (n *injNote) LiveSchema(l *ui.LiveSchema) { l.Mount(n.mount) }
+
+func (n *injNote) mount(ctx context.Context, b *injBooks, u *injUser) error {
+	n.shown = strings.Join(b.list, ",") + " noted for " + u.Name
+	return nil
+}
+
+func (n *injNote) Render(ctx context.Context, w io.Writer) error {
+	return ui.El("p", nil, ui.Text(n.shown)).Render(ctx, w)
+}
+
+type badNote struct{}
+
+func (n *badNote) LiveSchema(l *ui.LiveSchema) { l.Mount(n.mount) }
+
+func (n *badNote) mount(ctx context.Context, db *sql.DB) error { return nil }
+
+func (n *badNote) Render(ctx context.Context, w io.Writer) error { return nil }
+
 type injGuard struct{}
 
 func (g *injGuard) Load(ctx context.Context, r *http.Request, u *injUser, b *injBooks) error {
@@ -68,6 +92,7 @@ func injApp() *App {
 	a.Live("/shelf", &injShelf{})
 	a.Post("/form", func(v url.Values, r *http.Request) string { return v.Get("a") + r.Method })
 	a.Get("/guarded", func() string { return "in" }, GuardOf[injGuard]())
+	a.Get("/note", func() *injNote { return &injNote{} }, PageRoute())
 	return a
 }
 
@@ -95,6 +120,7 @@ func TestInjectedRoutes(t *testing.T) {
 	expect(t, h, "POST", "/form", "a=2", 200, `"2POST"`, "Content-Type", "application/x-www-form-urlencoded")
 	expect(t, h, "GET", "/guarded?as=x", "", 200, `"in"`)
 	expect(t, h, "GET", "/guarded", "", 403, "")
+	expect(t, h, "GET", "/note?as=ada", "", 200, "<p>Dune noted for ADA</p>")
 }
 
 type injDB struct{ *sql.DB }
@@ -134,6 +160,10 @@ func TestInjectedBuildErrors(t *testing.T) {
 	}
 	if diag.Of(err) != "E0405" {
 		t.Errorf("code %q", diag.Of(err))
+	}
+	err = New(Only("none")).Get("/note", func() *badNote { return &badNote{} }, PageRoute()).Build()
+	if want := "badNote.mount's 2nd parameter, *sql.DB, is not provided"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("a stateless page's hook: want %q in %v", want, err)
 	}
 	if err := New(Only("none")).Service(newInjBooks).Live("/bad", &badShelf{}).Build(); strings.Contains(err.Error(), "Pick") {
 		t.Errorf("a provided type is reported: %v", err)
