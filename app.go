@@ -294,6 +294,7 @@ func (a *App) build() (http.Handler, error) {
 	specs := []*routeSpec(nil)
 	errs := slices.Clone(a.c.errs)
 	errs = append(errs, a.reg.errs...)
+	errs = append(errs, a.decoratedPages()...)
 	for _, r := range a.reg.routes {
 		d := r.decl
 		if (r.opts == nil || !r.opts.own) && !a.take(d.Pkg) {
@@ -304,6 +305,11 @@ func (a *App) build() (http.Handler, error) {
 			if err != nil {
 				errs = append(errs, err)
 				continue
+			}
+			// A folder's layouts, guards and middleware (pages/route.go's
+			// options) apply to the page its island backs too.
+			for _, s := range ps {
+				r.opts.applyTo(s)
 			}
 			specs = append(specs, ps...)
 			continue
