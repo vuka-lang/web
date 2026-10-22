@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
 )
 
 type signup struct {

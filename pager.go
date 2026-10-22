@@ -3,7 +3,7 @@ package web
 import (
 	"context"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 // Pager is a live view's paging state: the current page and size, and the

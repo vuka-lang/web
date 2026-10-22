@@ -10,8 +10,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/examples/pets/model"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/examples/pets/model"
 )
 
 // DB is a stand-in database; Start and Stop run with the app.

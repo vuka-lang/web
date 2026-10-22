@@ -1,5 +1,5 @@
 // Command live shows stateful components served live by
-// github.com/vuka-lang/web: a counter page, a todo list, a chat whose tabs see
+// github.com/vuka-lang/web/v2: a counter page, a todo list, a chat whose tabs see
 // each other's messages, a counter inside an ordinary page, and a paged list
 // of books with a page per book, moved between over one connection. Its
 // pages are the files under pages/.
@@ -8,12 +8,12 @@ package main
 import (
 	"log"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/examples/live/components"
-	"github.com/vuka-lang/web/examples/live/library"
-	"github.com/vuka-lang/web/examples/live/pages"
-	"github.com/vuka-lang/web/examples/live/rooms"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/examples/live/components"
+	"github.com/vuka-lang/web/v2/examples/live/library"
+	"github.com/vuka-lang/web/v2/examples/live/pages"
+	"github.com/vuka-lang/web/v2/examples/live/rooms"
 )
 
 func main() {

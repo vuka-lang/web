@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 // The toolbar's panels, drawn on the server for one record: the script

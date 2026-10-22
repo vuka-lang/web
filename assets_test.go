@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web/internal/chrome"
-	"github.com/vuka-lang/web/internal/testenv"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2/internal/chrome"
+	"github.com/vuka-lang/web/v2/internal/testenv"
 )
 
 // The island runtime — function, state and live props — in node over a
@@ -147,7 +147,7 @@ func devAssets(t *testing.T) string {
 		}
 	}
 	write("manifest.json", `{"scopes":{"k1":{"name":"web.scopedCounter","styles":["counter.css"],"scripts":["counter.ts"],"module":"k1.0a1b2c3d.js","methods":["bump"],"css":64,`+
-		`"type":"github.com/vuka-lang/web.scopedCounter","pushes":["Inc"]},`+
+		`"type":"github.com/vuka-lang/web/v2.scopedCounter","pushes":["Inc"]},`+
 		`"k2":{"name":"web.scopedLabel","styles":["label.css"],"css":48}}}`)
 	write("c/k1.0a1b2c3d.js", `export default [{
 	mounted(el, ctx) { (window.hooks ||= []).push("mounted " + el.dataset.vkId); },

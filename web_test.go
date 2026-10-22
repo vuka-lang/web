@@ -13,9 +13,9 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/templx"
-	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/templx"
+	"github.com/vuka-lang/vuka/v2"
 )
 
 var line atomic.Int64
@@ -375,7 +375,7 @@ func (a *Admin) Show(id int) (string, error) { return fmt.Sprint("pet ", id), ni
 func (a Admin) Value() string                { return "value " + a.svc.db.name }
 
 func TestServicesAndControllers(t *testing.T) {
-	const p = "github.com/vuka-lang/web" // the types' package
+	const p = "github.com/vuka-lang/web/v2" // the types' package
 	newPetService := func(db *DB) *PetService { return &PetService{db} }
 	Controller("/admin/pets")(vuka.TypeWith[Admin]("web.Admin", func(svc *PetService) *Admin { return &Admin{svc} }))
 	method := func(name string, fn any, params ...string) *vuka.Decl {

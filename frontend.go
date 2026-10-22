@@ -26,7 +26,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // A frontend is a single-page app built by its own toolchain (Vite, say)

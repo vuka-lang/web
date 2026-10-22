@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 // built is a message checked and rendered, ready to send.

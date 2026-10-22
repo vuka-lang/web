@@ -9,8 +9,8 @@ and controllers are declared with decorators, services registered with
 package main
 
 import (
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2"
 )
 
 type PetStore struct{ db *DB }
@@ -51,7 +51,7 @@ A complete app is in [`examples/pets`](examples/pets); live components in
 [`examples/live`](examples/live).
 
 ```
-go get github.com/vuka-lang/web
+go get github.com/vuka-lang/web/v2
 ```
 
 ## Declaring
@@ -1107,7 +1107,7 @@ The `vuka` command builds the stylesheet with the
 [Tailwind CLI](https://tailwindcss.com/docs/installation/tailwind-cli)
 (`brew install tailwindcss`, or `npm i -D @tailwindcss/cli`) from the module's
 `.vuka`, `.templ`, `.html` and `.go` files and those of the dependencies that
-ship components (github.com/vuka-lang/ui), and every full page the app serves
+ship components (github.com/vuka-lang/ui/v2), and every full page the app serves
 links it: `<link rel="stylesheet" href="/_vuka/app.css?v=…">` before
 `</head>`, unless the page links it already. Fragments, JSON and live updates
 don't.

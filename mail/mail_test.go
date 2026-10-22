@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }

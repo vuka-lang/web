@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // envSandbox moves the test into a fresh module directory holding files. The

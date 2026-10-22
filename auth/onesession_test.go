@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/auth"
 )
 
 // countingSessions counts the store reads of the sessions it keeps.

@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/web/internal/chrome"
-	"github.com/vuka-lang/web/internal/testenv"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/web/v2/internal/chrome"
+	"github.com/vuka-lang/web/v2/internal/testenv"
 )
 
 // withCSS registers css as the app's stylesheet for the test.

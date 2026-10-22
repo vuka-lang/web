@@ -8,7 +8,7 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 type slashAdmin struct{}

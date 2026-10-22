@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // Live serves a stateful component as a page at path, a GET route:

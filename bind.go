@@ -17,9 +17,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 type routeSpec struct {
@@ -323,7 +323,7 @@ func results(ft reflect.Type) (shape, error) {
 }
 
 func isResult(t reflect.Type) bool {
-	return t.PkgPath() == "github.com/vuka-lang/vuka" && strings.HasPrefix(t.Name(), "Result[")
+	return t.PkgPath() == "github.com/vuka-lang/vuka/v2" && strings.HasPrefix(t.Name(), "Result[")
 }
 
 // param binds a route handler's parameter by its type (see inject.go).

@@ -10,9 +10,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // noteMW is middleware noting its name going in and out of the route.

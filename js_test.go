@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/uigen"
-	"github.com/vuka-lang/web/internal/chrome"
-	"github.com/vuka-lang/web/internal/testenv"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/uigen"
+	"github.com/vuka-lang/web/v2/internal/chrome"
+	"github.com/vuka-lang/web/v2/internal/testenv"
 )
 
 // The runtime's JS commands, in node over a small DOM.

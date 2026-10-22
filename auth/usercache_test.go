@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/auth"
-	"github.com/vuka-lang/web/auth/authtest"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/auth"
+	"github.com/vuka-lang/web/v2/auth/authtest"
 )
 
 type countingUsers struct {

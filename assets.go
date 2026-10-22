@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vuka-lang/ui/live"
+	"github.com/vuka-lang/ui/v2/live"
 )
 
 // A page's styles and scripts: web.Style, Script, CSS and JS name them on

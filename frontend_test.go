@@ -13,8 +13,8 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2/internal/chrome"
 )
 
 //go:embed all:testdata/frontend/dist

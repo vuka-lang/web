@@ -20,8 +20,8 @@ import (
 	"reflect"
 	"sync"
 
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // Middleware wraps an http.Handler.

@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vuka-lang/ui/live"
+	"github.com/vuka-lang/ui/v2/live"
 )
 
 // A live page's GET mounts its components and renders them; the join of its

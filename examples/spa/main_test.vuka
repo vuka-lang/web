@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/v2"
 )
 
 func get(t *testing.T, srv *httptest.Server, path string) (int, string) {

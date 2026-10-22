@@ -21,7 +21,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/vuka-lang/web/internal/testenv"
+	"github.com/vuka-lang/web/v2/internal/testenv"
 )
 
 // Timeout bounds every call and wait.

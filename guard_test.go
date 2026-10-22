@@ -8,9 +8,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/ui/live"
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // accessLog says what orgGuard answers for each {org}, and records the

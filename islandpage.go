@@ -19,9 +19,9 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // Pages backed by a component: @web.Live (a live page, embedding ui.Live)

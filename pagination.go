@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 // DefaultPageSize is the page size Paginate and the request binders use when
@@ -27,7 +27,7 @@ type Source[T any] interface {
 
 // Pageable is the shape of an ORM query a paginator needs: count the matches,
 // narrow to a window with Limit and Offset, and fetch it with All. Q is the
-// query's own type, so Limit and Offset chain. github.com/vuka-lang/orm's
+// query's own type, so Limit and Offset chain. github.com/vuka-lang/orm/v2's
 // QuerySet[T] satisfies Pageable[orm.QuerySet[T], T], so Paginate takes one
 // directly with no import of orm here.
 type Pageable[Q any, T any] interface {

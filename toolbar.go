@@ -27,8 +27,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
 )
 
 // The development toolbar. A development app (Dev, VUKA_ENV=development,
@@ -591,7 +591,11 @@ func shortName(s string) string {
 	s, _, _ = strings.Cut(s, " at ")
 	s = strings.TrimSuffix(s, "-fm")
 	if i := strings.LastIndexByte(s, '/'); i >= 0 {
-		s = s[i+1:]
+		rest := s[i+1:]
+		if dot := strings.IndexByte(rest, '.'); dot > 0 && isMajor(rest[:dot]) {
+			rest = s[strings.LastIndexByte(s[:i], '/')+1:i] + rest[dot:]
+		}
+		s = rest
 	}
 	for {
 		i := strings.LastIndex(s, ".func")

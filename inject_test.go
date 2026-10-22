@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // The hooks and handlers of a live page take what they need by type: the

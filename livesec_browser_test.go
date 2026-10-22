@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2/internal/chrome"
 )
 
 const xssPayload = "javascript:void(window.pwned=document.domain)"

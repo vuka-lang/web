@@ -4,10 +4,10 @@ import (
 	"context"
 	"strings"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/auth"
-	"github.com/vuka-lang/web/examples/auth/accounts"
-	"github.com/vuka-lang/web/examples/auth/notices"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/auth"
+	"github.com/vuka-lang/web/v2/examples/auth/accounts"
+	"github.com/vuka-lang/web/v2/examples/auth/notices"
 )
 
 // The API: a browser's session cookie or a bearer token from

@@ -15,9 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/diag"
-	"github.com/vuka-lang/web/cron"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
+	"github.com/vuka-lang/web/v2/cron"
 )
 
 // Crons: functions run on a schedule, declared with @web.Cron or added with

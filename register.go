@@ -9,9 +9,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/diag"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
 )
 
 // routeOpts are what a registration's options give it.
@@ -207,7 +207,7 @@ func funcDecl(fn any) (*vuka.Decl, error) {
 			local := strings.NewReplacer("(*", "", ")", "").Replace(name[slash+dot+1:])
 			d.Name = local
 			if skip == 0 {
-				d.Name = d.Pkg[strings.LastIndexByte(d.Pkg, '/')+1:] + "." + local
+				d.Name = pathName(d.Pkg) + "." + local
 			}
 		}
 	}
@@ -299,4 +299,23 @@ func (a *App) checkCtor(ctor reflect.Value, where string) error {
 		}
 	}
 	return nil
+}
+
+// pathName is an import path's last element, or the element before a
+// major-version suffix: web for github.com/vuka-lang/web/v2.
+func pathName(p string) string {
+	i := strings.LastIndexByte(p, '/')
+	last := p[i+1:]
+	if i > 0 && isMajor(last) {
+		p = p[:i]
+		return p[strings.LastIndexByte(p, '/')+1:]
+	}
+	return last
+}
+
+// isMajor reports whether elem is a module path's major-version element:
+// v2, v3, ….
+func isMajor(elem string) bool {
+	n, ok := strings.CutPrefix(elem, "v")
+	return ok && n != "" && n != "1" && n[0] != '0' && strings.Trim(n, "0123456789") == ""
 }

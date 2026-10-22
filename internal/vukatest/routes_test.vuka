@@ -5,10 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/v2"
 )
 
-const pkg = "github.com/vuka-lang/web/internal/vukatest"
+const pkg = "github.com/vuka-lang/web/v2/internal/vukatest"
 
 func TestTranspiled(t *testing.T) {
 	h := web.New(web.Only(pkg)).Service(NewKennel).Handler()

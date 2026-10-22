@@ -19,10 +19,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/vuka/diag"
-	"github.com/vuka-lang/web/cron"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/vuka/v2/diag"
+	"github.com/vuka-lang/web/v2/cron"
 )
 
 // App is a web application: the routes, services and controllers declared

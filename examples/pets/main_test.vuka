@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/web"
-	"github.com/vuka-lang/web/crontest"
-	"github.com/vuka-lang/web/examples/pets/pages"
-	"github.com/vuka-lang/web/examples/pets/store"
-	"github.com/vuka-lang/web/mail/mailtest"
+	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/crontest"
+	"github.com/vuka-lang/web/v2/examples/pets/pages"
+	"github.com/vuka-lang/web/v2/examples/pets/store"
+	"github.com/vuka-lang/web/v2/mail/mailtest"
 )
 
 func get(t *testing.T, srv *httptest.Server, method, path, body string, header ...string) (int, string) {

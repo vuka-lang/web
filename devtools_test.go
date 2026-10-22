@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 // devEnv sets the environment Dev looks at (env, pairs of names and values)
@@ -308,7 +308,7 @@ func TestDevIslands(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.Stop(context.Background())
-	if !strings.Contains(logs.String(), "for islands: go get -tool github.com/vuka-lang/vuka/cmd/vuka") {
+	if !strings.Contains(logs.String(), "for islands: go get -tool github.com/vuka-lang/vuka/cmd/vuka/v2") {
 		t.Errorf("no word of the vuka command:\n%s", logs)
 	}
 

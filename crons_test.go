@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/vuka"
-	"github.com/vuka-lang/web/internal/chrome"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/vuka/v2"
+	"github.com/vuka-lang/web/v2/internal/chrome"
 )
 
 type Counter struct{ n int }
@@ -137,7 +137,7 @@ func TestCronBuildErrors(t *testing.T) {
 	a.Cron("y", "every minute", func() {})
 	a.Cron("z", "@hourly", 42)
 	err = a.Build()
-	for _, want := range []string{"error[E0412]: cron x is declared twice", `error[E0411]: cron y (github.com/vuka-lang/web.TestCronBuildErrors.func`, `want five fields`, "error[E0411]: cron z: int is not a function"} {
+	for _, want := range []string{"error[E0412]: cron x is declared twice", `error[E0411]: cron y (github.com/vuka-lang/web/v2.TestCronBuildErrors.func`, `want five fields`, "error[E0411]: cron z: int is not a function"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("Build: %v\nwant %q", err, want)
 		}

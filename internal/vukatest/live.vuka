@@ -1,8 +1,8 @@
 package vukatest
 
 import (
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2"
 )
 
 // tally is the Tally of tally.vuka.html, as cards.templ's Board renders it.

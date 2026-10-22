@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/vuka-lang/ui"
-	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2"
 )
 
 // routeEndpoints mounts the login, logout, me and token endpoints under

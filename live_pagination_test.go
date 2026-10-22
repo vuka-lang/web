@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/ui/v2"
 )
 
 // bookRow is a row of the paged books list.

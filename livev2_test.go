@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/vuka-lang/web/internal/chrome"
-	"github.com/vuka-lang/web/internal/livetree"
-	"github.com/vuka-lang/web/internal/testenv"
+	"github.com/vuka-lang/web/v2/internal/chrome"
+	"github.com/vuka-lang/web/v2/internal/livetree"
+	"github.com/vuka-lang/web/v2/internal/testenv"
 )
 
 // Until the Vuka live session speaks protocol v2, the web tests answer v2
