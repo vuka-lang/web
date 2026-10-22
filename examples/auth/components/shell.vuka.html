@@ -1,0 +1,30 @@
+// Package components is what the pages share: the document and the nav.
+package components
+
+import "github.com/vuka-lang/ui"
+
+// Shell is the pages' document.
+type Shell struct {
+	Title    string
+	Children ui.Node
+}
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{Title} · Vuka auth</title>
+		<style>
+			body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem }
+			.vk-login { display: grid; gap: .6rem; max-width: 20rem } .vk-login label { display: grid } .vk-login-error, #error { color: crimson }
+			nav { display: flex; gap: 1rem; align-items: center } nav form { margin: 0 }
+		</style>
+		<script>
+			// What the server refused (vk:error), shown under the board.
+			document.addEventListener("vk:error", (e) => { const p = document.getElementById("error"); if (p) p.textContent = e.detail.message; });
+		</script>
+	</head>
+	<body>
+		<main>{Children}</main>
+	</body>
+</html>

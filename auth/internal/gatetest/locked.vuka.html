@@ -1,0 +1,14 @@
+package gatetest
+
+import (
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web/auth"
+)
+
+// Locked is gated on its type: every event of it needs admin, a function
+// literal's included, though it calls no method.
+@auth.Requires("admin")
+type Locked struct {
+	ui.Live
+}
+<button class="locked" onClick={func() { Runs.Add(1) }}>locked</button>

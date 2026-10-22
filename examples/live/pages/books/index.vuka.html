@@ -1,0 +1,62 @@
+package books
+
+import (
+	"context"
+	"sync/atomic"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web/examples/live/library"
+)
+
+var shelves atomic.Int64 // how many shelves have mounted, to tell one from the next
+
+// Shelf lists the books a page at a time. Its pager links patch it: the
+// same component, moved to another page of the list, with no page load.
+// A book's link navigates to the book's own page.
+type Shelf struct {
+	ui.Live
+	Page    int // ?page=, for the first render
+	page    int
+	rows    []library.Book
+	shelf   int64
+	patches int
+}
+
+func (s *Shelf) Title() string { return "Books" }
+
+@ui.Mount
+func (s *Shelf) mount(ctx context.Context) error {
+	s.shelf = shelves.Add(1)
+	s.show(s.Page)
+	return nil
+}
+
+// Update takes the URL the pager patched the page to.
+func (s *Shelf) Update(p ShelfParams) {
+	s.patches++
+	s.show(p.Page)
+}
+
+func (s *Shelf) show(page int) {
+	s.page = min(max(page, 1), library.Pages())
+	s.rows = library.Books[(s.page-1)*library.PerPage : min(s.page*library.PerPage, len(library.Books))]
+}
+<section class="shelf">
+	<h1>Books</h1>
+	<ol start={(page-1)*library.PerPage + 1}>
+		for _, b := range rows {
+			<li key={b.ID}><ui.Link href={library.BookURL(b.ID)}>{b.Title}</ui.Link> <small>{b.Author}</small></li>
+		}
+	</ol>
+	<p class="pager">
+		if page > 1 {
+			<ui.Link href={library.ShelfURL(page - 1)} patch class="prev">Previous</ui.Link>
+		}
+		<span class="at">page {page} of {library.Pages()}</span>
+		if page < library.Pages() {
+			<ui.Link href={library.ShelfURL(page + 1)} patch class="next">Next</ui.Link>
+		}
+	</p>
+	<p><small class="mount">shelf #{shelf}, patched {patches} times</small></p>
+	<p><ui.Link href="/books.json">The list as JSON</ui.Link></p>
+</section>

@@ -1,0 +1,83 @@
+package pages
+
+import (
+	"context"
+	"fmt"
+	"slices"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+)
+
+// Likes shows its outcomes before the server answers: a like counts at
+// once, a deleted note goes at once, and both come back when the server
+// refuses — likes while they're closed, the note that stays.
+type Likes struct {
+	ui.Live
+	likes  int
+	closed bool
+	notes  []string
+}
+
+@ui.Mount
+func (l *Likes) mount(ctx context.Context) error {
+	l.likes = 5
+	l.notes = []string{"milk", "eggs", "keep"}
+	return nil
+}
+
+func (l *Likes) Like() error {
+	if l.closed {
+		return web.BadRequest("likes are closed")
+	}
+	l.likes++
+	return nil
+}
+
+func (l *Likes) Toggle() { l.closed = !l.closed }
+
+func (l *Likes) Delete(e ui.Event) error {
+	if e.Value == "keep" {
+		return web.BadRequest("that note stays")
+	}
+	l.notes = slices.DeleteFunc(l.notes, func(s string) bool { return s == e.Value })
+	return nil
+}
+
+func (l *Likes) likeClass() string {
+	if l.likes > 5 {
+		return "like liked"
+	}
+	return "like"
+}
+
+func closedLabel(closed bool) string {
+	if closed {
+		return "Open likes"
+	}
+	return "Close likes"
+}
+<section class="likes">
+	<button
+		id="like"
+		class={likeClass()}
+		type="button"
+		onClick={ui.JS.AddClass(ui.This, "liked").SetText(ui.Ref("count"), fmt.Sprint(likes+1)).Push(l.Like).OnError(ui.JS.Show(ui.Ref("like-error")))}
+	>
+		Like
+	</button>
+	<b ref="count">{likes}</b>
+	<p ref="like-error" class="error" hidden>Couldn't save your like.</p>
+	<button id="toggle" type="button" onClick={Toggle}>{closedLabel(closed)}</button>
+	<ul class="notes">
+		for _, n := range notes {
+			<li key={n} id={"note-" + n}>
+				{n}
+				<button type="button" value={n} onClick={ui.JS.Hide(ui.Closest("li")).Push(l.Delete).OnError(ui.JS.Show(ui.Ref("note-error")))}>
+					delete
+				</button>
+			</li>
+		}
+	</ul>
+	<p ref="note-error" class="error" hidden>Couldn't delete that note.</p>
+</section>

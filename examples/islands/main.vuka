@@ -3,55 +3,21 @@
 // type-checked like any component's. Its picked prop is a client state the
 // page shares (two-way), onBook a live view method (an event prop), and
 // booked server state the island follows as the page changes it (a live
-// prop). applicants.vuka is a page backed by a component. As an app of its
-// own module (web is its island root, web.IslandRoot): npm install in web,
-// then vuka run.
+// prop). pages/applicants.vuka.html is a page backed by a component. As an app
+// of its own module (web is its island root, web.IslandRoot): npm install
+// in web, then vuka run.
 package main
 
 import (
-	"context"
 	"log"
 
-	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/web"
-
-	Week "./web/islands/Week.vue"
+	"github.com/vuka-lang/web/examples/islands/pages"
+	"github.com/vuka-lang/web/examples/islands/registry"
 )
 
-@web.Live("/")
-type Planner struct {
-	ui.Live
-	booked []string
-	picked ui.State[string]
-}
-
-@ui.Mount
-func (p *Planner) mount(ctx context.Context) error {
-	p.booked = []string{}
-	p.picked = ui.State("mon")
-	return nil
-}
-
-// Book is the island's onBook: the island calls it with the day.
-func (p *Planner) Book(day string) { p.booked = append(p.booked, day) }
-
-func (p *Planner) Render() ui.Node {
-	return <main>
-		<h1>Planner</h1>
-		<p>Picked: <b>{p.picked}</b> · booked: {len(p.booked)}</p>
-		<button onClick={p.picked.Set("fri")}>Pick Friday</button>
-		<Week
-			days={[]string{"mon", "tue", "wed", "thu", "fri"}}
-			booked={p.booked}
-			picked={p.picked}
-			onBook={p.Book}
-			client:load
-		/>
-	</main>
-}
-
 func main() {
-	app := web.New(web.IslandRoot("web"), web.Provide(NewRegistry))
+	app := web.New(pages.Routes(), web.IslandRoot("web"), web.Provide(registry.New))
 	if err := app.Run(":" + web.Env("PORT", "8080")); err != nil {
 		log.Fatal(err)
 	}

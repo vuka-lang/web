@@ -1,4 +1,6 @@
-package main
+// Package store is the pets app's data: a stand-in database and the
+// services over it, which main registers.
+package store
 
 import (
 	"context"

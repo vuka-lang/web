@@ -1,25 +1,15 @@
-package main
+package pages
 
 import (
 	"slices"
 	"strconv"
 	"strings"
 
-	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
 )
 
-type Item struct {
-	ID   int
-	Text string
-	Done bool
-}
-
-type NewItem struct {
-	Text string `form:"text"`
-}
-
-@web.Live("/todo")
+// Todo is a list at /todo: items added, ticked, filtered, sorted, removed.
 type Todo struct {
 	ui.Live
 	items  []Item
@@ -73,49 +63,6 @@ func (t *Todo) left() int {
 	return n
 }
 
-func (t *Todo) Render() ui.Node {
-	return <section class="todo">
-		<form onSubmit={t.Add}>
-			<input
-				name="text"
-				placeholder="What needs doing?"
-				autocomplete="off"
-			/>
-			<button>Add</button>
-		</form>
-		<input
-			type="search"
-			placeholder="Filter"
-			value={t.filter}
-			onInput={t.Filter}
-			data-vk-debounce="150"
-		/>
-		<button type="button" class="sort" onClick={t.Sort}>
-			{sortLabel(t.sorted)}
-		</button>
-		<ul>
-			{for _, it := range t.shown() {
-				<li
-					key={it.ID}
-					id={"todo-" + strconv.Itoa(it.ID)}
-					class={doneClass(it.Done)}
-				>
-					<input
-						type="checkbox"
-						checked={it.Done}
-						onChange={func(done bool) { t.Toggle(it.ID, done) }}
-					/>
-					<span>{it.Text}</span>
-					<button type="button" onClick={func() { t.Remove(it.ID) }}>
-						×
-					</button>
-				</li>
-			}}
-		</ul>
-		<p class="left">{t.left()} left</p>
-	</section>
-}
-
 func sortLabel(sorted bool) string {
 	if sorted {
 		return "Unsort"
@@ -129,3 +76,23 @@ func doneClass(done bool) string {
 	}
 	return ""
 }
+<section class="todo">
+	<form onSubmit={Add}>
+		<input name="text" placeholder="What needs doing?" autocomplete="off" />
+		<button>Add</button>
+	</form>
+	<input type="search" placeholder="Filter" value={filter} onInput={Filter} data-vk-debounce="150" />
+	<button type="button" class="sort" onClick={Sort}>
+		{sortLabel(sorted)}
+	</button>
+	<ul>
+		for _, it := range shown() {
+			<li key={it.ID} id={"todo-" + strconv.Itoa(it.ID)} class={doneClass(it.Done)}>
+				<input type="checkbox" checked={it.Done} onChange={func(done bool) { t.Toggle(it.ID, done) }} />
+				<span>{it.Text}</span>
+				<button type="button" onClick={func() { t.Remove(it.ID) }}>×</button>
+			</li>
+		}
+	</ul>
+	<p class="left">{left()} left</p>
+</section>

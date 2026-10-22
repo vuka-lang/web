@@ -1,0 +1,68 @@
+package pages
+
+import (
+	"context"
+	"strconv"
+	"strings"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/web/examples/auth/accounts"
+	"github.com/vuka-lang/web/examples/auth/components"
+	"github.com/vuka-lang/web/examples/auth/notices"
+)
+
+// Board is a live page; like every page it needs a sign-in.
+type Board struct {
+	ui.Live
+	notices *notices.Notices
+	me      *auth.Identity
+	list    []notices.Notice
+}
+
+func NewBoard(n *notices.Notices) *Board { return &Board{notices: n} }
+
+// mount sees who opened the page: the identity the connection joined with.
+@ui.Mount
+func (b *Board) mount(ctx context.Context) error {
+	b.me = auth.Current(ctx)
+	b.list = b.notices.All()
+	b.Subscribe("notices")
+	return nil
+}
+
+func (b *Board) Update(notices.Changed) { b.list = b.notices.All() }
+
+@auth.Requires("notices.write")
+func (b *Board) Post(ctx context.Context, f notices.Form) error {
+	text := strings.TrimSpace(f.Text)
+	if text == "" {
+		return web.BadRequest("write something")
+	}
+	b.notices.Add(accounts.Name(b.me), text)
+	return web.Broadcast(ctx, "notices", notices.Changed{})
+}
+
+// Clear is for admins: anyone else's click is refused (the page gets
+// vk:error), whatever the browser sends.
+@auth.Requires("notices.delete")
+func (b *Board) Clear(ctx context.Context) error {
+	b.notices.Clear()
+	return web.Broadcast(ctx, "notices", notices.Changed{})
+}
+<section class="board">
+	<components.Nav me={me} />
+	<h1>Notices</h1>
+	<ul class="notices">
+		for _, n := range list {
+			<li key={n.ID} id={"n" + strconv.Itoa(n.ID)}>{n.Text} <small>— {n.By}</small></li>
+		}
+	</ul>
+	<form class="post" onSubmit={Post}>
+		<input name="text" placeholder="A notice" autocomplete="off" />
+		<button>Post</button>
+	</form>
+	<p><button type="button" class="clear" onClick={Clear}>Clear the board</button> (admins only)</p>
+	<p id="error" role="alert" data-vk-ignore></p>
+</section>

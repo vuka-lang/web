@@ -1,0 +1,57 @@
+package store
+
+import (
+	"crypto/rand"
+	"time"
+)
+
+// Owner is a sign-up, confirmed by the link of its welcome email.
+type Owner struct {
+	Name, Email string
+	Token       string
+	Joined      time.Time
+	Confirmed   bool
+}
+
+// Owners is a service, registered in main.
+type Owners struct {
+	db *DB
+}
+
+func NewOwners(db *DB) *Owners { return &Owners{db: db} }
+
+func (o *Owners) Add(name, email string) Owner { return o.AddAt(name, email, time.Now()) }
+
+// AddAt adds a sign-up made at joined.
+func (o *Owners) AddAt(name, email string, joined time.Time) Owner {
+	ow := Owner{Name: name, Email: email, Token: rand.Text(), Joined: joined}
+	o.db.mu.Lock()
+	defer o.db.mu.Unlock()
+	o.db.owners[ow.Token] = ow
+	return ow
+}
+
+func (o *Owners) Confirm(token string) (Owner, bool) {
+	o.db.mu.Lock()
+	defer o.db.mu.Unlock()
+	ow, ok := o.db.owners[token]
+	if ok {
+		ow.Confirmed = true
+		o.db.owners[token] = ow
+	}
+	return ow, ok
+}
+
+// ForgetUnconfirmed drops the sign-ups not confirmed since before.
+func (o *Owners) ForgetUnconfirmed(before time.Time) int {
+	o.db.mu.Lock()
+	defer o.db.mu.Unlock()
+	n := 0
+	for token, ow := range o.db.owners {
+		if !ow.Confirmed && ow.Joined.Before(before) {
+			delete(o.db.owners, token)
+			n++
+		}
+	}
+	return n
+}

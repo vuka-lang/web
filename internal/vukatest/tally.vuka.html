@@ -1,0 +1,12 @@
+package vukatest
+
+import "github.com/vuka-lang/ui"
+
+// Tally is a stateful component a templ view renders.
+type Tally struct {
+	ui.Live
+	n int
+}
+
+func (t *Tally) Inc() { t.n++ }
+<b onClick={Inc}>{n}</b>

@@ -18,7 +18,7 @@ import (
 func init() { livetree.Install() }
 
 func server(t *testing.T, opts ...web.Option) *httptest.Server {
-	srv := httptest.NewServer(web.New(append([]web.Option{web.LiveLayout(livePage)}, opts...)...).Service(NewChatLog).Handler())
+	srv := httptest.NewServer(newApp(opts...).Handler())
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -54,6 +54,7 @@ func TestPages(t *testing.T) {
 		"/counter?start=3": `<output>3</output>`,
 		"/todo":            `<p class="left">0 left</p>`,
 		"/chat/go":         `<h2>#go</h2>`,
+		"/books/6":         `<div class="book-frame"><article class="book"`,
 	} {
 		res, err := http.Get(srv.URL + path)
 		if err != nil {
@@ -63,6 +64,16 @@ func TestPages(t *testing.T) {
 		res.Body.Close()
 		if res.StatusCode != 200 || !strings.Contains(string(b), want) || !strings.Contains(string(b), "data-vk-token=") {
 			t.Errorf("GET %s: %d %s", path, res.StatusCode, b)
+		}
+	}
+	for _, path := range []string{"/books/99", "/books/x"} {
+		res, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != 404 {
+			t.Errorf("GET %s: %d", path, res.StatusCode)
 		}
 	}
 }
@@ -284,7 +295,7 @@ func TestBrowserNavigation(t *testing.T) {
 		p.WaitText("h1", "Paradise")
 		p.Eval(`history.back()`, nil)
 		p.WaitText(".pager .at", "page 2 of 4")
-		p.Wait(same + ` && location.search === "?page=2" && scrollY === 500 && document.title === "Live · Vuka live" && document.querySelectorAll("head style").length === 2`)
+		p.Wait(same + ` && location.search === "?page=2" && scrollY === 500 && document.title === "Books · Vuka live" && document.querySelectorAll("head style").length === 2`)
 		if p.Text(".mount") == strings.Replace(shelf, "0 times", "1 times", 1) {
 			t.Errorf("back to the shelf from another page mounts it again: %s", p.Text(".mount"))
 		}
@@ -372,11 +383,11 @@ func TestBrowserState(t *testing.T) {
 	p.Wait(`document.querySelector("#env").hidden && !document.querySelector("#logs").hidden && document.querySelector("#pinned").hidden && document.querySelector("#tab-logs").getAttribute("aria-selected") === "true"`)
 
 	p.Click("#dogs")
-	p.Wait(`[...document.querySelectorAll(".pet")].map((e) => e.hidden).join() === "false,true,false" && document.querySelector("#kind").textContent === "dog name" && document.querySelector("#count").textContent === "only dogs"`)
+	p.Wait(`[...document.querySelectorAll(".pet")].map((e) => e.hidden).join() === "false,true,false" && document.querySelector("#kind").textContent === "dog " && document.querySelector("#count").textContent === "only dogs"`)
 	p.Click("#cats")
 	p.Wait(`[...document.querySelectorAll(".pet")].map((e) => e.hidden).join() === "true,false,true" && document.querySelector("#kind").textContent === "cat age"`)
 	p.Click("#all")
-	p.Wait(`document.querySelector("#kind").textContent === " name" && document.querySelector("#count").hidden`)
+	p.Wait(`document.querySelector("#kind").textContent === " " && document.querySelector("#count").hidden`)
 
 	p.Click("#dark")
 	p.Wait(`document.querySelector("#theme").className === "theme dark" && document.querySelector("#theme").textContent === "Theme: dark"`)

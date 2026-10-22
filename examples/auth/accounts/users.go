@@ -1,4 +1,5 @@
-package main
+// Package accounts is the app's users: who can sign in, and as whom.
+package accounts
 
 import (
 	"context"
@@ -86,8 +87,8 @@ func (u *Users) Public(id *auth.Identity) any {
 	return map[string]string{"name": a.Name, "email": a.Email}
 }
 
-// name is who a page greets.
-func name(id *auth.Identity) string {
+// Name is who a page greets.
+func Name(id *auth.Identity) string {
 	if a, ok := id.User.(*Account); ok {
 		return a.Name
 	}

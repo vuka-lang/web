@@ -1,0 +1,21 @@
+package components
+
+import "github.com/vuka-lang/ui"
+
+// Filter's state is a struct; a list item reads one field, a server value
+// beside it.
+type Filter struct {
+	f ui.State[Filters]
+}
+<section class="filter">
+	<button type="button" id="dogs" onClick={f.Kind = "dog"}>Dogs</button>
+	<button type="button" id="cats" onClick={f = Filters{Kind: "cat", Sort: "age"}}>Cats by age</button>
+	<button type="button" id="all" onClick={f = Filters{}}>All</button>
+	<p id="kind">{f.Kind} {f.Sort}</p>
+	<ul>
+		for _, p := range pets {
+			<li class="pet" hidden={f.Kind != "" && f.Kind != p.Kind}>{p.Name}</li>
+		}
+	</ul>
+	<Count kind={f.Kind} />
+</section>

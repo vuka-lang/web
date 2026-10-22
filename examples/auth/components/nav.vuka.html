@@ -1,0 +1,17 @@
+package components
+
+import (
+	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/web/examples/auth/accounts"
+)
+
+// Nav says who is signed in, with a sign-out button (a POST, as a sign-out
+// must be).
+type Nav struct {
+	Me *auth.Identity
+}
+<nav>
+	<a href="/">Home</a> <a href="/board">Board</a>
+	<span class="who">Signed in as {accounts.Name(Me)}</span>
+	<form method="post" action="/auth/logout"><button class="logout">Sign out</button></form>
+</nav>

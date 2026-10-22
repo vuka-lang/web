@@ -1,0 +1,33 @@
+package book
+
+import (
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web/examples/live/library"
+)
+
+// Page is a book's page, /books/{id}, inside the book's layout. Its next link patches it (ID is bound again from
+// the URL, and the markup reads it); its buttons move the page from the
+// server and from a JS command.
+type Page struct {
+	ui.Live
+	ID int
+}
+
+func (p *Page) Title() string { return "Book" }
+
+func (p *Page) book() library.Book { return library.Get(p.ID) }
+
+// Done sends the reader back to the book's page of the shelf.
+func (p *Page) Done() { p.PushNavigate(library.ShelfURL((p.book().ID-1)/library.PerPage + 1)) }
+<article class="book">
+	<h1>{book().Title}</h1>
+	<p class="author">by {book().Author}</p>
+	<p>
+		if book().ID < len(library.Books) {
+			<ui.Link href={library.BookURL(book().ID + 1)} patch class="next">Next book</ui.Link>
+		}
+		<ui.Link href={library.ShelfURL(1)} class="shelf">All books</ui.Link>
+	</p>
+	<button id="done" type="button" onClick={Done}>Done reading</button>
+	<button id="first" type="button" onClick={ui.JS.AddClass(ui.This, "going").Patch(library.BookURL(1))}>First book</button>
+</article>

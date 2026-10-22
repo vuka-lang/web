@@ -8,15 +8,16 @@ import (
 
 	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/web/examples/pets/model"
+	"github.com/vuka-lang/web/examples/pets/store"
 )
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
 @web.Get("/api/pets")
-func APIPets(store *PetStore) Result[[]model.Pet] { return store.All() }
+func APIPets(s *store.PetStore) Result[[]model.Pet] { return s.All() }
 
 @web.Post("/api/pets")
-func CreatePet(in model.NewPet, store *PetStore) Result[model.Pet] { return store.Add(in) }
+func CreatePet(in model.NewPet, s *store.PetStore) Result[model.Pet] { return s.Add(in) }
 
 // requireToken is HTTP middleware for one route, through @web.Use. The app
 // wraps its routes after reading the env files, so ADMIN_TOKEN may come from
@@ -42,7 +43,7 @@ decorator audited(c) {
 
 @web.Controller("/admin/pets")
 type PetAdmin struct {
-	store *PetStore
+	store *store.PetStore
 }
 
 @web.Get("/")

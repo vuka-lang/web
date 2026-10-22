@@ -1,0 +1,38 @@
+// Package components is what the pages share: the document, and the
+// parts of the state page.
+package components
+
+import "github.com/vuka-lang/ui"
+
+// Shell is the pages' document; Head adds to its head. Its links move a
+// live page over its connection.
+type Shell struct {
+	Title    string
+	Head     ui.Node
+	Children ui.Node
+}
+
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>{Title} · Vuka live</title>
+		<style>
+			body { font: 16px/1.5 system-ui, sans-serif; max-width: 40rem; margin: 2rem auto; padding: 0 1rem }
+			nav a { margin-right: 1rem } [aria-busy=true] { opacity: .6 } .done { text-decoration: line-through; color: #888 }
+			.hidden, #menu:not(.open) { display: none } .dialog { border: 1px solid #ccc; padding: 1rem } .fade { transition: opacity .2s } .faded { opacity: 0 } .flash { background: #ffd }
+			html[data-vk-navigating] main { opacity: .6 }
+			.panel { transition: opacity .15s } .panel[data-closed] { opacity: 0 } .dark { background: #222; color: #eee }
+			html[data-vk-state=disconnected] body::before { content: "reconnecting…"; position: fixed; top: 0; right: 0; background: #fd0; padding: .2rem .6rem }
+		</style>
+		{Head}
+	</head>
+	<body>
+		<nav>
+			<ui.Link href="/">Home</ui.Link> <ui.Link href="/counter">Counter</ui.Link> <ui.Link href="/todo">Todo</ui.Link>
+			<ui.Link href="/chat/lobby">Chat</ui.Link> <ui.Link href="/commands">Commands</ui.Link> <ui.Link href="/chores">Chores</ui.Link>
+			<ui.Link href="/likes">Likes</ui.Link> <ui.Link href="/books">Books</ui.Link> <a href="/state">State</a>
+		</nav>
+		<main>{Children}</main>
+	</body>
+</html>

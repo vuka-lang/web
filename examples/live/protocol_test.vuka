@@ -14,13 +14,11 @@ import (
 	"github.com/vuka-lang/ui/live"
 	"github.com/vuka-lang/web/internal/liveproto"
 	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web/examples/live/pages"
 )
 
 func protocolPage(context.Context) ui.Node {
-	return <main>
-		<Todo />
-		<Counter Start={1} />
-	</main>
+	return ui.El("main", nil, ui.Key(nil, &pages.Todo{}), ui.Key(nil, &pages.Counter{Start: 1}))
 }
 
 var handlerRe = regexp.MustCompile(`data-vk-on-(\w+)="(c\d+:\d+)"`)

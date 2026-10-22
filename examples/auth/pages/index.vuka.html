@@ -1,0 +1,17 @@
+package pages
+
+import (
+	"github.com/vuka-lang/web/auth"
+	"github.com/vuka-lang/web/examples/auth/accounts"
+	"github.com/vuka-lang/web/examples/auth/components"
+)
+
+// Home needs a sign-in, as every page does unless marked public: who is
+// signed in is never nil here.
+type Home struct{}
+<components.Shell title="Home">
+	<components.Nav me={auth.Current(ctx)} />
+	<h1>Hello, {accounts.Name(auth.Current(ctx))}</h1>
+	<p><a href="/board">The notice board</a> is live: it shows who you are, and only admins may clear it.</p>
+	<p>The API takes a bearer token: <code>POST /auth/token</code> with your login and password, then <code>GET /api/notices</code> with <code>Authorization: Bearer …</code>.</p>
+</components.Shell>

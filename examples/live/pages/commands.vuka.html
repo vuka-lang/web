@@ -1,0 +1,39 @@
+package pages
+
+import (
+	"time"
+
+	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web/examples/live/components"
+)
+
+// Commands is a page of JS commands only — a menu, a dialog, a copy
+// button: the browser runs them, and the page never connects.
+type Commands struct{}
+<components.Shell title="Commands">
+	<h1>Commands</h1>
+	<button
+		id="menu-btn"
+		type="button"
+		aria-expanded="false"
+		onClick={ui.JS.ToggleClass("#menu", "open").ToggleAttr(ui.This, "aria-expanded", "true", "false")}
+	>
+		Menu
+	</button>
+	<ul id="menu" class="menu"><li>One</li><li>Two</li></ul>
+	<button
+		id="open"
+		type="button"
+		onClick={ui.JS.PushFocus().Show("#dialog", ui.Transition("fade", "faded", "shown"), ui.Time(200*time.Millisecond)).FocusFirst("#dialog")}
+	>
+		Open the dialog
+	</button>
+	<div id="dialog" class="dialog" hidden onKeyDown={ui.JS.Key("Escape").Hide(ui.This).PopFocus()}>
+		<input id="name" placeholder="Your name" />
+		<button id="close" type="button" onClick={ui.JS.Hide("#dialog").PopFocus()}>Close</button>
+	</div>
+	<p>
+		<input id="code" value="go run ." readonly />
+		<button id="copy" type="button" onClick={ui.JS.Copy("#code")}>Copy</button>
+	</p>
+</components.Shell>

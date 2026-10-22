@@ -1,21 +1,12 @@
 package vukatest
 
 import (
-	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/ui"
+	"github.com/vuka-lang/web"
 )
 
-// Tally is a stateful component a templ view renders.
-type Tally struct {
-	ui.Live
-	n int
-}
-
-func (t *Tally) Inc() { t.n++ }
-
-func (t *Tally) Render() ui.Node { return <b onClick={t.Inc}>{t.n}</b> }
-
-func tally() ui.Node { return <Tally /> }
+// tally is the Tally of tally.vuka.html, as cards.templ's Board renders it.
+func tally() ui.Node { return ui.Key(nil, &Tally{}) }
 
 @web.Template("cards.templ", "Board")
 @web.Get("/board")

@@ -1,0 +1,47 @@
+package signup
+
+import (
+	"context"
+	"errors"
+	"net/http"
+
+	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/pets/store"
+	"github.com/vuka-lang/web/examples/pets/views"
+	"github.com/vuka-lang/web/mail"
+)
+
+// Page is the sign-up form, GET /signup, and its Post method POST /signup:
+// the owner added, and the welcome email sent.
+type Page struct {
+	owners *store.Owners
+	mailer *mail.Mailer
+}
+
+func NewPage(owners *store.Owners, m *mail.Mailer) *Page { return &Page{owners: owners, mailer: m} }
+
+func (p *Page) Post(ctx context.Context, r *http.Request, in Form) (web.Redirect, error) {
+	ow := p.owners.Add(in.Name, in.Email)
+	link := "http://" + r.Host + "/signup/confirm?token=" + ow.Token
+	err := p.mailer.Send(ctx, mail.Message{
+		To:      []string{in.Name + " <" + in.Email + ">"},
+		Subject: "Welcome to Pets",
+		HTML:    views.Welcome{Name: in.Name, Link: link},
+	})
+	var invalid *mail.InvalidError
+	if errors.As(err, &invalid) {
+		return "", web.BadRequest(invalid.Reason)
+	}
+	if err != nil {
+		return "", err
+	}
+	return web.Redirect("/signup/sent"), nil
+}
+<views.Layout title="Sign up">
+	<h1>Sign up</h1>
+	<form method="post" action="/signup">
+		<label>Name <input name="name" required /></label>
+		<label>Email <input name="email" type="email" required /></label>
+		<button>Sign up</button>
+	</form>
+</views.Layout>

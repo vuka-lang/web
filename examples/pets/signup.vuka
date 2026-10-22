@@ -2,132 +2,29 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"errors"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/vuka-lang/ui"
 	"github.com/vuka-lang/web"
+	"github.com/vuka-lang/web/examples/pets/store"
 	"github.com/vuka-lang/web/examples/pets/views"
-	"github.com/vuka-lang/web/mail"
 )
 
-// Owner is a sign-up, confirmed by the link of its welcome email.
-type Owner struct {
-	Name, Email string
-	Token       string
-	Joined      time.Time
-	Confirmed   bool
-}
-
-// Owners is a service, registered in main.
-type Owners struct {
-	db *DB
-}
-
-func NewOwners(db *DB) *Owners { return &Owners{db: db} }
-
-func (o *Owners) Add(name, email string) Owner {
-	ow := Owner{Name: name, Email: email, Token: rand.Text(), Joined: time.Now()}
-	o.db.mu.Lock()
-	defer o.db.mu.Unlock()
-	o.db.owners[ow.Token] = ow
-	return ow
-}
-
-func (o *Owners) Confirm(token string) (Owner, bool) {
-	o.db.mu.Lock()
-	defer o.db.mu.Unlock()
-	ow, ok := o.db.owners[token]
-	if ok {
-		ow.Confirmed = true
-		o.db.owners[token] = ow
-	}
-	return ow, ok
-}
-
-// ForgetUnconfirmed drops the sign-ups not confirmed since before.
-func (o *Owners) ForgetUnconfirmed(before time.Time) int {
-	o.db.mu.Lock()
-	defer o.db.mu.Unlock()
-	n := 0
-	for token, ow := range o.db.owners {
-		if !ow.Confirmed && ow.Joined.Before(before) {
-			delete(o.db.owners, token)
-			n++
-		}
-	}
-	return n
-}
-
-type Signup struct {
-	Name  string `form:"name" validate:"required"`
-	Email string `form:"email" validate:"required"`
-}
-
-@web.Get("/signup")
-func SignupPage() ui.Node {
-	return <views.Layout title="Sign up">
-		<h1>Sign up</h1>
-		<form method="post" action="/signup">
-			<label>Name <input name="name" required /></label>
-			<label>Email <input name="email" type="email" required /></label>
-			<button>Sign up</button>
-		</form>
-	</views.Layout>
-}
-
-// WelcomeEmail is the welcome email's HTML; the Mailer makes its text part.
-func WelcomeEmail(name string, link string) ui.Node {
-	return <div style="font-family: system-ui, sans-serif">
-		<h1>Welcome, {name}</h1>
-		<p>Thanks for signing up to Pets. Confirm your address within a day:</p>
-		<p><a href={link}>Confirm my address</a></p>
-	</div>
-}
-
-@web.Post("/signup")
-func SignUp(ctx context.Context, r *http.Request, in Signup, owners *Owners, m *mail.Mailer) (web.Redirect, error) {
-	ow := owners.Add(in.Name, in.Email)
-	link := "http://" + r.Host + "/signup/confirm?token=" + ow.Token
-	err := m.Send(ctx, mail.Message{
-		To:      []string{in.Name + " <" + in.Email + ">"},
-		Subject: "Welcome to Pets",
-		HTML:    <WelcomeEmail name={in.Name} link={link} />,
-	})
-	var invalid *mail.InvalidError
-	if errors.As(err, &invalid) {
-		return "", web.BadRequest(invalid.Reason)
-	}
-	if err != nil {
-		return "", err
-	}
-	return web.Redirect("/signup/sent"), nil
-}
-
-@web.Get("/signup/sent")
-func SignupSent() ui.Node {
-	return <views.Layout title="Check your email">
-		<p>We sent you a link to confirm your address.</p>
-	</views.Layout>
-}
-
+// ConfirmSignup is the link of the welcome email: it confirms the address
+// and answers with a page saying so.
 @web.Get("/signup/confirm")
-func ConfirmSignup(token string, owners *Owners) (ui.Node, error) {
+func ConfirmSignup(token string, owners *store.Owners) (ui.Node, error) {
 	ow, ok := owners.Confirm(token)
 	if !ok {
 		return nil, web.Status(404, "this link has expired; sign up again")
 	}
-	return <views.Layout title="Confirmed">
-		<p>Thanks, {ow.Name}: your address is confirmed.</p>
-	</views.Layout>, nil
+	return views.Confirmed{Name: ow.Name}, nil
 }
 
 // forgetUnconfirmed drops the sign-ups nobody confirmed within a day.
 @web.Cron("@every 10m")
-func forgetUnconfirmed(ctx context.Context, owners *Owners) {
+func forgetUnconfirmed(ctx context.Context, owners *store.Owners) {
 	if n := owners.ForgetUnconfirmed(time.Now().Add(-24 * time.Hour)); n > 0 {
 		slog.InfoContext(ctx, "forgot unconfirmed sign-ups", "n", n)
 	}
