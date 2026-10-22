@@ -5,7 +5,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/vuka-lang/web"
 	"github.com/vuka-lang/web/auth"
 )
 
@@ -20,14 +19,13 @@ type Account struct {
 }
 
 // Users is the app's side of auth: who can sign in, and as whom. Being a
-// @web.Service implementing auth.Users, auth.Module finds it by itself.
-@web.Service
+// service implementing auth.Users, auth.Module finds it by itself.
 type Users struct {
 	mu       sync.Mutex
 	accounts []*Account
 }
 
-func Users.New() *Users {
+func NewUsers() *Users {
 	u := &Users{}
 	u.add(Account{ID: "1", Name: "Ada", Email: "ada@example.com", Roles: []string{"admin"}}, "correct horse battery")
 	u.add(Account{ID: "2", Name: "Bob", Email: "bob@example.com", Perms: []string{"notices.read", "notices.write"}}, "hunter2hunter2")

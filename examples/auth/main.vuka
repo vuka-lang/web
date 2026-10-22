@@ -21,10 +21,18 @@ func options() []web.Option {
 		auth.Module(auth.Config{
 			Endpoints: "/auth", // POST /auth/login, /auth/logout, /auth/token; GET /auth/me
 			Roles:     map[string][]string{"admin": {"notices.*"}},
-			// Users: the @web.Service implementing auth.Users (users.vuka).
+			// Users: the service implementing auth.Users (users.vuka).
 		}),
 		web.LiveLayout(livePage),
+		web.OptionFunc(services),
 	}
+}
+
+// services are the app's, which its pages, handlers and hooks take as
+// parameters.
+func services(app *web.App) {
+	app.Service(NewUsers)
+	app.Service(NewNotices)
 }
 
 func main() {

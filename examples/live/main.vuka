@@ -12,6 +12,7 @@ import (
 
 func main() {
 	app := web.New(web.LiveLayout(livePage))
+	app.Service(NewChatLog)
 	if err := app.Run(""); err != nil { // ":$PORT", else ":8080"
 		log.Fatal(err)
 	}

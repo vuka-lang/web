@@ -25,13 +25,15 @@ type NoticeForm struct {
 // changed is broadcast to every board when the notices change.
 type changed struct{}
 
-// Notices are the board's, shared by every page and the API.
-@web.Service
+// Notices are the board's, shared by every page and the API: a service,
+// registered in main.
 type Notices struct {
-	mu   sync.Mutex `inject:"-"`
-	list []Notice   `inject:"-"`
-	next int        `inject:"-"`
+	mu   sync.Mutex
+	list []Notice
+	next int
 }
+
+func NewNotices() *Notices { return &Notices{} }
 
 func (n *Notices) Add(by, text string) Notice {
 	n.mu.Lock()

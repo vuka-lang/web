@@ -30,7 +30,7 @@ func get(t *testing.T, srv *httptest.Server, method, path, body string, header .
 }
 
 func TestPets(t *testing.T) {
-	app := web.New(web.Provide(OpenDB, mailtest.New()))
+	app := web.New(web.Provide(OpenDB, mailtest.New()), web.OptionFunc(services))
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 	for _, c := range []struct {
@@ -63,7 +63,7 @@ func TestPets(t *testing.T) {
 
 func TestSignup(t *testing.T) {
 	m := mailtest.New()
-	app := web.New(web.Provide(OpenDB, m))
+	app := web.New(web.Provide(OpenDB, m), web.OptionFunc(services))
 	srv := httptest.NewServer(app.Handler())
 	defer srv.Close()
 	form := []string{"Content-Type", "application/x-www-form-urlencoded"}
