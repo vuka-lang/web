@@ -1,3 +1,4 @@
+<script lang="go">
 package components
 
 import "github.com/vuka-lang/ui/v2"
@@ -8,6 +9,8 @@ type Tabs struct {
 	tab    ui.State[string]
 	pinned ui.State[bool]
 }
+</script>
+
 <section class="tabs">
 	<button type="button" id="tab-env" aria-selected={tab != "logs"} onClick={tab = "env"}>Environment</button>
 	<button type="button" id="tab-logs" aria-selected={tab == "logs"} onClick={tab = "logs"; pinned = false}>Logs</button>

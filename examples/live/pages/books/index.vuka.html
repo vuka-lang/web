@@ -1,3 +1,4 @@
+<script lang="go">
 package books
 
 import (
@@ -41,6 +42,8 @@ func (s *Shelf) show(page int) {
 	s.page = min(max(page, 1), library.Pages())
 	s.rows = library.Books[(s.page-1)*library.PerPage : min(s.page*library.PerPage, len(library.Books))]
 }
+</script>
+
 <section class="shelf">
 	<h1>Books</h1>
 	<ol start={(page-1)*library.PerPage + 1}>

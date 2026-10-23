@@ -1,3 +1,4 @@
+<script lang="go">
 package components
 
 import "github.com/vuka-lang/ui/v2"
@@ -6,6 +7,8 @@ import "github.com/vuka-lang/ui/v2"
 type Tip struct {
 	tip ui.State[bool]
 }
+</script>
+
 <div>
 	<button type="button" id="tip-btn" onClick={tip = !tip}>Tip</button>
 	<ui.Show when={tip}>

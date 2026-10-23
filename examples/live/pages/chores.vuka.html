@@ -1,3 +1,4 @@
+<script lang="go">
 package pages
 
 import (
@@ -27,6 +28,8 @@ func (c *Chores) Delete(e ui.Event) {
 	c.done++
 	c.PushJS(ui.JS.On(ui.Ref("status")).AddClass("flash").SetAttr("data-done", fmt.Sprint(c.done)))
 }
+</script>
+
 <section class="chores">
 	<button class="pick" type="button" onClick={ui.JS.RemoveClass(ui.Ref("menu"), "hidden")}>Pick one</button>
 	<ul ref="menu" class="menu hidden">

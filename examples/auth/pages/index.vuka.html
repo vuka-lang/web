@@ -1,3 +1,4 @@
+<script lang="go">
 package pages
 
 import (
@@ -9,6 +10,8 @@ import (
 // Home needs a sign-in, as every page does unless marked public: who is
 // signed in is never nil here.
 type Home struct{}
+</script>
+
 <components.Shell title="Home">
 	<components.Nav me={auth.Current(ctx)} />
 	<h1>Hello, {accounts.Name(auth.Current(ctx))}</h1>

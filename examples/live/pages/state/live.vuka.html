@@ -1,3 +1,4 @@
+<script lang="go">
 package state
 
 import (
@@ -22,6 +23,8 @@ func (b *Board) mount(ctx context.Context) error { b.tab = "a"; return nil }
 func (b *Board) Bump() { b.n++ }
 
 func (b *Board) ToB() { b.tab = "b" }
+</script>
+
 <div class="board">
 	<button id="open" type="button" onClick={open = !open}>Open</button>
 	<p id="opened" hidden={!open}>opened</p>

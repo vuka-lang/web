@@ -1,3 +1,4 @@
+<script lang="go">
 // Package pages is the example's pages: the planner at /, and the
 // applicants at /applicants.
 package pages
@@ -26,6 +27,8 @@ func (p *Planner) mount(ctx context.Context) error {
 
 // Book is the island's onBook: the island calls it with the day.
 func (p *Planner) Book(day string) { p.booked = append(p.booked, day) }
+</script>
+
 <main>
 	<h1>Planner</h1>
 	<p>Picked: <b>{picked}</b> · booked: {len(booked)}</p>

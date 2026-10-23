@@ -1,3 +1,4 @@
+<script lang="go">
 package gatetest
 
 import (
@@ -27,6 +28,8 @@ func (p *Page) Spawn(ctx context.Context) {
 	go func() { p.Clear(); close(done) }()
 	<-done
 }
+</script>
+
 <main>
 	<button onClick={p.Clear}>clear</button>
 	<button onClick={func() { p.Clear() }}>clear, from a literal</button>

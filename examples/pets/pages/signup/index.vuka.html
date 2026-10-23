@@ -1,3 +1,4 @@
+<script lang="go">
 package signup
 
 import (
@@ -37,6 +38,8 @@ func (p *Page) Post(ctx context.Context, r *http.Request, in Form) (web.Redirect
 	}
 	return web.Redirect("/signup/sent"), nil
 }
+</script>
+
 <views.Layout title="Sign up">
 	<h1>Sign up</h1>
 	<form method="post" action="/signup">

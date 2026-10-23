@@ -1,3 +1,4 @@
+<script lang="go">
 // Package state is pages of client state: /state, which never connects,
 // and /state/live, a live page with client state.
 package state
@@ -14,6 +15,8 @@ var theme ui.State[string]
 // State is a page of client state only — menus, tabs, a filter, a
 // tooltip: the browser keeps their states, and the page never connects.
 type State struct{}
+</script>
+
 <components.Shell title="State">
 	<h1>State</h1>
 	<components.Menu label="First" />
