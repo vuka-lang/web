@@ -1,3 +1,4 @@
+<script lang="go">
 package vukatest
 
 import "github.com/vuka-lang/ui/v2"
@@ -9,4 +10,6 @@ type Tally struct {
 }
 
 func (t *Tally) Inc() { t.n++ }
+</script>
+
 <b onClick={Inc}>{n}</b>

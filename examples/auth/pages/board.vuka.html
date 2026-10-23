@@ -1,3 +1,4 @@
+<script lang="go">
 package pages
 
 import (
@@ -51,6 +52,8 @@ func (b *Board) Clear(ctx context.Context) error {
 	b.notices.Clear()
 	return web.Broadcast(ctx, "notices", notices.Changed{})
 }
+</script>
+
 <section class="board">
 	<components.Nav me={me} />
 	<h1>Notices</h1>

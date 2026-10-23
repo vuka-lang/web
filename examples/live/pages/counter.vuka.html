@@ -1,3 +1,4 @@
+<script lang="go">
 package pages
 
 import (
@@ -19,6 +20,8 @@ func (c *Counter) mount(ctx context.Context) error { c.n = c.Start; return nil }
 
 func (c *Counter) Inc() { c.n++ }
 func (c *Counter) Dec() { c.n-- }
+</script>
+
 <div class="counter">
 	<button type="button" onClick={Dec}>−</button>
 	<output>{n}</output>

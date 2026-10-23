@@ -1,3 +1,4 @@
+<script lang="go">
 package books
 
 import (
@@ -12,5 +13,6 @@ import (
 type Layout struct {
 	Children ui.Node
 }
+</script>
 
 <components.Shell title={ui.PageTitle(ctx)} head={<style>.book h1 { font-family: Georgia, serif } .book .author { color: #555 }</style>}>{Children}</components.Shell>

@@ -1,3 +1,4 @@
+<script lang="go">
 package components
 
 import "github.com/vuka-lang/ui/v2"
@@ -7,6 +8,8 @@ import "github.com/vuka-lang/ui/v2"
 type Filter struct {
 	f ui.State[Filters]
 }
+</script>
+
 <section class="filter">
 	<button type="button" id="dogs" onClick={f.Kind = "dog"}>Dogs</button>
 	<button type="button" id="cats" onClick={f = Filters{Kind: "cat", Sort: "age"}}>Cats by age</button>

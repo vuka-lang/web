@@ -1,3 +1,4 @@
+<script lang="go">
 package book
 
 import (
@@ -19,6 +20,8 @@ func (p *Page) book() library.Book { return library.Get(p.ID) }
 
 // Done sends the reader back to the book's page of the shelf.
 func (p *Page) Done() { p.PushNavigate(library.ShelfURL((p.book().ID-1)/library.PerPage + 1)) }
+</script>
+
 <article class="book">
 	<h1>{book().Title}</h1>
 	<p class="author">by {book().Author}</p>

@@ -1,3 +1,4 @@
+<script lang="go">
 package pages
 
 import (
@@ -49,4 +50,6 @@ func (a *Applicants) find(q string) []registry.Applicant {
 	}
 	return out
 }
+</script>
+
 <Applicants q={Q} rows={Rows} client:load />

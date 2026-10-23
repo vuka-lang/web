@@ -1,3 +1,4 @@
+<script lang="go">
 package components
 
 import "github.com/vuka-lang/ui/v2"
@@ -6,4 +7,6 @@ import "github.com/vuka-lang/ui/v2"
 type Count struct {
 	Kind ui.State[string]
 }
+</script>
+
 <p id="count" hidden={Kind == ""}>only {Kind}s</p>
