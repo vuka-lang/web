@@ -216,7 +216,7 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 		rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(x))
 		page := ui.IslandPage(x.Interface(), ui.CallAt(r.URL.Path, a.signProps(rq.ctx, ip, r.URL.Path, props)))
 		if framed(layouts) {
-			a.page(rq, nestLayouts(layouts, loaded, page))
+			a.page(rq, a.nestLayouts(rq, layouts, loaded, page))
 			return
 		}
 		a.page(rq, layout(rq.ctx, page))

@@ -16,6 +16,7 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -287,7 +288,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 			return
 		}
 		if framed(layouts) {
-			page = nestLayouts(layouts, loaded, tag)
+			page = a.nestLayouts(rq, layouts, loaded, tag)
 		} else if islandLayout != nil {
 			rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(c))
 			page = islandLayout(rq.ctx, tag)
@@ -502,7 +503,11 @@ func (a *App) page(rq *request, n ui.Node) {
 	if token != "" && r.Method == http.MethodGet && a.adoptWindow > 0 {
 		// keep the mounted session for the page's join to adopt,
 		// so Mount runs once per view (livepark.go)
-		a.parked.park(token, &parkedPage{s: s, uri: r.URL.RequestURI(), who: a.liveWho(rq.ctx)}, a.adoptWindow)
+		window := a.adoptWindow
+		if prefetching(r) {
+			window = max(window, prefetchWindow) // the page may open any time the browser keeps it
+		}
+		a.parked.park(token, &parkedPage{s: s, uri: r.URL.RequestURI(), who: a.liveWho(rq.ctx)}, window)
 	} else if s != nil {
 		s.Close()
 	}
@@ -522,7 +527,27 @@ func (a *App) page(rq *request, n ui.Node) {
 	if w.Header().Get("Content-Type") == "" {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	}
+	if prefetching(r) && w.Header().Get("Cache-Control") == "" {
+		// the browser keeps a prefetched page as long as the runtime does
+		w.Header().Set("Cache-Control", "private, max-age="+strconv.Itoa(int(prefetchWindow/time.Second)))
+	}
 	writePage(w, html, head, script)
+}
+
+// prefetchWindow is how long the runtime keeps a page it prefetched for a
+// link, and so its session parked for the join to adopt.
+const prefetchWindow = 30 * time.Second
+
+// prefetching reports whether r is the browser fetching a page ahead of a
+// navigation (Sec-Purpose: prefetch), what the runtime asks for a link
+// hovered, focused or in view: the page renders as for a visit, its live
+// session parked until the page opens, or dropped.
+func prefetching(r *http.Request) bool {
+	p := r.Header.Get("Sec-Purpose")
+	if p == "" {
+		p = r.Header.Get("Purpose")
+	}
+	return strings.HasPrefix(p, "prefetch")
 }
 
 // pageLive reports whether a page's HTML is live: it holds stateful

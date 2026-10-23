@@ -36,8 +36,9 @@ type routeSpec struct {
 	html         bool        // answers with a page; set by compile
 	page         bool        // a page as a pages/ folder declares it (PageRoute, LayoutOf, GuardOf, Receiver)
 	layouts      []layoutRef
-	recvCtor     reflect.Value // the receiver's constructor (Receiver)
-	mwOf         []useOf       // UseOf's middleware, resolved when the app is built
+	reloads      []reflect.Type // ReloadLayout's layouts
+	recvCtor     reflect.Value  // the receiver's constructor (Receiver)
+	mwOf         []useOf        // UseOf's middleware, resolved when the app is built
 }
 
 type request struct {
@@ -211,7 +212,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		}
 		if n, ok := pageResult(val); ok && err == nil && len(layouts) > 0 && wholePage(r) {
 			rq.ctx = titled(rq.ctx, val)
-			wrapped := nestLayouts(layouts, loaded, n)
+			wrapped := a.nestLayouts(rq, layouts, loaded, n)
 			val = reflect.ValueOf(&wrapped).Elem()
 		}
 		a.respond(rq, val, err, v, htmlPage)

@@ -262,6 +262,10 @@ type conn struct {
 
 	loads []context.CancelFunc // end the deferred loads of the page joined or navigated to
 
+	layouts []heldLayout // the layouts the page renders in, loaded (loadLayouts)
+	navs    int          // navigations so far
+	slot    int          // the navigation the page below the layouts was rendered for (slotKey)
+
 	mu     sync.Mutex
 	inbox  []delivery
 	wake   chan struct{}
@@ -294,6 +298,10 @@ type join struct {
 	ctx     context.Context
 	updates map[ui.Stateful]any // a Live page's URLParams for its Update, on a patch
 	root    reflect.Type        // the route's root layout (RouteInfo.RootLayout), nil when it has none
+	held    []heldLayout        // on a navigation, the layouts of the page it leaves
+	layouts []heldLayout        // the layouts the route loaded, for the next navigation
+	slot    *int                // the connection's navigation the page is rendered for, keying the page below its layouts
+	nav     int                 // on a navigation, the connection's count of them, this one's
 }
 
 func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
@@ -618,6 +626,7 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 	}
 	c.setPage(j.ctx)
 	c.root = j.root
+	c.layouts = j.layouts
 	c.doing = "join"
 	return c.s.Join(ref), 0
 }
@@ -719,6 +728,7 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	if !strings.HasPrefix(uri, "/") || strings.HasPrefix(uri, "//") || strings.HasPrefix(uri, "/\\") {
 		return redirect(), false
 	}
+	c.navs++
 	j, rec, err := c.run(ctx, uri, "navigate")
 	if err != nil {
 		return redirect(), false
@@ -732,13 +742,21 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	}
 	patch := m.Patch && j.updates != nil
 	c.doing = "navigate " + uri
-	reply, ok := c.s.Navigate(m.Ref, uri, live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates}, patch)
+	if !patch {
+		c.slot = c.navs // the page below the layouts mounts afresh
+	}
+	// the components of the layouts kept stay mounted when the document's
+	// is one of them
+	keep := len(j.layouts) > 0 && j.layouts[0].gen < c.navs
+	reply, ok := c.s.Navigate(m.Ref, uri, live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates, Keep: keep}, patch)
 	if !ok {
+		c.layouts = nil
 		return reply, patch
 	}
 	c.uri = uri
+	c.layouts = j.layouts
 	c.setPage(j.ctx)
-	return withToken{reply, c.app.signToken(uri)}, patch
+	return withToken{reply, c.app.signToken(uri), ui.PageTitle(j.ctx)}, patch
 }
 
 // run runs the route of uri on behalf of the connection: a GET carrying the
@@ -750,7 +768,7 @@ func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, erro
 	if err != nil {
 		return nil, nil, err
 	}
-	j := &join{why: why}
+	j := &join{why: why, held: c.layouts, slot: &c.slot, nav: c.navs}
 	defer j.done.Store(true)
 	req := c.r.Clone(context.WithValue(ctx, joinKey{}, j))
 	req.Method, req.URL, req.RequestURI = http.MethodGet, u, uri
@@ -772,6 +790,7 @@ var upgradeHeaders = []string{"Upgrade", "Connection", "Sec-Websocket-Key", "Sec
 type withToken struct {
 	msg   any
 	token string
+	title string // the page's title (ui.PageTitle), for the document
 }
 
 func (w withToken) MarshalJSON() ([]byte, error) {
@@ -786,7 +805,12 @@ func (w withToken) MarshalJSON() ([]byte, error) {
 		return b, nil
 	}
 	t, _ := json.Marshal(w.token)
-	return append(append(append(b[:len(b)-1:len(b)-1], `,"token":`...), t...), '}'), nil
+	b = append(append(b[:len(b)-1:len(b)-1], `,"token":`...), t...)
+	if w.title != "" {
+		t, _ = json.Marshal(w.title)
+		b = append(append(b, `,"title":`...), t...)
+	}
+	return append(b, '}'), nil
 }
 
 // deferredSession is a session whose pages backed by their islands have
