@@ -32,7 +32,12 @@ type Rest string
 // promoted ones from embedded structs included, bind as a Live page's do
 // (a provided type injected, text from the path segment, else the query
 // parameter, of its name); a path parameter that doesn't parse or fails its
-// validate: tag answers 404. A page whose pointer has Title() string titles
+// validate: tag answers 404. Its unexported fields of provided types are
+// its dependencies, injected after the constructor runs, as a page-backed
+// island's are, so a field users *users.Service needs no NewT, and its other
+// unexported fields, its tracked state among them, are left as the
+// constructor made them; a dependency field the URL would bind too (named
+// as a path parameter, tagged url:) is E0419 at start-up. A page whose pointer has Title() string titles
 // the document: ui.PageTitle reads it in the layouts. A stateless page's
 // Title is read after its mount hook; a Live page's once its fields are
 // bound, before its mount hook, which its session runs as it renders. On
@@ -56,8 +61,9 @@ func PageRoute() RouteOption { return routeOpt(func(s *routeSpec) { s.page = tru
 //
 //	func (l *Layout) Load(ctx context.Context, store *Store) error { … }
 //
-// Per request each layout is a zero T, its path parameters bound, then its
-// Load run, if it has one: Load(ctx, deps…) returning nothing or an error,
+// Per request each layout is a zero T, its path parameters bound and its
+// unexported fields of provided types injected (as PageRoute's page's),
+// then its Load run, if it has one: Load(ctx, deps…) returning nothing or an error,
 // its dependencies provided types; its error answers the request. Layouts
 // and guards (GuardOf) load in the order their options are given, before a
 // stateless page's mount hook. A Live
@@ -152,8 +158,9 @@ type layoutRef struct {
 }
 
 // Receiver builds the receiver of a method handler for each request with
-// ctor, a page's constructor, binding the route's path parameters into it
-// as PageRoute does a page's (404 when one doesn't parse):
+// ctor, a page's constructor, binding the route's path parameters and
+// injecting its dependency fields as PageRoute does a page's (404 when a
+// parameter doesn't parse):
 //
 //	web.Routes.Post("/employers/{employer}/edit", (*edit.Edit).Post, web.Receiver(edit.NewEdit))
 //
@@ -315,6 +322,11 @@ func (a *App) compileLayouts(s *routeSpec, what string) ([]*layoutSpec, error) {
 		if err := a.checkPathProps(t, l.props, pathNames); err != nil {
 			return nil, failure("E0328", what, s.where, err)
 		}
+		deps, err := a.depFields(t, s.path, s.where)
+		if err != nil {
+			return nil, failure("E0419", what, s.where, err)
+		}
+		l.props = append(l.props, deps...)
 		m, ok := reflect.PointerTo(t).MethodByName("Load")
 		if !ok && ref.guard {
 			return nil, fail("%s has no Load method", t).WithHelp("declare func (g *%s) Load(ctx context.Context, deps…) error", t.Name())
@@ -507,6 +519,19 @@ func (a *App) bindPage(v reflect.Value, props []prop, pathNames []string, r *htt
 	return nil
 }
 
+// pageProps are the bindings of a folder page's fields (PageRoute,
+// Receiver): its exported fields as a Live page's (liveProps), and its
+// unexported fields of provided types, its dependencies, injected as a
+// page-backed island's are (depFields).
+func (a *App) pageProps(t reflect.Type, path, where string) ([]prop, error) {
+	props, err := a.liveProps(t, where)
+	if err != nil {
+		return nil, err
+	}
+	deps, err := a.depFields(t, path, where)
+	return append(props, deps...), err
+}
+
 // checkPathProps gives the props of t bound from the path their validate:
 // tags' checks.
 func (a *App) checkPathProps(t reflect.Type, props []prop, pathNames []string) error {
@@ -568,7 +593,7 @@ func (a *App) compileNodePage(s *routeSpec, t reflect.Type) (http.Handler, error
 		return nil, err
 	}
 	pathNames := pathParams(s.path)
-	props, err := a.liveProps(t, s.where)
+	props, err := a.pageProps(t, s.path, s.where)
 	if err == nil {
 		err = a.checkPathProps(t, props, pathNames)
 	}
@@ -633,7 +658,7 @@ func (a *App) pageReceiver(s *routeSpec, what string) (binder, error) {
 		return nil, err
 	}
 	pathNames := pathParams(s.path)
-	props, err := a.liveProps(t, s.where)
+	props, err := a.pageProps(t, s.path, s.where)
 	if err == nil {
 		err = a.checkPathProps(t, props, pathNames)
 	}
