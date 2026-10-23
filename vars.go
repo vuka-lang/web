@@ -206,7 +206,7 @@ func (a *App) compileVars() []error {
 			continue
 		}
 		if prev, dup := set.byType[p.typ]; dup {
-			errs = append(errs, diag.New("E0408", "context processors %s and %s both return %s", prev.name, p.name, p.typ).
+			errs = append(errs, diag.New("E0421", "context processors %s and %s both return %s", prev.name, p.name, p.typ).
 				At(whereSpan(p.where)).WithRelated(withLabel(whereSpan(prev.where), "listed here first")).
 				WithHelp("list each processor once; give each its own result type"))
 			continue
@@ -214,7 +214,7 @@ func (a *App) compileVars() []error {
 		clash := false
 		for _, f := range p.fields {
 			if prev, dup := set.byName[f.name]; dup {
-				errs = append(errs, diag.New("E0408", "the template variable %q is given by %s and by %s", f.name, prev.proc.name, p.name).
+				errs = append(errs, diag.New("E0421", "the template variable %q is given by %s and by %s", f.name, prev.proc.name, p.name).
 					At(whereSpan(p.where)).WithRelated(withLabel(whereSpan(prev.proc.where), "given here first")).
 					WithHelp("rename one of the fields: a variable comes from one processor"))
 				clash = true
@@ -246,7 +246,7 @@ func (a *App) compileProc(w Processor, i int) (*varProc, error) {
 	v := reflect.ValueOf(w.fn)
 	what := fmt.Sprintf("ContextProcessors' %s processor", ordinal(i+1))
 	if !v.IsValid() || v.Kind() != reflect.Func {
-		return nil, diag.New("E0410", "%s, %T, isn't a function", what, w.fn).
+		return nil, diag.New("E0425", "%s, %T, isn't a function", what, w.fn).
 			WithHelp("list functions func(ctx context.Context, deps…) (S, error), S a struct")
 	}
 	t := v.Type()
@@ -266,27 +266,31 @@ func (a *App) compileProc(w Processor, i int) (*varProc, error) {
 		return d
 	}
 	shape := "a context processor is func(ctx context.Context, deps…) (S, error), S a struct whose exported fields are the variables"
+	if strings.HasPrefix(p.name, "main.") {
+		return nil, at(diag.New("E0425", "the context processor %s is declared in package main", p.name).
+			WithHelp("declare it in a package of its own (users.Context), which the pages reading its variables don't import"))
+	}
 	if t.IsVariadic() || t.NumIn() == 0 || t.In(0) != contextType {
-		return nil, at(diag.New("E0410", "the context processor %s doesn't take a context.Context first", p.name).WithHelp("%s", shape))
+		return nil, at(diag.New("E0425", "the context processor %s doesn't take a context.Context first", p.name).WithHelp("%s", shape))
 	}
 	if t.NumOut() != 2 || t.Out(1) != errorType {
-		return nil, at(diag.New("E0410", "the context processor %s doesn't return (S, error)", p.name).WithHelp("%s", shape))
+		return nil, at(diag.New("E0425", "the context processor %s doesn't return (S, error)", p.name).WithHelp("%s", shape))
 	}
 	p.typ = t.Out(0)
 	if p.typ.Kind() != reflect.Struct {
-		return nil, at(diag.New("E0410", "the context processor %s returns %s, not a struct", p.name, p.typ).WithHelp("%s", shape))
+		return nil, at(diag.New("E0425", "the context processor %s returns %s, not a struct", p.name, p.typ).WithHelp("%s", shape))
 	}
 	switch {
 	case w.gated && len(p.gates) == 0:
-		return nil, at(diag.New("E0410", "web.Auth(%s) has no gate", p.name).WithHelp("give it one: web.Auth(%s, auth.Required)", p.name))
+		return nil, at(diag.New("E0425", "web.Auth(%s) has no gate", p.name).WithHelp("give it one: web.Auth(%s, auth.Required)", p.name))
 	case w.gated && len(a.varGuards) == 0:
 		return nil, at(diag.New("E0404", "web.Auth(%s): the app has nothing guarding variables", p.name).WithHelp("add the module whose gates these are (auth.Module)"))
 	case w.personal && !w.browser:
-		return nil, at(diag.New("E0410", "web.Personal(%s) outside web.Browser", p.name).WithHelp("web.Personal lets web.Browser send a visitor's own values: web.Browser(web.Personal(%s)); without web.Browser, drop it", p.name))
+		return nil, at(diag.New("E0425", "web.Personal(%s) outside web.Browser", p.name).WithHelp("web.Personal lets web.Browser send a visitor's own values: web.Browser(web.Personal(%s)); without web.Browser, drop it", p.name))
 	}
 	if w.browser && !w.personal {
 		if pkg := a.personalIn(v, t); pkg != "" {
-			return nil, at(diag.New("E0410", "web.Browser(%s) would send what %s knows of the visitor to the browser", p.name, pkg).
+			return nil, at(diag.New("E0426", "web.Browser(%s) would send what %s knows of the visitor to the browser", p.name, pkg).
 				WithHelp("send a visitor's own values only when meant to: web.Browser(web.Personal(%s)); or keep the processor off the browser", p.name))
 		}
 	}
@@ -311,7 +315,7 @@ func (a *App) compileProc(w Processor, i int) (*varProc, error) {
 		p.fields = append(p.fields, &varField{name: lowerCamel(sf.Name), index: k, typ: sf.Type, proc: p})
 	}
 	if len(p.fields) == 0 {
-		return nil, at(diag.New("E0410", "the context processor %s's %s has no exported field: it gives no variable", p.name, p.typ).WithHelp("%s", shape))
+		return nil, at(diag.New("E0425", "the context processor %s's %s has no exported field: it gives no variable", p.name, p.typ).WithHelp("%s", shape))
 	}
 	return p, nil
 }

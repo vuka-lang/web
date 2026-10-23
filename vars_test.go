@@ -196,15 +196,15 @@ func TestProcessorBootChecks(t *testing.T) {
 		code  diag.Code
 		want  string
 	}{
-		{"not a function", []any{3}, "E0410", "ContextProcessors' 1st processor, int, isn't a function"},
-		{"no context", []any{noCtxProc}, "E0410", "web.noCtxProc doesn't take a context.Context first"},
-		{"no error", []any{noErrProc}, "E0410", "web.noErrProc doesn't return (S, error)"},
-		{"not a struct", []any{notStructProc}, "E0410", "web.notStructProc returns string, not a struct"},
-		{"clash", []any{siteContext, clashProc}, "E0408", `the template variable "siteName" is given by web.siteContext and by web.clashProc`},
-		{"twice", []any{siteContext, siteContext}, "E0408", "context processors web.siteContext and web.siteContext both return web.siteVars"},
+		{"not a function", []any{3}, "E0425", "ContextProcessors' 1st processor, int, isn't a function"},
+		{"no context", []any{noCtxProc}, "E0425", "web.noCtxProc doesn't take a context.Context first"},
+		{"no error", []any{noErrProc}, "E0425", "web.noErrProc doesn't return (S, error)"},
+		{"not a struct", []any{notStructProc}, "E0425", "web.notStructProc returns string, not a struct"},
+		{"clash", []any{siteContext, clashProc}, "E0421", `the template variable "siteName" is given by web.siteContext and by web.clashProc`},
+		{"twice", []any{siteContext, siteContext}, "E0421", "context processors web.siteContext and web.siteContext both return web.siteVars"},
 		{"missing dep", []any{missingDep}, "E0407", "the context processor web.missingDep's 2nd parameter, *web.greeter, is provided by nothing"},
-		{"personal alone", []any{Personal(siteContext)}, "E0410", "web.Personal(web.siteContext) outside web.Browser"},
-		{"auth without gates", []any{Auth(siteContext)}, "E0410", "web.Auth(web.siteContext) has no gate"},
+		{"personal alone", []any{Personal(siteContext)}, "E0425", "web.Personal(web.siteContext) outside web.Browser"},
+		{"auth without gates", []any{Auth(siteContext)}, "E0425", "web.Auth(web.siteContext) has no gate"},
 		{"auth without guard", []any{Auth(siteContext, "gate")}, "E0404", "web.Auth(web.siteContext): the app has nothing guarding variables"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
