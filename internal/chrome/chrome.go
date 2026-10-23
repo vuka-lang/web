@@ -400,6 +400,19 @@ func (p *Page) ClickElement(expr string) {
 	}
 }
 
+// Hover moves the pointer onto the middle of the element sel names.
+func (p *Page) Hover(sel string) {
+	p.b.t.Helper()
+	p.Wait(fmt.Sprintf(`document.querySelector(%q)`, sel))
+	p.front()
+	var at struct{ X, Y float64 }
+	if err := p.Eval(fmt.Sprintf(`(() => { const el = document.querySelector(%q); el.scrollIntoView({block: "center"});
+		const r = el.getBoundingClientRect(); return {X: r.left + r.width / 2, Y: r.top + r.height / 2}; })()`, sel), &at); err != nil {
+		p.b.t.Fatal(err)
+	}
+	p.must("Input.dispatchMouseEvent", map[string]any{"type": "mouseMoved", "x": at.X, "y": at.Y}, nil)
+}
+
 // Screenshot saves a PNG of the page's viewport at path.
 func (p *Page) Screenshot(path string) {
 	p.b.t.Helper()

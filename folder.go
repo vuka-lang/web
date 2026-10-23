@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -126,6 +127,22 @@ func rootID(t reflect.Type) string {
 	h := fnv.New64a()
 	io.WriteString(h, t.PkgPath()+"."+t.Name())
 	return strconv.FormatUint(h.Sum64(), 36)
+}
+
+// ReloadLayout has the layout T of a route's LayoutOf load again on every
+// in-app navigation, what vuka's folder routes register for a layout whose
+// Load or markup reads the request — web.Request, its URL or query. Other
+// layouts persist: navigating over a page's live connection to another page
+// under the same layouts, their path parameters the same, keeps them as
+// they are — their Load doesn't run again, and the elements, scroll, client
+// state and live components they render stay — and renders the page below
+// them. A layout reloading persists all the same in the page, its Load
+// running again and the page getting only what changed of it. A layout
+// whose Load takes the *http.Request reloads without the option. Guards
+// (GuardOf) run on every navigation.
+func ReloadLayout[T any]() RouteOption {
+	t := typeOf[T]()
+	return routeOpt(func(s *routeSpec) { s.reloads = append(s.reloads, t) })
 }
 
 // layoutRef is a layout or guard a route's options name.
@@ -249,11 +266,18 @@ type layoutSpec struct {
 	props    []prop
 	load     reflect.Value // (*T).Load, a func taking the receiver first
 	loadIn   []binder      // its parameters after the context's
+	reload   bool          // it loads on every navigation (ReloadLayout)
 }
 
 func (a *App) compileLayouts(s *routeSpec, what string) ([]*layoutSpec, error) {
 	var out []*layoutSpec
 	pathNames := pathParams(s.path)
+	for _, t := range s.reloads {
+		if !slices.ContainsFunc(s.layouts, func(l layoutRef) bool { return l.typ == t && !l.guard }) {
+			return nil, failf("E0321", what, s.where, "web.ReloadLayout[%s]: the route has no web.LayoutOf[%[1]s]", t).
+				WithHelp("give the route the layout, or drop the option")
+		}
+	}
 	for _, ref := range s.layouts {
 		t := ref.typ
 		opt := "web.LayoutOf"
@@ -263,7 +287,7 @@ func (a *App) compileLayouts(s *routeSpec, what string) ([]*layoutSpec, error) {
 		fail := func(format string, args ...any) *diag.Diagnostic {
 			return failf("E0321", what, s.where, opt+"[%s]: "+format, append([]any{t}, args...)...)
 		}
-		l := &layoutSpec{typ: t, guard: ref.guard}
+		l := &layoutSpec{typ: t, guard: ref.guard, reload: slices.Contains(s.reloads, t)}
 		switch {
 		case ref.guard && t.Kind() != reflect.Struct:
 			return nil, fail("a guard is a struct").WithHelp("declare type Guard struct { … } with a Load(ctx context.Context, deps…) error method")
@@ -301,6 +325,9 @@ func (a *App) compileLayouts(s *routeSpec, what string) ([]*layoutSpec, error) {
 				return nil, fail("its Load is %s", m.Func.Type()).WithHelp("declare Load(ctx context.Context, deps…) error")
 			}
 			for i := 2; i < mt.NumIn(); i++ {
+				if mt.In(i) == requestType {
+					l.reload = true
+				}
 				b, err := a.requestParam(mt.In(i), s.where)
 				if err != nil {
 					return nil, failure("E0405", fmt.Sprintf("%s: %s.Load's %s parameter, %s", what, t, ordinal(i), mt.In(i)), loadWhere(m.Func, s.where), err)
@@ -325,14 +352,50 @@ func loadWhere(fn reflect.Value, where string) string {
 	return where
 }
 
+// heldLayout is a layout a page renders in, loaded: what a navigation of its
+// live connection may keep (ReloadLayout).
+type heldLayout struct {
+	typ reflect.Type
+	x   reflect.Value // *T, bound and loaded
+	gen int           // the connection's navigation it was first loaded on, keying its components
+}
+
 // loadLayouts builds the layouts and guards for the request in their
-// options' order: each bound and loaded.
+// options' order: each bound and loaded. On a navigation of a live
+// connection, the layouts the page it leaves renders in, from the
+// outermost down to the first that differs — another type, or other path
+// parameters — are kept as they were loaded, their Load not run again,
+// unless they reload (ReloadLayout); guards always run. A join or a
+// navigation records the layouts loaded for the next.
 func (a *App) loadLayouts(rq *request, layouts []*layoutSpec, pathNames []string) ([]reflect.Value, error) {
 	xs := make([]reflect.Value, len(layouts))
+	j, _ := rq.r.Context().Value(joinKey{}).(*join)
+	var held []heldLayout
+	gen := 0
+	if j != nil && j.why == "navigate" {
+		held, gen = j.held, j.nav
+	}
+	k := 0 // the layout of held next in line, -1 past the first that differs
+	var keep []heldLayout
 	for i, l := range layouts {
 		x := reflect.New(l.typ)
 		if err := a.bindPage(x.Elem(), l.props, pathNames, rq.r); err != nil {
 			return nil, err
+		}
+		if !l.guard {
+			if k >= 0 && k < len(held) && held[k].typ == l.typ && sameProps(held[k].x.Elem(), x.Elem(), l.props) {
+				k++
+				if !l.reload {
+					x.Elem().Set(held[k-1].x.Elem()) // its Load's work, kept
+					xs[i] = x
+					keep = append(keep, heldLayout{l.typ, x, held[k-1].gen})
+					continue
+				}
+				keep = append(keep, heldLayout{l.typ, x, held[k-1].gen})
+			} else {
+				k = -1
+				keep = append(keep, heldLayout{l.typ, x, gen})
+			}
 		}
 		if l.load.IsValid() {
 			in := []reflect.Value{x, reflect.ValueOf(&rq.ctx).Elem()}
@@ -352,21 +415,70 @@ func (a *App) loadLayouts(rq *request, layouts []*layoutSpec, pathNames []string
 		}
 		xs[i] = x
 	}
+	if j != nil {
+		j.layouts = keep
+	}
 	return xs, nil
 }
 
-// nestLayouts is page inside the loaded layouts xs.
-func nestLayouts(layouts []*layoutSpec, xs []reflect.Value, page ui.Node) ui.Node {
-	n := page
+// sameProps reports whether a and b, two of a layout, bind props alike.
+func sameProps(a, b reflect.Value, props []prop) bool {
+	for _, p := range props {
+		if !reflect.DeepEqual(field(a, p.index).Interface(), field(b, p.index).Interface()) {
+			return false
+		}
+	}
+	return true
+}
+
+// slotKey keys the page below a route's layouts (ui.Keyed): the live
+// connection's navigation it was rendered for, read as the page renders —
+// a patch keeps it — so the components of the layouts kept keep their
+// instances across a navigation and those of the page mount afresh. Each
+// layout is keyed alike by the navigation it was loaded on. A page's HTTP
+// render and its join count 0 alike, so the join adopts the render's
+// instances.
+type slotKey struct{ n *int }
+
+func (k slotKey) String() string {
+	if k.n == nil {
+		return "0"
+	}
+	return strconv.Itoa(*k.n)
+}
+
+// nestLayouts is page inside the loaded layouts xs, keyed for the
+// request's live connection (slotKey).
+func (a *App) nestLayouts(rq *request, layouts []*layoutSpec, xs []reflect.Value, page ui.Node) ui.Node {
+	var key slotKey
+	j, _ := rq.r.Context().Value(joinKey{}).(*join)
+	if j != nil {
+		key.n = j.slot
+	}
+	n := ui.Keyed(key, page)
+	k := 0 // the layouts outside layouts[i]
+	for _, l := range layouts {
+		if !l.guard {
+			k++
+		}
+	}
 	for i := len(layouts) - 1; i >= 0; i-- {
 		if layouts[i].guard {
 			continue
 		}
+		k--
 		field(xs[i].Elem(), layouts[i].children).Set(reflect.ValueOf(&n).Elem())
 		if layouts[i].ptr {
 			n = xs[i].Interface().(ui.Node)
 		} else {
 			n = xs[i].Elem().Interface().(ui.Node)
+		}
+		if k > 0 { // the outermost, the document, isn't: Keep keeps it, or nothing
+			gen := 0
+			if j != nil && k < len(j.layouts) {
+				gen = j.layouts[k].gen
+			}
+			n = ui.Keyed(gen, n)
 		}
 	}
 	return n
@@ -488,7 +600,7 @@ func (a *App) compileNodePage(s *routeSpec, t reflect.Type) (http.Handler, error
 		var page ui.Node
 		if err == nil {
 			rq.ctx = titled(rq.ctx, x)
-			page = nestLayouts(layouts, loaded, x.Interface().(ui.Node))
+			page = a.nestLayouts(rq, layouts, loaded, x.Interface().(ui.Node))
 		}
 		end()
 		if err != nil {

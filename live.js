@@ -90,6 +90,7 @@
           trees = null;
           page(m.html);
         }
+        markActive();
         emit("vk:patched", { ids: ["c0"], join: true });
         pushed(m.js);
         waiting.splice(0).forEach((f) => f());
@@ -113,6 +114,7 @@
         if (b && b.form && !m.error && b.form.isConnected) b.form.reset();
         if (m.error) fail(m.error, m.ref);
         if (n) arrived(n, m);
+        else markActive();
         emit("vk:patched", { ids: ups.map((u) => u.id) });
         if (!m.error) pushed(m.js);
         break;
@@ -1424,6 +1426,7 @@
     clearTimeout(n.timer);
     document.documentElement.removeAttribute("data-vk-navigating");
     if (m.token) token = m.token;
+    if (typeof m.title === "string" && m.title) document.title = m.title;
     const u = new URL(n.href);
     here = u.pathname + u.search;
     if (!n.patch) {
@@ -1435,10 +1438,15 @@
     if (n.pop) history.replaceState({ ...history.state, vk: pageID }, "");
     else if (n.replace) history.replaceState({ vk: pageID }, "", u.href);
     else history.pushState({ vk: pageID }, "", u.href);
+    markActive();
     const t = u.hash && document.getElementById(decodeURIComponent(u.hash.slice(1)));
     if (n.pop && n.pop.y != null) scrollTo(n.pop.x || 0, n.pop.y);
     else if (t) t.scrollIntoView();
-    else if (!n.patch) scrollTo(0, 0);
+    else if (!n.patch) {
+      scrollTo(0, 0);
+      const main = document.querySelector("main"); // the page's area, when it scrolls in a layout
+      if (main && main.scrollTop) main.scrollTop = 0;
+    }
     if (!n.patch) {
       const f = document.querySelector("[autofocus]") || document.querySelector("main") || document.body.querySelector("[data-vk-id]") || document.body;
       if (!f.matches(focusable) && !f.hasAttribute("tabindex")) touch(f, "tabindex", () => f.setAttribute("tabindex", "-1"));
@@ -1506,11 +1514,94 @@
       return () => unsub(b);
     },
   };
+  // Active links: a link with data-vk-active ("exact" or "prefix", ui.Link's
+  // Active) is the current page's while the address's path is its href's
+  // (or, prefix, below it): aria-current="page", and data-vk-active-class's
+  // class. Set as the page loads, after every navigation and render, so a
+  // layout's menu follows the page without rendering again.
+  function markActive() {
+    if (!document.querySelectorAll) return;
+    const path = location.pathname;
+    document.querySelectorAll("a[data-vk-active]").forEach((a) => {
+      let u;
+      try { u = new URL(a.getAttribute("href") || "", location.href); } catch (_) { return; }
+      const at = u.pathname, base = at.endsWith("/") ? at : at + "/";
+      const on = u.origin === location.origin && (path === at || a.getAttribute("data-vk-active") === "prefix" && path.startsWith(base));
+      if (on && a.getAttribute("aria-current") !== "page") a.setAttribute("aria-current", "page");
+      else if (!on && a.getAttribute("aria-current") === "page") a.removeAttribute("aria-current");
+      const c = a.getAttribute("data-vk-active-class");
+      if (c) c.split(/\s+/).filter(Boolean).forEach((k) => a.classList.toggle(k, on));
+    });
+  }
+
+  // Prefetch: a link the browser will load as a document — a ui.Link
+  // (data-vk-link) on a page without a live connection, or one marked
+  // data-vk-prefetch — is fetched ahead, on hover (after a moment), focus
+  // or touch, or once in view with data-vk-prefetch="viewport", so it
+  // opens at once. Only same-origin http(s) GETs of another page, never a
+  // download, a link with a target, or one marked data-vk-prefetch="off";
+  // none when the visitor asks to save data. The browser keeps the
+  // response for the navigation (speculation rules, else
+  // <link rel=prefetch>); after 30s it is dropped. The fetch is a page's
+  // HTTP render: a live page's session starts when the page is opened. A
+  // link moving a live page over its connection isn't fetched: the
+  // server renders only what changes below the layouts kept.
+  const prefetched = new Map(); // href → when
+  const speculation = typeof HTMLScriptElement !== "undefined" && HTMLScriptElement.supports && HTMLScriptElement.supports("speculationrules");
+  function prefetchable(a) {
+    if (!a || !a.matches("a[href]") || a.hasAttribute("download") || /^(?!_self$)./.test(a.getAttribute("target") || "")) return null;
+    const mode = a.getAttribute("data-vk-prefetch");
+    if (mode === "off" || mode === "false" || mode === null && !a.hasAttribute("data-vk-link")) return null;
+    if (mode === null && live && joined) return null; // it moves over the connection
+    if (navigator.connection && navigator.connection.saveData) return null;
+    const u = httpURL(a.getAttribute("href"));
+    if (!u || u.origin !== location.origin || u.pathname + u.search === location.pathname + location.search) return null;
+    u.hash = "";
+    return u.href;
+  }
+  function prefetch(a) {
+    const href = prefetchable(a);
+    if (!href || Date.now() - (prefetched.get(href) || -Infinity) < 30000) return;
+    prefetched.set(href, Date.now());
+    let el;
+    if (speculation) {
+      el = document.createElement("script");
+      el.type = "speculationrules";
+      el.textContent = JSON.stringify({ prefetch: [{ source: "list", urls: [href] }] });
+    } else {
+      el = document.createElement("link");
+      el.rel = "prefetch";
+      el.href = href;
+    }
+    document.head.appendChild(el);
+    setTimeout(() => { el.remove(); prefetched.delete(href); }, 30000);
+  }
+  let hovering = null;
+  const linkOf = (e) => { const t = e.target instanceof Element ? e.target : null; return t && t.closest("a[href]"); };
+  document.addEventListener("mouseover", (e) => {
+    const a = linkOf(e);
+    if (!a || hovering && hovering.a === a) return;
+    if (hovering) clearTimeout(hovering.timer);
+    hovering = { a, timer: setTimeout(() => prefetch(a), 80) };
+  }, { passive: true });
+  document.addEventListener("mouseout", (e) => {
+    if (hovering && linkOf(e) === hovering.a && !hovering.a.contains(e.relatedTarget)) { clearTimeout(hovering.timer); hovering = null; }
+  }, { passive: true });
+  document.addEventListener("focusin", (e) => prefetch(linkOf(e)));
+  document.addEventListener("touchstart", (e) => prefetch(linkOf(e)), { passive: true });
+  const inView = typeof IntersectionObserver === "function" && new IntersectionObserver((es) => es.forEach((e) => {
+    if (e.isIntersecting) { inView.unobserve(e.target); prefetch(e.target); }
+  }));
+  const watchViewport = () => { if (inView && document.querySelectorAll) document.querySelectorAll('a[data-vk-prefetch="viewport"]').forEach((a) => inView.observe(a)); };
+  document.addEventListener("vk:patched", watchViewport);
+
   window.vuka = { connect, tree, register, push, emit: emitIsland, states, navigate, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   if (bodyWatch) bodyWatch.observe(document.body, { childList: true });
   const page0 = document.documentElement.outerHTML;
   listenIn(page0);
   bindIn(document.body, page0);
+  markActive();
+  watchViewport();
   // A link moves over the connection; data-vk-replace (VukaLink's replace)
   // also takes the place of the current history entry when it loads.
   document.addEventListener("click", (e) => {
@@ -1526,6 +1617,7 @@
   if (!live) return;
   history.replaceState({ ...history.state, vk: pageID }, "");
   window.addEventListener("popstate", (e) => {
+    markActive();
     const st = e.state || {};
     if (location.pathname + location.search === here && (!st.vk || st.vk === pageID)) return; // a #hash
     move(location.href, st.vk === pageID, st);
