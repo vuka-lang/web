@@ -42,15 +42,17 @@ type routeSpec struct {
 }
 
 type request struct {
-	w   http.ResponseWriter
-	r   *http.Request
-	ctx context.Context
-	app *App
+	w     http.ResponseWriter
+	r     *http.Request
+	ctx   context.Context
+	app   *App
+	route *routeSpec // the route serving it
 }
 
-func (a *App) newRequest(w http.ResponseWriter, r *http.Request) *request {
-	rq := &request{w: w, r: r, app: a}
+func (a *App) newRequest(w http.ResponseWriter, r *http.Request, s *routeSpec) *request {
+	rq := &request{w: w, r: r, app: a, route: s}
 	rq.ctx = ui.WithInjector(context.WithValue(r.Context(), ctxKey{}, rq), injector{a})
+	a.withVars(rq)
 	return rq
 }
 
@@ -58,11 +60,15 @@ type ctxKey struct{}
 
 // Request is the request being served, from a context.Context a handler
 // received: call decorators reach it through c.Context().
+//
+// Called with a context processor's context, it records the URL as an
+// input of the processor's result (RecordInput).
 func Request(ctx context.Context) *http.Request {
 	rq, _ := ctx.Value(ctxKey{}).(*request)
 	if rq == nil {
 		return nil
 	}
+	recordRequest(ctx)
 	return rq.r
 }
 
@@ -177,7 +183,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		if limit > 0 && r.Body != nil && r.Body != http.NoBody {
 			r.Body = http.MaxBytesReader(tw, r.Body, limit)
 		}
-		rq := a.newRequest(tw, r)
+		rq := a.newRequest(tw, r, s)
 		if a.tb != nil {
 			noteRoute(rq.ctx, route, s.where)
 		}

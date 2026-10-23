@@ -47,19 +47,23 @@ func Check(ctx context.Context, perm string, obj any) error {
 	if st == nil || st.id == nil {
 		return web.Unauthorized
 	}
+	id := st.current(ctx)
+	if id == nil {
+		return web.Unauthorized
+	}
 	if obj != nil {
 		if st.auth == nil {
 			if policyTypes.covers(reflect.TypeOf(obj)) {
 				return web.Forbidden
 			}
 		} else if p, v, ok := st.auth.policyOf(obj); ok {
-			if p.rule(ctx, st.id, perm, v) {
+			if p.rule(ctx, id, perm, v) {
 				return nil
 			}
 			return web.Forbidden
 		}
 	}
-	if st.id.Can(perm) {
+	if id.Can(perm) {
 		return nil
 	}
 	return web.Forbidden

@@ -234,6 +234,10 @@ type Config struct {
 	// and LiveRecheck always load afresh. The cache is the process's own:
 	// another replica keeps its copy until it expires.
 	UserCache time.Duration
+
+	// ImpersonatePerm is the perm Impersonate needs: "auth.impersonate"
+	// by default.
+	ImpersonatePerm string
 }
 
 // Auth is an app's authentication: Module provides it, for code without a
@@ -253,6 +257,7 @@ type Auth struct {
 	lastKind atomic.Value // the encoding kind of the last login found
 	problems []error      // found while wrapping routes, reported by check
 	cache    *userCache   // nil unless Config.UserCache
+	versions versions     // the users' permission versions
 }
 
 // Module installs auth in an app: it reads each request's credentials,
@@ -309,6 +314,8 @@ func Module(cfg Config) web.Option {
 		web.GuardLiveEvents(a.guardEvent),
 		web.TrackRequests(),
 		web.CronContext(System),
+		web.GuardVars(a.guardVars),
+		web.PersonalPackage("github.com/vuka-lang/web/v2/auth"),
 		web.OptionFunc(func(app *web.App) {
 			a.app = app
 			ui.Viewer = viewer
@@ -337,6 +344,9 @@ func (a *Auth) defaults() {
 	}
 	if c.TokenTTL <= 0 {
 		c.TokenTTL = 30 * 24 * time.Hour
+	}
+	if c.ImpersonatePerm == "" {
+		c.ImpersonatePerm = "auth.impersonate"
 	}
 	if c.Cookie == "" {
 		c.Cookie = "vk_session"
@@ -444,6 +454,12 @@ type state struct {
 	// remember field unchecked).
 	brief bool
 	iat   time.Time // a JWT's issue time
+	// actor is who is really signed in while impersonating (Impersonate).
+	actor *Identity
+	// ver is the permission version of id's user when it was loaded;
+	// fresh holds it loaded again once the version moved (current).
+	ver   uint64
+	fresh atomic.Pointer[fresh]
 	// checked is when the identity was loaded (unix nanoseconds, read and
 	// written atomically): a live page loads it again after
 	// Config.LiveRecheck.
@@ -464,9 +480,15 @@ func stateOf(ctx context.Context) *state {
 
 // Current is the identity of ctx's request — a handler's, a live page's
 // Mount, a live event's — or nil for an anonymous one.
+//
+// Its identity is current: one whose user's permission version moved
+// since it was loaded (Refresh, Impersonate, …) is loaded again. Called
+// with a context processor's context, it records the identity and its
+// version as the processor's input (web.RecordInput).
 func Current(ctx context.Context) *Identity {
 	if st := stateOf(ctx); st != nil {
-		return st.id
+		recordAuth(ctx)
+		return st.current(ctx)
 	}
 	return nil
 }
@@ -497,12 +519,11 @@ func (a *Auth) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if st := stateOf(r.Context()); st != nil && st.via == viaContext {
 			if st.auth == nil {
-				st2 := *st
-				st2.auth, st2.w, st2.r = a, w, r
+				st2 := &state{auth: a, id: st.id, via: st.via, actor: st.actor, w: w, r: r}
 				if st2.id != nil {
 					st2.id = a.expand(st2.id)
 				}
-				r = r.WithContext(context.WithValue(r.Context(), stateKey{}, &st2))
+				r = r.WithContext(context.WithValue(r.Context(), stateKey{}, st2))
 			}
 			a.noteIdentity(r.Context())
 			next.ServeHTTP(w, r)
@@ -515,6 +536,9 @@ func (a *Auth) middleware(next http.Handler) http.Handler {
 			}
 			a.app.WriteError(w, r, err, web.AcceptsHTML(r))
 			return
+		}
+		if st.id != nil {
+			st.ver = a.versions.of(st.id.ID)
 		}
 		r = r.WithContext(context.WithValue(r.Context(), stateKey{}, st))
 		a.noteIdentity(r.Context())
@@ -590,6 +614,10 @@ func (a *Auth) recheck(ctx context.Context, st *state) error {
 	if now-last < int64(a.cfg.LiveRecheck) {
 		return nil
 	}
+	cur := st.current(ctx)
+	if cur == nil {
+		return errors.New("auth: the user is gone")
+	}
 	fresh, err := a.loadFresh(ctx, st.id.ID)
 	if err != nil {
 		log.Printf("auth: loading user %s again for a live page: %v", st.id.ID, err)
@@ -598,7 +626,7 @@ func (a *Auth) recheck(ctx context.Context, st *state) error {
 	if fresh == nil {
 		return errors.New("auth: the user is gone")
 	}
-	if !sameSet(fresh.Perms, st.id.Perms) || !sameSet(fresh.Roles, st.id.Roles) {
+	if !sameSet(fresh.Perms, cur.Perms) || !sameSet(fresh.Roles, cur.Roles) {
 		return errors.New("auth: the user's perms changed")
 	}
 	atomic.StoreInt64(&st.checked, now)

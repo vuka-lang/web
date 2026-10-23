@@ -250,7 +250,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rq := a.newRequest(w, r)
+		rq := a.newRequest(w, r, s)
 		if a.tb != nil {
 			noteRoute(rq.ctx, "GET "+s.path, s.where)
 		}
@@ -473,6 +473,10 @@ func (a *App) page(rq *request, n ui.Node) {
 				return
 			}
 		}
+		if err := refusedVars(rq.ctx); err != nil {
+			a.WriteError(w, r, err, true)
+			return
+		}
 		writeHTML(w, buf.Bytes())
 		return
 	}
@@ -493,6 +497,15 @@ func (a *App) page(rq *request, n ui.Node) {
 		}
 	}
 	end()
+	if err == nil {
+		if rerr := refusedVars(rq.ctx); rerr != nil {
+			if s != nil {
+				s.Close()
+			}
+			a.WriteError(w, r, rerr, true)
+			return
+		}
+	}
 	if err != nil {
 		if s != nil {
 			s.Close()
@@ -504,6 +517,10 @@ func (a *App) page(rq *request, n ui.Node) {
 	var token string
 	if live && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		token = a.signToken(r.URL.RequestURI())
+	}
+	if token != "" {
+		// the messages this page showed show again when its socket joins
+		a.joinMessages.put(token, shownMessages(rq.ctx))
 	}
 	if token != "" && r.Method == http.MethodGet && a.adoptWindow > 0 {
 		// keep the mounted session for the page's join to adopt,

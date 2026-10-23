@@ -52,6 +52,16 @@ jobs:
             git clone --quiet --depth=1 --branch "$BRANCH" https://github.com/vuka-lang/ui "$RUNNER_TEMP/ui"
             go mod edit -replace github.com/vuka-lang/ui/v2="$RUNNER_TEMP/ui"
           fi
+      # And one made together with vuka's (its docs/errors pages for new
+      # diagnostic codes, say) has one there.
+      - name: The vuka branch of this change, if any
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          if git ls-remote --exit-code --heads https://github.com/vuka-lang/vuka "$BRANCH" >/dev/null; then
+            git clone --quiet --depth=1 --branch "$BRANCH" https://github.com/vuka-lang/vuka "$RUNNER_TEMP/vuka"
+            go mod edit -replace github.com/vuka-lang/vuka/v2="$RUNNER_TEMP/vuka"
+          fi
       - name: gofmt
         run: |
           bad=$(git ls-files '*.go' | grep -v -e '/testdata/' -e '_vuka\.go$' -e '_vuka_test\.go$' | xargs gofmt -l)

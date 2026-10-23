@@ -219,7 +219,7 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 		return nil, err
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rq := a.newRequest(w, r)
+		rq := a.newRequest(w, r, s)
 		end := a.span(rq.ctx, "handler", s.where)
 		x, err := a.newComponent(ip.typ, reflect.Value{}, ip.ctor)
 		if err == nil {
@@ -309,7 +309,7 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 	}
 	cop := http.NewCrossOriginProtection()
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rq := a.newRequest(w, r)
+		rq := a.newRequest(w, r, s)
 		if _, err := a.loadLayouts(rq, guards, pathNames); err != nil {
 			a.writeError(w, r, err, false)
 			return

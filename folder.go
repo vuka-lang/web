@@ -621,7 +621,7 @@ func (a *App) compileNodePage(s *routeSpec, t reflect.Type) (http.Handler, error
 	}
 	route := s.method + " " + s.path
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		rq := a.newRequest(w, r)
+		rq := a.newRequest(w, r, s)
 		if a.tb != nil {
 			noteRoute(rq.ctx, route, s.where)
 		}

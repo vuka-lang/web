@@ -90,6 +90,12 @@ type App struct {
 	trackRequests bool
 	cronCtx       []func(context.Context) context.Context
 
+	procList     []any // ContextProcessors'
+	varGuards    []func(context.Context, []any) error
+	personalPkgs []string
+	vars         *varSet // nil: no context processors
+	joinMessages msgStash
+
 	once    sync.Once
 	handler http.Handler
 	err     error
@@ -419,6 +425,7 @@ func (a *App) build() (http.Handler, error) {
 		}
 	}
 	errs = append(errs, a.compileCrons()...)
+	errs = append(errs, a.compileVars()...)
 	for _, f := range a.checks {
 		if err := f(a); err != nil {
 			errs = append(errs, err)
