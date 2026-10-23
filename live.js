@@ -1325,7 +1325,7 @@
     state_set: (el, a, e) => { if (!redismiss(a, e)) swrite(a, a.v); },
     state_toggle: (el, a, e) => { if (!redismiss(a, e)) swrite(a, !sread(a)); },
     state_inc: (el, a) => swrite(a, (+sread(a) || 0) + (a.by || 0)),
-    patch: (el, a) => { move(String(a.href), true); },
+    patch: (el, a) => { move(String(a.href), true, null, !!a.replace); },
     navigate: (el, a) => { move(String(a.href), false); },
     // push sends an event to a handler as data-vk-on-<event> would.
     // Its predictions are what the chain changed since its last push.

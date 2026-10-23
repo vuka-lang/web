@@ -52,11 +52,30 @@ type request struct {
 func (a *App) newRequest(w http.ResponseWriter, r *http.Request, s *routeSpec) *request {
 	rq := &request{w: w, r: r, app: a, route: s}
 	rq.ctx = ui.WithInjector(context.WithValue(r.Context(), ctxKey{}, rq), injector{a})
+	rq.ctx = ui.WithPageURL(rq.ctx, r.URL, a.pathParam(r))
 	a.withVars(rq)
 	return rq
 }
 
 type ctxKey struct{}
+
+// pathParam is r's path parameters by name, matched ignoring case: what a
+// component's bare @ui.URL field reads.
+func (a *App) pathParam(r *http.Request) func(string) string {
+	return func(name string) string {
+		if v := a.router.Param(r, name); v != "" {
+			return v
+		}
+		_, pattern, _ := strings.Cut(r.Pattern, " ")
+		if pattern == "" {
+			pattern = r.Pattern
+		}
+		if n := matchName(pathParams(pattern), name); n != "" {
+			return a.router.Param(r, n)
+		}
+		return ""
+	}
+}
 
 // Request is the request being served, from a context.Context a handler
 // received: call decorators reach it through c.Context().
