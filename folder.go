@@ -37,8 +37,9 @@ type Rest string
 // island's are, so a field users *users.Service needs no NewT, and its other
 // unexported fields, its tracked state among them, are left as the
 // constructor made them; a dependency field the URL would bind too (named
-// as a path parameter, tagged url:) is E0419 at start-up. A page whose pointer has Title() string titles
-// the document: ui.PageTitle reads it in the layouts. A stateless page's
+// as a path parameter, tagged url:) is E0419 at start-up. A page whose
+// pointer has Title() string titles the document: ui.PageTitle reads it in
+// the layouts. A stateless page's
 // Title is read after its mount hook; a Live page's once its fields are
 // bound, before its mount hook, which its session runs as it renders. On
 // Get, the constructor's struct is a stateless page, a ui.Node: the mount
