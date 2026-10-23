@@ -39,9 +39,10 @@ type Rest string
 // constructor made them; a dependency field the URL would bind too (named
 // as a path parameter, tagged url:) is E0419 at start-up. A page whose
 // pointer has Title() string titles the document: ui.PageTitle reads it in
-// the layouts. A stateless page's
-// Title is read after its mount hook; a Live page's once its fields are
-// bound, before its mount hook, which its session runs as it renders. On
+// the layouts. One with Crumbs() []ui.Crumb gives them its breadcrumbs,
+// read with ui.PageCrumbs. A stateless page's Title and Crumbs are read
+// after its mount hook; a Live page's once its fields are bound, before
+// its mount hook, which its session runs as it renders. On
 // Get, the constructor's struct is a stateless page, a ui.Node: the mount
 // hook its LiveSchema declares (ui.MountPage), if any, runs once its fields
 // are bound, and the page renders. LayoutOf implies PageRoute. On a
@@ -143,10 +144,13 @@ func rootID(t reflect.Type) string {
 // under the same layouts, their path parameters the same, keeps them as
 // they are — their Load doesn't run again, and the elements, scroll, client
 // state and live components they render stay — and renders the page below
-// them. A layout reloading persists all the same in the page, its Load
-// running again and the page getting only what changed of it. A layout
-// whose Load takes the *http.Request reloads without the option. Guards
-// (GuardOf) run on every navigation.
+// them. Their markup renders again for the new page, the page getting only
+// what changed of it: a header of ui.PageTitle and ui.PageCrumbs read
+// there follows the page, where one Load stored stays the first page's
+// (vuka registers a layout reading them in Load with the option). A layout
+// reloading persists all the same in the page, its Load running again. A
+// layout whose Load takes the *http.Request reloads without the option.
+// Guards (GuardOf) run on every navigation.
 func ReloadLayout[T any]() RouteOption {
 	t := typeOf[T]()
 	return routeOpt(func(s *routeSpec) { s.reloads = append(s.reloads, t) })
@@ -559,10 +563,20 @@ func (a *App) checkPathProps(t reflect.Type, props []prop, pathNames []string) e
 }
 
 // titled is ctx titled by the page x (a pointer to its struct) when it has
-// Title() string.
+// Title() string, and carrying its breadcrumbs (crumbed).
 func titled(ctx context.Context, x reflect.Value) context.Context {
 	if t, ok := x.Interface().(interface{ Title() string }); ok {
-		return ui.WithPageTitle(ctx, t.Title())
+		ctx = ui.WithPageTitle(ctx, t.Title())
+	}
+	return crumbed(ctx, x)
+}
+
+// crumbed is ctx carrying the breadcrumbs of the page x (a pointer to its
+// struct) when it has Crumbs() []ui.Crumb, for its layouts to read
+// (ui.PageCrumbs) as they do its title.
+func crumbed(ctx context.Context, x reflect.Value) context.Context {
+	if c, ok := x.Interface().(interface{ Crumbs() []ui.Crumb }); ok {
+		return ui.WithPageCrumbs(ctx, c.Crumbs())
 	}
 	return ctx
 }

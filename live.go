@@ -281,7 +281,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		var page ui.Node
 		if framed(layouts) {
 			if islandLayout != nil {
-				rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(c))
+				rq.ctx = crumbed(ui.WithPageTitle(rq.ctx, pageTitle(c)), c)
 			} else {
 				rq.ctx = titled(rq.ctx, c)
 			}
@@ -295,7 +295,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		if framed(layouts) {
 			page = a.nestLayouts(rq, layouts, loaded, tag)
 		} else if islandLayout != nil {
-			rq.ctx = ui.WithPageTitle(rq.ctx, pageTitle(c))
+			rq.ctx = crumbed(ui.WithPageTitle(rq.ctx, pageTitle(c)), c)
 			page = islandLayout(rq.ctx, tag)
 		} else {
 			if s.page {

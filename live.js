@@ -1518,7 +1518,12 @@
   // Active) is the current page's while the address's path is its href's
   // (or, prefix, below it): aria-current="page", and data-vk-active-class's
   // class. Set as the page loads, after every navigation and render, so a
-  // layout's menu follows the page without rendering again.
+  // layout's menu follows the page without rendering again. An element
+  // marked data-vk-active-within is "true" while it holds a current link,
+  // "" when not; a <details> so marked opens as a current link comes inside
+  // it, the page loading included, and is the visitor's to close (a morph
+  // keeps it open, as it keeps a group the visitor opened: openKept).
+  const within = new WeakMap();
   function markActive() {
     if (!document.querySelectorAll) return;
     const path = location.pathname;
@@ -1532,7 +1537,25 @@
       const c = a.getAttribute("data-vk-active-class");
       if (c) c.split(/\s+/).filter(Boolean).forEach((k) => a.classList.toggle(k, on));
     });
+    document.querySelectorAll("[data-vk-active-within]").forEach((g) => {
+      const on = !!g.querySelector('a[data-vk-active][aria-current="page"]'), v = on ? "true" : "";
+      if (g.getAttribute("data-vk-active-within") !== v) g.setAttribute("data-vk-active-within", v);
+      if (on && !within.get(g) && g.tagName === "DETAILS" && !g.open) touch(g, "open", () => { g.open = true; });
+      within.set(g, on);
+    });
   }
+
+  // openKept: a <details> the visitor opens or closes stays so through the
+  // morphs that render it as before, as an attribute a command changed
+  // does; a render changing its open is the server's.
+  document.addEventListener("toggle", (e) => {
+    const d = e.target;
+    if (!d || d.tagName !== "DETAILS") return;
+    let m = touched.get(d);
+    if (!m) touched.set(d, (m = new Map()));
+    if (!m.has("open")) m.set("open", { server: d.open ? null : "" });
+    m.get("open").value = d.open ? "" : null;
+  }, true);
 
   // Prefetch: a link the browser will load as a document — a ui.Link
   // (data-vk-link) on a page without a live connection, or one marked
