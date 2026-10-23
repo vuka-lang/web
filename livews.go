@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -250,6 +251,7 @@ type conn struct {
 	tok    string        // the page's join token, the key its render parked a session under
 	s      liveproto.Session
 	page   context.Context                 // the context the page's route ran with: the join's, else the latest navigation's
+	root   reflect.Type                    // the page's root layout, nil when it has none
 	topics []string                        // guarded by the hub's mutex
 	tb     *tbSink                         // the development toolbar's record of the page, its messages under it
 	wire   *wireMirror                     // with tb, what the browser holds, to decode the frames sent
@@ -291,6 +293,7 @@ type join struct {
 	page    ui.Node
 	ctx     context.Context
 	updates map[ui.Stateful]any // a Live page's URLParams for its Update, on a patch
+	root    reflect.Type        // the route's root layout (RouteInfo.RootLayout), nil when it has none
 }
 
 func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
@@ -614,6 +617,7 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 		e.SetErrorText(c.errorText)
 	}
 	c.setPage(j.ctx)
+	c.root = j.root
 	c.doing = "join"
 	return c.s.Join(ref), 0
 }
@@ -697,7 +701,10 @@ func (a *App) liveErrorText(err error) (string, bool) {
 // joins. A URL whose route answers anything but a page (a redirect, an
 // error, JSON) is the browser's to load: the reply is a redirect, refused
 // (an error, which the runtime loads the URL on) when it names a URL that
-// isn't http or https. A navigation whose Mount, Update or render fails
+// isn't http or https. A page under another root layout than the
+// connection's (RouteInfo.RootLayout: its first LayoutOf, or none) is
+// another document, the browser's to load too: the reply is a redirect to
+// it. A navigation whose Mount, Update or render fails
 // replies with the error and leaves nothing mounted; the runtime loads the
 // URL, getting the route's own answer.
 func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
@@ -719,6 +726,9 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	if j.page == nil {
 		load.URL = cmp.Or(rec.location(), m.URL)
 		return redirect(), false
+	}
+	if j.root != c.root {
+		return redirect(), false // another document: the browser loads it
 	}
 	patch := m.Patch && j.updates != nil
 	c.doing = "navigate " + uri

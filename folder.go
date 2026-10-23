@@ -3,9 +3,12 @@ package web
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"net/http"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/vuka-lang/ui/v2"
@@ -89,6 +92,40 @@ func LayoutOf[T any]() RouteOption {
 func GuardOf[T any]() RouteOption {
 	t := typeOf[T]()
 	return routeOpt(func(s *routeSpec) { s.page, s.layouts = true, append(s.layouts, layoutRef{t, true}) })
+}
+
+// rootLayout is the route's root layout: its first LayoutOf, nil when it
+// has none.
+func rootLayout(s *routeSpec) reflect.Type {
+	for _, l := range s.layouts {
+		if !l.guard {
+			return l.typ
+		}
+	}
+	return nil
+}
+
+type rootKey struct{}
+
+// withRoot has h's requests carry their route's root layout t: a join or
+// navigation records it (join.root), and the page's script tag names it
+// (data-vk-root).
+func withRoot(t reflect.Type, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if j, ok := r.Context().Value(joinKey{}).(*join); ok {
+			j.root = t
+		}
+		h.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), rootKey{}, t)))
+	})
+}
+
+// rootID is the identity of a root layout in a page's HTML: its type's
+// package path and name, hashed, so the page names it without naming the
+// app's packages.
+func rootID(t reflect.Type) string {
+	h := fnv.New64a()
+	io.WriteString(h, t.PkgPath()+"."+t.Name())
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 // layoutRef is a layout or guard a route's options name.
