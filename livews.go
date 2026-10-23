@@ -261,6 +261,7 @@ type conn struct {
 	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
 	loads []context.CancelFunc // end the deferred loads of the page joined or navigated to
+	vars  *varHistory          // the page's context processors' results, from one page to the next
 
 	layouts []heldLayout // the layouts the page renders in, loaded (loadLayouts)
 	navs    int          // navigations so far
@@ -468,6 +469,9 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 			c.s = nil
 		}
 		reply, code := c.join(ctx, m.Ref, m.V)
+		if code == 0 && c.varsRefused() {
+			return false
+		}
 		c.syncTopics() // before the reply: a broadcast the client causes once joined reaches it
 		c.write(ctx, reply)
 		if code != 0 {
@@ -478,7 +482,11 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 	case c.s == nil:
 		c.write(ctx, live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: "live: join first"})
 	case m.Type == live.Navigate:
+		c.vars.newEvent()
 		reply, patch := c.navigate(ctx, m.ClientMessage)
+		if c.varsRefused() {
+			return false
+		}
 		_, moved := reply.(withToken)
 		if moved && c.tb != nil {
 			// before the reply: the toolbar asks for the page once it lands
@@ -490,11 +498,26 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 			c.startDeferred(patch)
 		}
 	default:
+		c.vars.newEvent()
 		reply := c.event(m.ClientMessage)
+		if c.varsRefused() {
+			return false
+		}
 		c.syncTopics()
 		c.write(ctx, reply)
 	}
 	c.syncTopics()
+	return true
+}
+
+// varsRefused closes the connection when a gate refused a read of the
+// page's variables (Auth): the page loads again, its route answering the
+// browser — a visitor signed out goes down the sign-in path.
+func (c *conn) varsRefused() bool {
+	if c.app.vars == nil || c.page == nil || refusedVars(c.page) == nil {
+		return false
+	}
+	c.ws.Close(closeReload, "live: the page must load again")
 	return true
 }
 
@@ -770,6 +793,15 @@ func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, erro
 	}
 	j := &join{why: why, held: c.layouts, slot: &c.slot, nav: c.navs}
 	defer j.done.Store(true)
+	if c.app.vars != nil {
+		if c.vars == nil {
+			c.vars = newVarHistory()
+		}
+		if why == "join" {
+			c.vars.joined(c.app.joinMessages.take(c.tok))
+		}
+		ctx = context.WithValue(ctx, histKey{}, c.vars)
+	}
 	req := c.r.Clone(context.WithValue(ctx, joinKey{}, j))
 	req.Method, req.URL, req.RequestURI = http.MethodGet, u, uri
 	req.Body, req.ContentLength = http.NoBody, 0
@@ -876,7 +908,12 @@ func (c *conn) drain(ctx context.Context) bool {
 			if c.tb != nil {
 				end = c.recording("load", l.d.Group, 0, nil)
 			}
-			if m := ds.Loaded(l.d); m != nil {
+			c.vars.newEvent()
+			m := ds.Loaded(l.d)
+			if c.varsRefused() {
+				return false
+			}
+			if m != nil {
 				c.write(ctx, m)
 			}
 			end()
@@ -887,7 +924,12 @@ func (c *conn) drain(ctx context.Context) bool {
 		if c.tb != nil {
 			end = c.recordInfo(d)
 		}
-		if m := c.s.Info(d.topic, d.msg); m != nil {
+		c.vars.newEvent()
+		m := c.s.Info(d.topic, d.msg)
+		if c.varsRefused() {
+			return false
+		}
+		if m != nil {
 			c.write(ctx, m)
 		}
 		end()
