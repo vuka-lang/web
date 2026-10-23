@@ -495,9 +495,12 @@ func (a *App) wrapRoute(s *routeSpec, h http.Handler) (http.Handler, error) {
 			inner.ServeHTTP(w, r)
 		})
 	}
-	info := RouteInfo{Method: s.method, Path: s.path, Where: s.where, Attrs: slices.Clip(s.attrs), Live: s.live != nil, HTML: s.html || s.live != nil}
+	info := RouteInfo{Method: s.method, Path: s.path, Where: s.where, Attrs: slices.Clip(s.attrs), Live: s.live != nil, HTML: s.html || s.live != nil, RootLayout: rootLayout(s)}
 	if s.live != nil {
 		info.LiveType = s.live.typ
+	}
+	if info.RootLayout != nil {
+		h = withRoot(info.RootLayout, h)
 	}
 	for i := len(a.wraps) - 1; i >= 0; i-- {
 		if mw := a.wraps[i].f(info); mw != nil {

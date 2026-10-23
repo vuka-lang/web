@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"net/http/httptest"
+	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/live"
 	"github.com/vuka-lang/vuka/v2"
 	"github.com/vuka-lang/vuka/v2/diag"
 )
@@ -364,3 +367,44 @@ func TestFolderMethodFuncs(t *testing.T) {
 	expect(t, h, "GET", "/api/orgs/x", "", 404, "")
 	expect(t, h, "GET", "/plain/x", "", 400, "")
 }
+
+// TestRootLayoutNavigation: a page names its root layout, the outermost of
+// its LayoutOf layouts (data-vk-root, RouteInfo.RootLayout); navigating
+// over the connection to a page under the same root patches the page, and
+// to one under another root, or none, is a full page load.
+func TestRootLayoutNavigation(t *testing.T) {
+	roots := map[string]reflect.Type{}
+	app := folderApp(WrapRoutes("roots", func(r RouteInfo) Middleware {
+		roots[r.Path] = r.RootLayout
+		return nil
+	}))
+	app.Live("/alt/{org}/permits/{permit}", newPermitPage, LayoutOf[orgLayout]())
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	if roots["/orgs/{org}"] != reflect.TypeFor[siteLayout]() || roots["/alt/{org}/permits/{permit}"] != reflect.TypeFor[orgLayout]() || roots["/files/{path...}"] != nil {
+		t.Errorf("RouteInfo.RootLayout: %v", roots)
+	}
+	html, _ := pageToken(t, srv, "/orgs/1/permits/3")
+	alt, _ := pageToken(t, srv, "/alt/1/permits/3")
+	site, other := rootRe.FindStringSubmatch(html), rootRe.FindStringSubmatch(alt)
+	if site == nil || other == nil || site[1] == other[1] {
+		t.Fatalf("data-vk-root: %q, %q\n%s", site, other, html)
+	}
+	c, _ := joined(t, srv, "/orgs/1/permits/3")
+	defer c.CloseNow()
+	nav := func(ref int, url string) live.ServerMessage {
+		t.Helper()
+		send(t, c, map[string]any{"type": "navigate", "ref": ref, "url": url})
+		return must(t, c)
+	}
+	if m := nav(2, "/orgs/2/permits/4"); m.Type != live.PatchMsg {
+		t.Errorf("navigate under the same root: %+v", m)
+	}
+	for i, url := range []string{"/alt/2/permits/4", "/files/a.txt"} {
+		if m := nav(3+i, url); m.Type != live.Redirect || m.URL != url {
+			t.Errorf("navigate to %s, under another root: %+v, want a page load", url, m)
+		}
+	}
+}
+
+var rootRe = regexp.MustCompile(`data-vk-root="([^"]+)"`)

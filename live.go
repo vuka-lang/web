@@ -601,8 +601,12 @@ func wholePage(r *http.Request) bool {
 // scriptTag is the page's runtime script tag, with token (a live page's
 // join token) when the page may connect.
 func (a *App) scriptTag(r *http.Request, token string) string {
+	var root string
+	if t, ok := r.Context().Value(rootKey{}).(reflect.Type); ok {
+		root = ` data-vk-root="` + rootID(t) + `"` // the page's root layout: another one is a full page load
+	}
 	if token == "" {
-		return `<script src="` + liveScript + `?v=` + liveJSTag + `" defer></script>`
+		return `<script src="` + liveScript + `?v=` + liveJSTag + `"` + root + ` defer></script>`
 	}
 	var tb string
 	if a.tb != nil {
@@ -610,7 +614,7 @@ func (a *App) scriptTag(r *http.Request, token string) string {
 			tb = ` data-vk-toolbar="` + e.ID + `"` // the socket's messages join the page's record
 		}
 	}
-	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + token + `"` + tb + ` defer></script>`
+	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + token + `"` + root + tb + ` defer></script>`
 }
 
 // A join token names the page a live connection rebuilds: its URI, when the

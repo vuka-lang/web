@@ -35,6 +35,11 @@ type RouteInfo struct {
 	// HTML says the route answers with a page (a ui.Node, a view or a Live
 	// page): its errors are pages, and a browser may be sent elsewhere.
 	HTML bool
+	// RootLayout is the route's root layout, the outermost of its
+	// web.LayoutOf layouts (the struct type); nil when it has none. Pages
+	// under one root layout share a document: in-app navigation between
+	// them patches the page, and between two roots is a full page load.
+	RootLayout reflect.Type
 }
 
 // A RouteAttr is a typed attribute that only a WrapRoutes function gives a
