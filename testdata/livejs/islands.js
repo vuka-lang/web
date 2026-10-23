@@ -243,10 +243,11 @@ test("a stateless page's methods: posted with the signed props; the answer's pro
       : body.method === "away" ? { redirect: "/x" } : { props: JSON.stringify({ q: body.args[0] }), sig: "s2" };
     return Promise.resolve({ status: 200, json: () => Promise.resolve(out) });
   };
-  const methods = ` data-vk-methods='["search","fail","away"]' data-vk-call="/applicants" data-vk-sig="s1" data-vk-url='{"q":"q"}' data-vk-viewer='{"user":{"id":"7"},"roles":[],"perms":["orders.*"]}'`;
+  const methods = ` data-vk-methods='["search","fail","away"]' data-vk-call="/applicants" data-vk-sig="s1" data-vk-url='{"q":"q"}' data-vk-viewer='{"user":{"id":"7"},"roles":[],"perms":["orders.*"]}' data-vk-vars='{"currency":"TZS"}'`;
   const p = page(file, `<main>${host({ q: "" }, methods)}</main>`, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/pick.js": mod }, globals: { fetch } });
   await settle();
   eq([it.ctx.vuka.user.id, it.ctx.vuka.can("orders.write"), it.ctx.vuka.can("users.read")], ["7", true, false], "the viewer");
+  eq([it.ctx.value("currency"), it.ctx.value("user")], ["TZS", undefined], "the browser's template variables");
   await it.ctx.live.search("ad");
   eq(posts[0], ["/applicants", { method: "search", args: ["ad"], props: '{"q":""}', sig: "s1" }], "posted");
   eq([it.props.q, p.$("vk-island").getAttribute("data-vk-sig"), p.location.search], ["ad", "s2", "?q=ad"], "updated, re-signed, the address");

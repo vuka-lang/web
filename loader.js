@@ -75,6 +75,16 @@
         const all = [inst.el, ...inst.el.querySelectorAll('[data-vk-ref="' + name + '"]')];
         return all.find((x) => x.getAttribute("data-vk-ref") === name && scopeOf(x) === inst.id) || null;
       },
+      // value is a template variable the app lets the browser read
+      // (web.Browser): the data-vk-vars of the element or the nearest
+      // around it, as the server last rendered it; undefined for another.
+      value: (name) => {
+        const host = inst.el && inst.el.closest ? inst.el.closest("[data-vk-vars]") : null;
+        if (!host) return undefined;
+        let vars = null;
+        try { vars = JSON.parse(host.getAttribute("data-vk-vars") || "null"); } catch (_) {}
+        return vars && Object.prototype.hasOwnProperty.call(vars, name) ? vars[name] : undefined;
+      },
     };
   }
 

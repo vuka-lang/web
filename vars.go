@@ -253,7 +253,7 @@ func (a *App) compileProc(w Processor, i int) (*varProc, error) {
 	p := &varProc{fn: v, typ: nil, gates: flattenGates(w.gates), browser: w.browser, personal: w.personal}
 	file, line := "", 0
 	if f := runtime.FuncForPC(v.Pointer()); f != nil {
-		p.name = shortFuncName(f.Name())
+		p.name = shortName(f.Name())
 		file, line = f.FileLine(f.Entry())
 		p.where = fmt.Sprintf("%s at %s:%d", p.name, file, line)
 	} else {
@@ -356,15 +356,6 @@ func flattenGates(gates []any) []any {
 		}
 	}
 	return out
-}
-
-// shortFuncName is a function's name as its package's code spells it:
-// "users.Context", not "example.com/app/users.Context".
-func shortFuncName(full string) string {
-	if i := strings.LastIndexByte(full, '/'); i >= 0 {
-		return full[i+1:]
-	}
-	return full
 }
 
 // lowerCamel is a field's name as a template variable: User → user,

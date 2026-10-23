@@ -168,7 +168,7 @@ func (a *Auth) wrapRoute(info web.RouteInfo) web.Middleware {
 			}
 			var id *Identity
 			if st := stateOf(r.Context()); st != nil {
-				id = st.id
+				id = st.current(r.Context())
 			}
 			var err error
 			for _, g := range gs {
@@ -307,7 +307,7 @@ func (a *Auth) guardEvent(ctx context.Context, h web.LiveHandler) error {
 		return errNoAuthEvent
 	}
 	for _, g := range gs {
-		if err := g.allow(st.id); err != nil {
+		if err := g.allow(st.current(ctx)); err != nil {
 			web.NoteRequest(ctx, web.RequestNote{Section: "Auth", Name: "Event gate", Value: describe(gs) + " on " + h.Name + ": refused, " + err.Error(), Refused: true})
 			return err
 		}
@@ -377,7 +377,7 @@ func (g Gate) decide(ctx context.Context) (err error, where context.Context) {
 		return nil, ctx
 	}
 	if st := stateOf(ctx); st != nil {
-		return g.allow(st.id), ctx
+		return g.allow(st.current(ctx)), ctx
 	}
 	ev := web.CurrentLiveEvent()
 	if ev != nil && ev.Handling() {
@@ -385,14 +385,14 @@ func (g Gate) decide(ctx context.Context) (err error, where context.Context) {
 		if st == nil {
 			return errNoAuthEvent, ev.Context()
 		}
-		return g.allow(st.id), ev.Context()
+		return g.allow(st.current(ev.Context())), ev.Context()
 	}
 	rc, serving := web.CurrentRequest()
 	if rc != nil {
 		// On a request's goroutine without its context, inside its route:
 		// the request's identity.
 		if st := stateOf(rc); st != nil {
-			return g.allow(st.id), rc
+			return g.allow(st.current(rc)), rc
 		}
 		return errNoIdentity, rc
 	}
@@ -400,14 +400,14 @@ func (g Gate) decide(ctx context.Context) (err error, where context.Context) {
 		// On a live connection's goroutine, outside an event (a render, a
 		// broadcast): the page's identity.
 		if st := stateOf(p); st != nil {
-			return g.allow(st.id), p
+			return g.allow(st.current(p)), p
 		}
 		return errNoAuthEvent, p
 	}
 	if ev == nil && !serving {
 		if o := web.LiveOrigin(); o != nil {
 			if st := stateOf(o); st != nil {
-				return g.allow(st.id), o
+				return g.allow(st.current(o)), o
 			}
 			return errNoAuthEvent, o
 		}

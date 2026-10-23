@@ -104,10 +104,16 @@ func (a *Auth) loadFresh(ctx context.Context, uid string) (*Identity, error) {
 // Refresh forgets the identity Config.UserCache keeps for user uid, so the
 // next request loads it with Users.Load: call it after changing a user's
 // perms, roles or record. It only reaches this process's cache.
+//
+// It also moves the user's permission version (Version): their live pages
+// load the identity again at its next read, and the components showing
+// what it may do (auth.Context's variables) render again at their next
+// event.
 func (a *Auth) Refresh(uid string) {
 	if a.cache != nil {
 		a.cache.drop(uid)
 	}
+	a.versions.bump(uid)
 }
 
 // Refresh forgets the cached identity of user uid, as Auth.Refresh does,

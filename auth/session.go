@@ -16,7 +16,10 @@ import (
 // holds a random id; the store holds the SHA-256 of it, so reading the store
 // gives nobody a cookie that works.
 type Session struct {
-	UserID  string
+	UserID string
+	// Actor is who really signed in, when the session views the app as
+	// UserID (Impersonate); "" otherwise.
+	Actor   string
 	Created time.Time
 	Seen    time.Time // last used, within a minute
 	Expires time.Time
@@ -156,13 +159,24 @@ func (a *Auth) readSession(ctx context.Context, st *state, r *http.Request) erro
 		a.closeKey(viaSession, key)
 		return nil
 	}
+	var actor *Identity
+	if s.Actor != "" {
+		if actor, err = a.load(ctx, s.Actor); err != nil {
+			return err
+		}
+		if actor == nil || a.jwtEpoch.revoked(s.Actor, s.Created) { // the real user is gone, or was revoked
+			a.sessions.Delete(ctx, key)
+			a.closeKey(viaSession, key)
+			return nil
+		}
+	}
 	if now.Sub(s.Seen) > time.Minute {
 		s.Seen = now
 		if err := a.sessions.Save(ctx, key, *s); err != nil {
 			return err
 		}
 	}
-	st.id, st.via, st.key = id, viaSession, key
+	st.id, st.via, st.key, st.actor = id, viaSession, key, actor
 	return nil
 }
 
@@ -214,7 +228,7 @@ func (a *Auth) signIn(ctx context.Context, st *state, uid string) error {
 		return err
 	}
 	a.setCookie(st, secret, cookieTTL)
-	st.id, st.via, st.key = id, viaSession, key
+	st.id, st.via, st.key, st.actor, st.ver = id, viaSession, key, nil, a.versions.of(uid)
 	return nil
 }
 
@@ -243,7 +257,10 @@ func SignOut(ctx context.Context) error {
 		err = a.tokens.Delete(ctx, st.key)
 		a.closeKey(viaBearer, st.key)
 	}
-	st.id, st.via, st.key = nil, "", ""
+	if st.actor != nil {
+		a.versions.bump(st.actor.ID)
+	}
+	st.id, st.via, st.key, st.actor = nil, "", "", nil
 	return err
 }
 
