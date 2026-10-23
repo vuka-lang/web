@@ -338,6 +338,12 @@ func (a *App) liveProps(t reflect.Type, where string) ([]prop, error) {
 			if n, _, _ := strings.Cut(f.Tag.Get("form"), ","); n != "" && n != "-" {
 				name = n
 			}
+			if u := ui.FieldOptionsOf(t, f).URL; u != "" {
+				// @ui.URL("q"): the query parameter it names, which an
+				// event assigning the field writes
+				props = append(props, prop{index: f.Index, name: u, typ: f.Type, query: true})
+				continue
+			}
 			props = append(props, prop{index: f.Index, name: name, typ: f.Type})
 		}
 	}
@@ -397,6 +403,10 @@ func (a *App) bindProps(v reflect.Value, props []prop, pathNames []string, r *ht
 // the visitor may see order {id}, say. An error it returns fails the
 // patch: nothing of the page stays mounted, and the browser loads the URL,
 // the route answering as for any request.
+//
+// An Update taking URLParams itself keeps the page mounted taking nothing
+// of the URL: for a page whose components keep their state in it (@ui.URL
+// fields, Query), which fill from the new URL as they render.
 type URLParams struct{}
 
 var urlParamsType = typeOf[URLParams]()
@@ -425,7 +435,7 @@ func patchParams(t reflect.Type) (*params, error) {
 		if p.typ.Kind() != reflect.Struct {
 			continue
 		}
-		if f, ok := p.typ.FieldByName("URLParams"); !ok || !f.Anonymous || f.Type != urlParamsType {
+		if f, ok := p.typ.FieldByName("URLParams"); p.typ != urlParamsType && (!ok || !f.Anonymous || f.Type != urlParamsType) {
 			continue
 		}
 		if found != nil {

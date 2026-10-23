@@ -500,7 +500,7 @@ func TestStatic(t *testing.T) {
 	expect(t, h, "GET", "/assets/none.css", "", 404, "")
 }
 
-type Query struct {
+type searchQuery struct {
 	Q    string
 	Page int
 }
@@ -508,7 +508,7 @@ type Query struct {
 func TestPlainGo(t *testing.T) {
 	a := New(Only(pkgOf(t)), Provide(NewStore))
 	a.Get("/pets/{id}", func(s *Store, id int) (Pet, error) { return s.Find(id).Get() })
-	a.Get("/search", func(q Query, r *http.Request) string { return fmt.Sprint(q.Q, q.Page, r.Method) })
+	a.Get("/search", func(q searchQuery, r *http.Request) string { return fmt.Sprint(q.Q, q.Page, r.Method) })
 	a.Post("/pets", func(in NewPet) (Pet, error) { return Pet{3, in.Name}, nil })
 	a.Get("/page", func() Page { return Page{Title: "T"} }, View(vuka.FileOf("plain:p.html", "<p>{{.Title}}</p>")))
 	a.Delete("/pets/{id}", func(id int) error { return nil }, Wrap(func(h http.Handler) http.Handler {

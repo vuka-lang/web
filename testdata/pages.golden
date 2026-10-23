@@ -3,15 +3,15 @@
 == dev=false GET /keyed  200 text/html; charset=utf-8
 <!DOCTYPE html><html><head><title>t</title></head><BODY><ul><li data-vk-key="1">one</li><li data-vk-key="b&amp;c">two</li></ul></BODY></html>
 == dev=false GET /js  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title></head><BODY><button data-vk-js-click="[[&#34;toggle&#34;,{&#34;to&#34;:{&#34;ref&#34;:&#34;menu&#34;}}]]">menu</button><nav data-vk-ref="menu"></nav><script src="/_vuka/live.js?v=M_88jxVI" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title></head><BODY><button data-vk-js-click="[[&#34;toggle&#34;,{&#34;to&#34;:{&#34;ref&#34;:&#34;menu&#34;}}]]">menu</button><nav data-vk-ref="menu"></nav><script src="/_vuka/live.js?v=oe6S962H" defer></script></BODY></html>
 == dev=false GET /push  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title></head><BODY><button data-vk-js-click="[[&#34;toggle&#34;,{&#34;to&#34;:{&#34;ref&#34;:&#34;menu&#34;}}],[&#34;push&#34;,{&#34;h&#34;:&#34;c0:0&#34;}]]">menu</button><script src="/_vuka/live.js?v=M_88jxVI" data-vk-token="…" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title></head><BODY><button data-vk-js-click="[[&#34;toggle&#34;,{&#34;to&#34;:{&#34;ref&#34;:&#34;menu&#34;}}],[&#34;push&#34;,{&#34;h&#34;:&#34;c0:0&#34;}]]">menu</button><script src="/_vuka/live.js?v=oe6S962H" data-vk-token="…" defer></script></BODY></html>
 == dev=false GET /handler  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title></head><BODY><button data-vk-on-click="c0:0">+</button><script src="/_vuka/live.js?v=M_88jxVI" data-vk-token="…" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title></head><BODY><button data-vk-on-click="c0:0">+</button><script src="/_vuka/live.js?v=oe6S962H" data-vk-token="…" defer></script></BODY></html>
 == dev=false GET /component  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title></head><BODY>before<div data-vk-id="c1"><span>n=0</span><button data-vk-on-click="c1:0">+</button></div>after<script src="/_vuka/live.js?v=M_88jxVI" data-vk-token="…" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title></head><BODY>before<div data-vk-id="c1"><span>n=0</span><button data-vk-on-click="c1:0">+</button></div>after<script src="/_vuka/live.js?v=oe6S962H" data-vk-token="…" defer></script></BODY></html>
 == dev=false GET /safe  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title></head><BODY><b data-vk-js-click="[]">raw</b><script src="/_vuka/live.js?v=M_88jxVI" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title></head><BODY><b data-vk-js-click="[]">raw</b><script src="/_vuka/live.js?v=oe6S962H" defer></script></BODY></html>
 == dev=false GET /nobody  200 text/html; charset=utf-8
 <p>fragment</p>
 == dev=false HEAD /keyed  200 text/html; charset=utf-8
@@ -25,15 +25,15 @@
 == dev=true GET /keyed  200 text/html; charset=utf-8
 <!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY><ul><li data-vk-key="1">one</li><li data-vk-key="b&amp;c">two</li></ul></BODY></html>
 == dev=true GET /js  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY><button data-vk-js-click="[[&#34;toggle&#34;,{&#34;to&#34;:{&#34;ref&#34;:&#34;menu&#34;}}]]">menu</button><nav data-vk-ref="menu"></nav><script src="/_vuka/live.js?v=M_88jxVI" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY><button data-vk-js-click="[[&#34;toggle&#34;,{&#34;to&#34;:{&#34;ref&#34;:&#34;menu&#34;}}]]">menu</button><nav data-vk-ref="menu"></nav><script src="/_vuka/live.js?v=oe6S962H" defer></script></BODY></html>
 == dev=true GET /push  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY><button data-vk-js-click="[[&#34;toggle&#34;,{&#34;to&#34;:{&#34;ref&#34;:&#34;menu&#34;}}],[&#34;push&#34;,{&#34;h&#34;:&#34;c0:0&#34;}]]">menu</button><script src="/_vuka/live.js?v=M_88jxVI" data-vk-token="…" data-vk-toolbar="…" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY><button data-vk-js-click="[[&#34;toggle&#34;,{&#34;to&#34;:{&#34;ref&#34;:&#34;menu&#34;}}],[&#34;push&#34;,{&#34;h&#34;:&#34;c0:0&#34;}]]">menu</button><script src="/_vuka/live.js?v=oe6S962H" data-vk-token="…" data-vk-toolbar="…" defer></script></BODY></html>
 == dev=true GET /handler  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY><button data-vk-on-click="c0:0">+</button><script src="/_vuka/live.js?v=M_88jxVI" data-vk-token="…" data-vk-toolbar="…" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY><button data-vk-on-click="c0:0">+</button><script src="/_vuka/live.js?v=oe6S962H" data-vk-token="…" data-vk-toolbar="…" defer></script></BODY></html>
 == dev=true GET /component  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY>before<div data-vk-id="c1"><span>n=0</span><button data-vk-on-click="c1:0">+</button></div>after<script src="/_vuka/live.js?v=M_88jxVI" data-vk-token="…" data-vk-toolbar="…" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY>before<div data-vk-id="c1"><span>n=0</span><button data-vk-on-click="c1:0">+</button></div>after<script src="/_vuka/live.js?v=oe6S962H" data-vk-token="…" data-vk-toolbar="…" defer></script></BODY></html>
 == dev=true GET /safe  200 text/html; charset=utf-8
-<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY><b data-vk-js-click="[]">raw</b><script src="/_vuka/live.js?v=M_88jxVI" defer></script></BODY></html>
+<!DOCTYPE html><html><head><title>t</title><script src="/_vuka/toolbar.js?v=WtSelcNc" data-vk-toolbar="…" defer></script></head><BODY><b data-vk-js-click="[]">raw</b><script src="/_vuka/live.js?v=oe6S962H" defer></script></BODY></html>
 == dev=true GET /nobody  200 text/html; charset=utf-8
 <p>fragment</p>
 == dev=true HEAD /keyed  200 text/html; charset=utf-8
