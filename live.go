@@ -197,8 +197,13 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	}
 	pathNames := pathParams(s.path)
 	props, err := a.liveProps(ls.typ, s.where)
-	if ls.island {
+	switch {
+	case ls.island:
 		props, err = a.islandBinds(ls.typ, s.path, s.where)
+	case s.page:
+		if props, err = a.pageProps(ls.typ, s.path, s.where); err != nil {
+			err = failure("E0328", what, s.where, err)
+		}
 	}
 	if err == nil && s.page {
 		err = a.checkPathProps(ls.typ, props, pathNames)

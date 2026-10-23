@@ -103,7 +103,10 @@ func (a *App) pageSpecs(p typePage) ([]*routeSpec, error) {
 // query parameter; its exported fields naming
 // a path segment, from the path.
 func (a *App) islandBinds(t reflect.Type, path, where string) ([]prop, error) {
-	var props []prop
+	props, err := a.depFields(t, path, where)
+	if err != nil {
+		return nil, failure("E0419", "GET "+path+" ("+whereName(where)+")", where, err)
+	}
 	names := pathParams(path)
 	for _, f := range reflect.VisibleFields(t) {
 		if f.Anonymous {
@@ -111,14 +114,6 @@ func (a *App) islandBinds(t reflect.Type, path, where string) ([]prop, error) {
 		}
 		switch {
 		case !f.IsExported():
-			if !a.c.has(f.Type) {
-				continue
-			}
-			if err := a.c.check(f.Type, where); err != nil {
-				return nil, err
-			}
-			a.needs = append(a.needs, f.Type)
-			props = append(props, prop{index: f.Index, name: f.Name, typ: f.Type, dep: true, unexported: true})
 		case !scalar(f.Type):
 		default:
 			q, _, _ := strings.Cut(f.Tag.Get("url"), ",")
@@ -138,6 +133,44 @@ func (a *App) islandBinds(t reflect.Type, path, where string) ([]prop, error) {
 				props = append(props, prop{index: f.Index, name: name, typ: f.Type, path: true})
 			}
 		}
+	}
+	return props, nil
+}
+
+// depFields are t's unexported fields of provided types, promoted ones
+// from embedded structs included: its dependencies, injected as the page
+// is built for a request, after its constructor. A field of another type
+// is the page's own, left as the constructor made it: its tracked state
+// (ui.State, what the compiler lowers to uigen.Assign) has no provider. A
+// dependency field the URL would bind too — tagged url:, given a URL by
+// its LiveSchema, or named as a path parameter — is E0419.
+func (a *App) depFields(t reflect.Type, path, where string) ([]prop, error) {
+	var props []prop
+	names := pathParams(path)
+	for _, f := range reflect.VisibleFields(t) {
+		if f.Anonymous || f.IsExported() || !a.c.has(f.Type) {
+			continue
+		}
+		q, _, _ := strings.Cut(f.Tag.Get("url"), ",")
+		if u := ui.FieldOptionsOf(t, f).URL; u != "" {
+			q = u
+		}
+		bound := ""
+		switch {
+		case q != "" && q != "-":
+			bound = "the query parameter " + q
+		case matchName(names, f.Name) != "":
+			bound = "the path parameter {" + matchName(names, f.Name) + "}"
+		}
+		if bound != "" {
+			return nil, diag.New("E0419", "%s.%s, a %s, is a dependency the app provides, and %s binds it too", t.Name(), f.Name, f.Type, bound).At(whereSpan(where)).
+				WithHelp("rename the field, or give the URL's value a field of its own")
+		}
+		if err := a.c.check(f.Type, where); err != nil {
+			return nil, err
+		}
+		a.needs = append(a.needs, f.Type)
+		props = append(props, prop{index: f.Index, name: f.Name, typ: f.Type, dep: true, unexported: true})
 	}
 	return props, nil
 }
