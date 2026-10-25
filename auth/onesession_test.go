@@ -211,7 +211,7 @@ func dial(t *testing.T, c *client, tok string, h http.Header) *websocket.Conn {
 	h.Set("Origin", c.srv.URL)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(c.srv.URL, "http")+"/_vuka/live?t="+tok, &websocket.DialOptions{HTTPHeader: h})
+	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(c.srv.URL, "http")+"/_vuka/live?t="+tok, &websocket.DialOptions{HTTPHeader: h, CompressionMode: websocket.CompressionContextTakeover})
 	if err != nil {
 		t.Fatal(err)
 	}

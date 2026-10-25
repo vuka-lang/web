@@ -805,7 +805,7 @@ func (c *client) socket(path string, origin string) (*websocket.Conn, live.Serve
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(c.srv.URL, "http")+"/_vuka/live?t="+m[1], &websocket.DialOptions{HTTPHeader: h})
+	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(c.srv.URL, "http")+"/_vuka/live?t="+m[1], &websocket.DialOptions{HTTPHeader: h, CompressionMode: websocket.CompressionContextTakeover})
 	if err != nil {
 		c.t.Fatal(err)
 	}
@@ -985,13 +985,13 @@ func TestLiveIdentityAndJoin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, res, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(c.srv.URL, "http")+"/_vuka/live?t="+tok,
-		&websocket.DialOptions{HTTPHeader: http.Header{"Origin": {"https://evil.example"}, "Cookie": {"vk_session=" + c.cookie()}}})
+		&websocket.DialOptions{HTTPHeader: http.Header{"Origin": {"https://evil.example"}, "Cookie": {"vk_session=" + c.cookie()}}, CompressionMode: websocket.CompressionContextTakeover})
 	if err == nil || res == nil || res.StatusCode != 403 {
 		t.Errorf("a cross-origin socket: %v %v", err, res)
 	}
 	// A join without the cookie (another browser with the page's token) is sent to sign in.
 	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(c.srv.URL, "http")+"/_vuka/live?t="+tok,
-		&websocket.DialOptions{HTTPHeader: http.Header{"Origin": {c.srv.URL}}})
+		&websocket.DialOptions{HTTPHeader: http.Header{"Origin": {c.srv.URL}}, CompressionMode: websocket.CompressionContextTakeover})
 	if err != nil {
 		t.Fatal(err)
 	}

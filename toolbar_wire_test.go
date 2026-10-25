@@ -284,7 +284,7 @@ func BenchmarkToolbarLiveEvent(b *testing.B) {
 				tok += "&tb=" + id
 			}
 			ctx := context.Background()
-			c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+liveSocket+"?t="+tok, &websocket.DialOptions{HTTPHeader: map[string][]string{"Origin": {srv.URL}}})
+			c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+liveSocket+"?t="+tok, &websocket.DialOptions{HTTPHeader: map[string][]string{"Origin": {srv.URL}}, CompressionMode: websocket.CompressionContextTakeover})
 			if err != nil {
 				b.Fatal(err)
 			}

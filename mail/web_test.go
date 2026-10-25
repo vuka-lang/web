@@ -243,7 +243,7 @@ func TestLiveJoinSendsOnce(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/_vuka/live?t="+tok[1], &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {srv.URL}}})
+	ws, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/_vuka/live?t="+tok[1], &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {srv.URL}}, CompressionMode: websocket.CompressionContextTakeover})
 	if err != nil {
 		t.Fatal(err)
 	}
