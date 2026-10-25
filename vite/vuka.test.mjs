@@ -6,7 +6,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import vuka, { HOT_FILE, alive, devOrigin } from './vuka.js'
+import vuka, { HOT_FILE, alive, devOrigin, precompress } from './vuka.js'
+import { brotliDecompressSync, gunzipSync } from 'node:zlib'
 
 function project(extra = {}) {
   const root = mkdtempSync(join(tmpdir(), 'vuka-vite-'))
@@ -138,4 +139,24 @@ test('an island outside the frontend resolves bare imports from the frontend', a
     else process.env.VUKA_ISLAND_BUILD = prev
     rmSync(root, { recursive: true })
   }
+})
+
+test('vite build writes a .br and a .gz beside each compressible file', () => {
+  const { root, config } = project({ command: 'build' })
+  const p = vuka()
+  p.configResolved(config)
+  const dist = join(root, 'dist')
+  mkdirSync(join(dist, 'assets'), { recursive: true })
+  const js = 'export const pets = ' + JSON.stringify(Array.from({ length: 200 }, (_, i) => ({ id: i, name: 'Rex' })))
+  writeFileSync(join(dist, 'assets', 'index-BkL2x9aQ.js'), js)
+  writeFileSync(join(dist, 'assets', 'tiny-Ab12Cd34.css'), 'a{}')
+  writeFileSync(join(dist, 'assets', 'photo-Ab12Cd34.png'), Buffer.alloc(4096))
+  writeFileSync(join(dist, 'index.html'), '<!doctype html>' + 'x'.repeat(4096))
+  p.writeBundle({ dir: dist }, { 'assets/index-BkL2x9aQ.js': {}, 'assets/tiny-Ab12Cd34.css': {}, 'assets/photo-Ab12Cd34.png': {}, 'index.html': {} })
+  const base = join(dist, 'assets', 'index-BkL2x9aQ.js')
+  assert.equal(brotliDecompressSync(readFileSync(base + '.br')).toString(), js)
+  assert.equal(gunzipSync(readFileSync(base + '.gz')).toString(), js)
+  for (const f of ['assets/tiny-Ab12Cd34.css.br', 'assets/photo-Ab12Cd34.png.br', 'index.html.br']) assert.equal(existsSync(join(dist, f)), false, f)
+  assert.deepEqual(precompress(dist, ['missing.js']), [])
+  rmSync(root, { recursive: true })
 })

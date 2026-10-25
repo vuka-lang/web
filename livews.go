@@ -1081,12 +1081,5 @@ func (r *recorder) Write(b []byte) (int, error) {
 }
 
 func serveLiveJS(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	w.Header().Set("ETag", `"`+liveJSTag+`"`)
-	if r.URL.Query().Get("v") == liveJSTag {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	} else {
-		w.Header().Set("Cache-Control", "no-cache")
-	}
-	http.ServeContent(w, r, "live.js", time.Time{}, bytes.NewReader(liveJS))
+	serveTagged(w, r, "text/javascript; charset=utf-8", liveJSTag, liveJS)
 }

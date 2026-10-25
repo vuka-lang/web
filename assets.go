@@ -1,7 +1,6 @@
 package web
 
 import (
-	"bytes"
 	_ "embed"
 	"encoding/json"
 	"io/fs"
@@ -422,25 +421,18 @@ func (s *assetSet) serveModule(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	var js []byte
 	if s.dir != "" {
-		js, _ = os.ReadFile(filepath.Join(s.dir, "c", name))
-	} else {
-		assetsMu.Lock()
-		js = s.scripts[name]
-		assetsMu.Unlock()
+		serveFile(w, r, os.DirFS(s.dir), "c/"+name, "text/javascript; charset=utf-8", false, "no-cache")
+		return
 	}
+	assetsMu.Lock()
+	js := s.scripts[name]
+	assetsMu.Unlock()
 	if js == nil {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
-	if s.dir != "" {
-		w.Header().Set("Cache-Control", "no-cache")
-	} else {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	}
-	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(js))
+	serveFixed(w, r, "text/javascript; charset=utf-8", name, true, js)
 }
 
 // serveIsland serves an island's bundled chunk, named for its content: cached
@@ -451,31 +443,25 @@ func (s *assetSet) serveIsland(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	var js []byte
-	if s.dir != "" {
-		js, _ = os.ReadFile(filepath.Join(s.dir, "i", name))
-	} else if s.files != nil {
-		js, _ = fs.ReadFile(s.files, "i/"+name)
-	} else {
-		assetsMu.Lock()
-		js = s.islands[name]
-		assetsMu.Unlock()
-	}
-	if js == nil {
-		http.NotFound(w, r)
-		return
-	}
 	ctype := "text/javascript; charset=utf-8"
 	if strings.HasSuffix(name, ".css") {
 		ctype = "text/css; charset=utf-8"
 	}
-	w.Header().Set("Content-Type", ctype)
-	if s.dir != "" {
-		w.Header().Set("Cache-Control", "no-cache")
-	} else {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	switch {
+	case s.dir != "":
+		serveFile(w, r, os.DirFS(s.dir), "i/"+name, ctype, false, "no-cache")
+	case s.files != nil:
+		serveFile(w, r, s.files, "i/"+name, ctype, true, "")
+	default:
+		assetsMu.Lock()
+		js := s.islands[name]
+		assetsMu.Unlock()
+		if js == nil {
+			http.NotFound(w, r)
+			return
+		}
+		serveFixed(w, r, ctype, name, true, js)
 	}
-	http.ServeContent(w, r, "", time.Time{}, bytes.NewReader(js))
 }
 
 // events streams the loader's view of the manifest to development pages,

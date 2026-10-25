@@ -113,7 +113,8 @@ type toolbar struct {
 type tbEntry struct {
 	mu sync.Mutex
 	tbRecord
-	depth int // spans open
+	depth int        // spans open
+	wire  *wireStats // the response's compression; nil when the app has none
 }
 
 type tbRecord struct {
@@ -149,6 +150,10 @@ type tbRecord struct {
 	// Now is the record of the page a live connection opened from this
 	// page shows now, after navigating over the socket; "" when it hasn't.
 	Now string
+	// Encoding is the response's (br, gzip; "" when sent as written), Body
+	// the bytes written and Wire those sent.
+	Encoding   string
+	Body, Wire int64
 }
 
 type tbParam struct{ Name, From, Value string }
@@ -272,6 +277,7 @@ func (e *tbEntry) snapshot() tbRecord {
 	r.Logs, r.Notes, r.Live = slices.Clone(r.Logs), slices.Clone(r.Notes), slices.Clone(r.Live)
 	r.Facts = slices.Clone(r.Facts)
 	r.Frames = slices.Clone(r.Frames)
+	r.Encoding, r.Body, r.Wire = e.wire.get()
 	if !r.Done {
 		r.Dur = time.Since(r.Start)
 	}
@@ -410,6 +416,7 @@ func (tb *toolbar) wrap(next http.Handler) http.Handler {
 			return
 		}
 		e := &tbEntry{tbRecord: tbRecord{ID: newToolbarID(), Method: r.Method, URI: r.URL.RequestURI(), Start: time.Now(), Req: hideSecrets(r.Header.Clone())}}
+		e.wire, _ = r.Context().Value(wireKey{}).(*wireStats)
 		tb.add(e)
 		s := &tbSink{tb: tb}
 		s.cur.Store(e)

@@ -381,7 +381,9 @@ func CronContext(f func(context.Context) context.Context) Option {
 
 // staticFS serves fsys's files: never a directory's listing (a directory
 // is its index.html, else 404), nor a dotfile or anything under a dot
-// directory but .well-known.
+// directory but .well-known. A file's ETag is a hash of its content, and
+// it is cached for good when its name carries one, else revalidated; the
+// .br or .gz beside it is sent to a browser taking that encoding.
 func staticFS(fsys fs.FS) http.Handler {
 	files := http.FileServerFS(fsys)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -393,13 +395,27 @@ func staticFS(fsys fs.FS) http.Handler {
 		if name == "" {
 			name = "."
 		}
-		if fi, err := fs.Stat(fsys, name); err == nil && fi.IsDir() {
+		slash := strings.HasSuffix(r.URL.Path, "/") || r.URL.Path == ""
+		fi, err := fs.Stat(fsys, name)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		if fi.IsDir() {
 			if _, err := fs.Stat(fsys, path.Join(name, "index.html")); err != nil {
 				http.NotFound(w, r)
 				return
 			}
+			if !slash {
+				files.ServeHTTP(w, r) // the redirect to the directory's path with a slash
+				return
+			}
+			name = path.Join(name, "index.html")
+		} else if slash || strings.HasSuffix(r.URL.Path, "/index.html") {
+			files.ServeHTTP(w, r) // the redirect without the slash, or to the directory
+			return
 		}
-		files.ServeHTTP(w, r)
+		serveFile(w, r, fsys, name, "", staticHashed(name), staticRevalidate)
 	})
 }
 

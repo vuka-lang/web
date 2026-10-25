@@ -81,6 +81,9 @@ type App struct {
 	css       *stylesheet // nil: pages link no stylesheet
 	assets    *assetSet   // nil: no compiled styles or scripts
 
+	compression CompressionLevel // Compression
+	compressor  *compressor      // nil: Off
+
 	frontends  []*frontend
 	exactPaths bool // no trailing-slash redirect
 
@@ -125,6 +128,7 @@ func New(opts ...Option) *App {
 	if a.devTools && devActive() {
 		a.tools = a.newDevTools()
 	}
+	a.compressor = newCompressor(a.compression)
 	a.css = a.appCSS()
 	a.assets = a.appAssets()
 	a.tb = a.newToolbar()
@@ -479,6 +483,7 @@ func (a *App) build() (http.Handler, error) {
 	if a.tb != nil {
 		h = a.tb.wrap(h)
 	}
+	h = a.compress(h) // outside the toolbar, which reads pages as written
 	return a.recoverHTTP(a.edge(h)), nil
 }
 
