@@ -32,8 +32,6 @@ import (
 type CompressionLevel int
 
 const (
-	// Off turns compression off, for an app behind a proxy that compresses.
-	Off CompressionLevel = -1
 	// DefaultCompression is brotli's quality 5 (gzip's level 5): a page of
 	// 250 KB in about 2 ms, to a 30th of its size.
 	DefaultCompression CompressionLevel = 0
@@ -42,9 +40,10 @@ const (
 	BestCompression CompressionLevel = 11
 )
 
-// Compression sets how hard the app compresses its responses; web.Off turns
-// compression off (behind a proxy that already compresses). It is on, at
-// DefaultCompression, unless set.
+// Compression sets how hard the app compresses its responses; Off turns
+// compression off, for an app behind a proxy that already compresses. It is
+// on, at DefaultCompression, unless set. Live sockets' messages are
+// LiveCompression's.
 func Compression(level CompressionLevel) Option {
 	return OptionFunc(func(a *App) { a.compression = level })
 }
