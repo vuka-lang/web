@@ -136,7 +136,7 @@ func liveApp(opts ...Option) *App {
 
 var tokenRe = regexp.MustCompile(`data-vk-token="([^"]+)"`)
 
-func pageToken(t *testing.T, srv *httptest.Server, path string, header ...string) (string, string) {
+func pageToken(t testing.TB, srv *httptest.Server, path string, header ...string) (string, string) {
 	t.Helper()
 	req, _ := http.NewRequest("GET", srv.URL+path, nil)
 	for i := 0; i+1 < len(header); i += 2 {
@@ -169,7 +169,7 @@ func dial(t *testing.T, srv *httptest.Server, token string, header http.Header) 
 	return c, err
 }
 
-func send(t *testing.T, c *websocket.Conn, m map[string]any) {
+func send(t testing.TB, c *websocket.Conn, m map[string]any) {
 	t.Helper()
 	b, _ := json.Marshal(m)
 	if err := c.Write(context.Background(), websocket.MessageText, b); err != nil {
@@ -188,7 +188,7 @@ func recv(c *websocket.Conn, wait time.Duration) (live.ServerMessage, error) {
 	return m, err
 }
 
-func must(t *testing.T, c *websocket.Conn) live.ServerMessage {
+func must(t testing.TB, c *websocket.Conn) live.ServerMessage {
 	t.Helper()
 	m, err := recv(c, 5*time.Second)
 	if err != nil {
@@ -215,7 +215,7 @@ func joined(t *testing.T, srv *httptest.Server, path string) (*websocket.Conn, s
 	return c, m.HTML
 }
 
-func handlerOf(t *testing.T, html, event string, i int) string {
+func handlerOf(t testing.TB, html, event string, i int) string {
 	t.Helper()
 	ms := regexp.MustCompile(`data-vk-on-`+event+`="(c\d+:\d+)"`).FindAllStringSubmatch(html, -1)
 	if i >= len(ms) {

@@ -127,6 +127,51 @@ func LiveCheckEvery(d time.Duration) Option {
 	return OptionFunc(func(a *App) { a.hub.checkEvery = d })
 }
 
+// LiveCompressionMode is how live sockets compress their messages
+// (permessage-deflate, RFC 7692), set with LiveCompression.
+type LiveCompressionMode int
+
+const (
+	// NoContextTakeover, the default, compresses each message on its own:
+	// a compressor is borrowed from a pool for the write and given back,
+	// so an open socket holds none. The browser does the same for its
+	// messages.
+	NoContextTakeover LiveCompressionMode = iota
+	// ContextTakeover keeps each socket's compressor and its 32 KB window
+	// between messages, so a message can refer to the ones before it: a
+	// few percent fewer bytes on a live page's session, for about 1.2 MB
+	// held by every open socket (12 GB at LiveMaxConns' 10,000).
+	ContextTakeover
+)
+
+// Off turns a compression option off: LiveCompression(Off) sends live
+// messages as they are.
+const Off = -1
+
+// liveDeflateThreshold is the smallest message live sockets compress: a
+// shorter one (a small patch, an ack) gains less than the deflate
+// framing costs.
+const liveDeflateThreshold = 256
+
+// LiveCompression sets how live sockets compress their messages:
+// NoContextTakeover by default, ContextTakeover, or Off. Compression is
+// negotiated with each client when its socket opens (every current
+// browser offers it); one that doesn't offer it gets messages as they
+// are. Messages under 256 bytes are sent as they are.
+func LiveCompression(m LiveCompressionMode) Option {
+	return OptionFunc(func(a *App) { a.liveDeflate = m })
+}
+
+func (m LiveCompressionMode) mode() websocket.CompressionMode {
+	switch m {
+	case NoContextTakeover:
+		return websocket.CompressionNoContextTakeover
+	case ContextTakeover:
+		return websocket.CompressionContextTakeover
+	}
+	return websocket.CompressionDisabled
+}
+
 // hub is the app's live connections, and the topics each subscribes to.
 type hub struct {
 	mu       sync.Mutex
@@ -318,7 +363,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: a.liveOrigins, CompressionMode: websocket.CompressionNoContextTakeover})
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: a.liveOrigins, CompressionMode: a.liveDeflate.mode(), CompressionThreshold: liveDeflateThreshold})
 	if err != nil {
 		return // Accept answered: 403 for another origin
 	}

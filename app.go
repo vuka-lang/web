@@ -55,6 +55,7 @@ type App struct {
 	liveLayout  func(ui.Node) ui.Node
 	liveKey     []byte
 	liveOrigins []string
+	liveDeflate LiveCompressionMode
 	liveTTL     time.Duration
 	liveMax     int // the newest live protocol version spoken
 	relay       Relay
