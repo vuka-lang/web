@@ -10,9 +10,16 @@ export const ISLAND_ENV: string
 /**
  * The Vite plugin for frontends served by a github.com/vuka-lang/web/v2 app:
  * it announces the dev server to the app, writes the build manifest the app
- * caches by, and turns import.meta.env.KEY into the app's value for KEY.
+ * caches by and a .br and .gz beside each compressible file, and turns
+ * import.meta.env.KEY into the app's value for KEY.
  */
 export default function vuka(): Plugin
 
 /** The dev server's origin for the address it listens on. */
 export function devOrigin(addr: { address: string; port: number }, https: boolean): string
+
+/**
+ * Writes name.br and name.gz beside each compressible file of dir named in
+ * files, of 1 KB or more, when smaller; returns the files written.
+ */
+export function precompress(dir: string, files: string[]): string[]

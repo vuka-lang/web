@@ -15,8 +15,11 @@
 //     the modules import point at the dev server. A dev server web.Dev
 //     started (VUKA_DEV_PARENT) exits once the app is gone.
 //   - vite build writes the manifest (.vite/manifest.json): the app caches
-//     the files it lists for good. A .gitkeep in the output directory,
-//     which emptyOutDir removes, is put back.
+//     the files it lists for good. Beside each script, stylesheet and other
+//     compressible file of 1 KB or more it writes a .br and a .gz (when
+//     smaller), which the app sends a browser taking that encoding. A
+//     .gitkeep in the output directory, which emptyOutDir removes, is put
+//     back.
 //   - import.meta.env.KEY, for a KEY that isn't Vite's own (MODE, DEV,
 //     PROD, SSR, BASE_URL, those with envPrefix, those in define), reads the
 //     value the app passes the page (web.FrontendEnv), at load time.
@@ -37,7 +40,8 @@
 // No dependencies but Node's own modules.
 
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, extname, join, resolve } from 'node:path'
+import { brotliCompressSync, constants, gzipSync } from 'node:zlib'
 
 export const HOT_FILE = '.vite/vuka-hot.json'
 export const ENV_GLOBAL = '__VUKA_ENV__'
@@ -170,6 +174,11 @@ export default function vuka() {
       if (config.command === 'build') keep = existsSync(join(resolve(config.root, config.build.outDir), '.gitkeep'))
     },
 
+    writeBundle(options, bundle) {
+      if (config.command !== 'build' || islandSpec()) return
+      precompress(options.dir || resolve(config.root, config.build.outDir), Object.keys(bundle))
+    },
+
     closeBundle() {
       const out = resolve(config.root, config.build.outDir)
       if (config.command === 'build' && keep && !existsSync(join(out, '.gitkeep'))) {
@@ -189,6 +198,38 @@ export default function vuka() {
       if (changed) return { code: out, map: null }
     },
   }
+}
+
+/** What gains by compression; not images, fonts already compressed (woff,
+ * woff2), archives, nor index.html, which the app serves with its env. */
+const COMPRESSIBLE = new Set(['.js', '.mjs', '.cjs', '.css', '.json', '.map', '.svg', '.txt', '.xml', '.wasm', '.webmanifest', '.ttf', '.otf', '.eot', '.ico'])
+const PRECOMPRESS_MIN = 1024
+
+/**
+ * Writes name.br and name.gz beside each compressible file of dir named in
+ * files, of 1 KB or more, when smaller than it: brotli at its best quality,
+ * gzip at level 9. The app sends them as they are (web.Frontend).
+ */
+export function precompress(dir, files) {
+  const written = []
+  for (const name of files) {
+    if (!COMPRESSIBLE.has(extname(name).toLowerCase())) continue
+    const file = join(dir, name)
+    let data
+    try {
+      data = readFileSync(file)
+    } catch {
+      continue
+    }
+    if (data.length < PRECOMPRESS_MIN) continue
+    const br = brotliCompressSync(data, {
+      params: { [constants.BROTLI_PARAM_QUALITY]: constants.BROTLI_MAX_QUALITY, [constants.BROTLI_PARAM_SIZE_HINT]: data.length },
+    })
+    const gz = gzipSync(data, { level: 9 })
+    if (br.length < data.length) writeFileSync(file + '.br', br), written.push(name + '.br')
+    if (gz.length < data.length) writeFileSync(file + '.gz', gz), written.push(name + '.gz')
+  }
+  return written
 }
 
 /** The dev server's origin, as the browser reaches it. */
