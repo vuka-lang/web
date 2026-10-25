@@ -311,8 +311,11 @@ func BenchmarkLiveConnMemory(b *testing.B) {
 				open := make([]net.Conn, conns)
 				var wg sync.WaitGroup
 				errs := make(chan error, conns)
+				slots := make(chan struct{}, 32) // within the listen backlog
 				for i := range conns {
+					slots <- struct{}{}
 					wg.Go(func() {
+						defer func() { <-slots }()
 						c, err := rawLive(srv, tok, target)
 						open[i] = c
 						if err != nil {

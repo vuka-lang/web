@@ -139,8 +139,9 @@ const (
 	NoContextTakeover LiveCompressionMode = iota
 	// ContextTakeover keeps each socket's compressor and its 32 KB window
 	// between messages, so a message can refer to the ones before it: a
-	// few percent fewer bytes on a live page's session, for about 1.2 MB
-	// held by every open socket (12 GB at LiveMaxConns' 10,000).
+	// few percent fewer bytes on a live page's session (2% on a 200-row
+	// list), for about 800 KB more held by every open socket (8 GB at
+	// LiveMaxConns' 10,000; NoContextTakeover adds about 2 KB).
 	ContextTakeover
 )
 

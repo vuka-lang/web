@@ -162,7 +162,7 @@ func dial(t *testing.T, srv *httptest.Server, token string, header http.Header) 
 	if header == nil {
 		header = http.Header{"Origin": {srv.URL}}
 	}
-	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+liveSocket+"?t="+token, &websocket.DialOptions{HTTPHeader: header})
+	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+liveSocket+"?t="+token, &websocket.DialOptions{HTTPHeader: header, CompressionMode: websocket.CompressionContextTakeover})
 	if err == nil {
 		t.Cleanup(func() { c.CloseNow() })
 	}
