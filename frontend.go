@@ -143,7 +143,6 @@ type frontend struct {
 	envJS     []byte          // the <script> setting the public values; nil when none
 	index     []byte          // production: index.html as served
 	indexTag  string
-	tags      sync.Map // production: file → ETag
 	hot       *viteHot
 	warned    sync.Map // what development has logged once
 }
@@ -318,42 +317,7 @@ func (f *frontend) serveFile(w http.ResponseWriter, r *http.Request, name string
 		http.Redirect(w, r, h.Origin+joinPath(strings.TrimSuffix(h.Base, "/"), "/"+name), http.StatusTemporaryRedirect)
 		return
 	}
-	file, err := f.files.Open(name)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	defer file.Close()
-	fi, err := file.Stat()
-	content, seeks := file.(io.ReadSeeker)
-	if err != nil || fi.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
-	if !seeks {
-		data, err := io.ReadAll(file)
-		if err != nil {
-			http.Error(w, "reading "+name, http.StatusInternalServerError)
-			return
-		}
-		content = bytes.NewReader(data)
-	}
-	var tag string
-	if f.dev {
-		tag = strconv.FormatInt(fi.ModTime().UnixNano(), 36) + "-" + strconv.FormatInt(fi.Size(), 36)
-	} else if t, ok := f.tags.Load(name); ok {
-		tag = t.(string)
-	} else {
-		data, err := io.ReadAll(content)
-		if err != nil {
-			http.Error(w, "reading "+name, http.StatusInternalServerError)
-			return
-		}
-		tag = cssTag(data)
-		f.tags.Store(name, tag)
-		content = bytes.NewReader(data)
-	}
-	serveContent(w, r, contentType(name), tag, !f.dev && f.immutable[name], content)
+	serveFile(w, r, f.files, name, contentType(name), !f.dev && f.immutable[name], "no-cache")
 }
 
 // serveIndex answers a client-side route with the frontend's page: Vite's
@@ -365,7 +329,7 @@ func (f *frontend) serveIndex(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r) // a build of islands only
 			return
 		}
-		serveContent(w, r, "text/html; charset=utf-8", f.indexTag, false, bytes.NewReader(f.index))
+		serveFixed(w, r, "text/html; charset=utf-8", f.indexTag, false, f.index)
 		return
 	}
 	var page []byte

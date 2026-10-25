@@ -122,6 +122,7 @@ func ms(d time.Duration) string {
 type requestView struct {
 	tbRecord
 	Ms, Func, Pos string
+	SentSize      string // the body's size, and its encoding's on the wire
 	Header, Sent  [][2]string
 	Sections      []factSection
 }
@@ -135,6 +136,10 @@ type factSection struct {
 func requestOf(r tbRecord) requestView {
 	v := requestView{tbRecord: r, Ms: ms(r.Dur), Header: headerRows(r.Req), Sent: headerRows(r.Resp)}
 	v.Func, v.Pos, _ = strings.Cut(r.Handler, " at ")
+	v.SentSize = bytesText(int(r.Body))
+	if r.Encoding != "" && r.Wire > 0 {
+		v.SentSize = fmt.Sprintf("%s → %s %s (%.0f%%)", bytesText(int(r.Body)), bytesText(int(r.Wire)), r.Encoding, 100*float64(r.Wire)/float64(r.Body))
+	}
 	for _, f := range r.Facts {
 		i := slices.IndexFunc(v.Sections, func(s factSection) bool { return s.Name == f.Section })
 		if i < 0 {

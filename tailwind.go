@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
-	"io"
 	"net/http"
 	"os"
 	"sync"
@@ -153,23 +152,7 @@ func (s *stylesheet) serve(w http.ResponseWriter, r *http.Request) {
 // serveTagged answers with content tagged tag: immutable when asked for by
 // that tag (?v=), revalidated by its ETag otherwise.
 func serveTagged(w http.ResponseWriter, r *http.Request, ctype, tag string, content []byte) {
-	serveContent(w, r, ctype, tag, r.URL.Query().Get("v") == tag, bytes.NewReader(content))
-}
-
-// serveContent answers with content tagged tag, cached for good when
-// immutable, else revalidated by its ETag (a 304 when it matches). An empty
-// ctype is sniffed.
-func serveContent(w http.ResponseWriter, r *http.Request, ctype, tag string, immutable bool, content io.ReadSeeker) {
-	if ctype != "" {
-		w.Header().Set("Content-Type", ctype)
-	}
-	w.Header().Set("ETag", `"`+tag+`"`)
-	if immutable {
-		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-	} else {
-		w.Header().Set("Cache-Control", "no-cache")
-	}
-	http.ServeContent(w, r, "", time.Time{}, content)
+	serveFixed(w, r, ctype, tag, r.URL.Query().Get("v") == tag, content)
 }
 
 // headTags is what a full page gets before </head>: the stylesheet's link,
