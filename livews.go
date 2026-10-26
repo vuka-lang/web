@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -739,31 +741,46 @@ var errRedirectScheme = errors.New("live: refused to redirect to a URL that isn'
 
 // errorText is the text the browser gets for an error of the page's
 // handlers, Mount or Update methods, renders or guards (liveErrorText); an
-// error it hides is logged, with the page and what it was running.
+// error whose text the browser doesn't get whole — hidden, or shortened to
+// its public message — is logged in full, with the session, the page, what
+// it was running and, for an event naming no handler, the component.
 func (c *conn) errorText(err error) string {
-	text, public := c.app.liveErrorText(err)
-	if !public {
+	text, whole := c.app.liveErrorText(err)
+	if !whole {
 		ctx := c.pageCtx()
 		if ctx == nil {
 			ctx = c.r.Context()
 		}
-		slog.ErrorContext(ctx, "web: live page", "page", c.uri, "handler", c.doing, "err", err)
+		attrs := []any{"session", c.sessionID(), "page", c.uri, "handler", c.doing}
+		if nh := (*live.NoHandlerError)(nil); errors.As(err, &nh) {
+			attrs = append(attrs, "component", cmp.Or(nh.Component, "none"))
+		}
+		slog.ErrorContext(ctx, "web: live page", append(attrs, "err", err)...)
 	}
 	return text
 }
 
+// sessionID names the connection's page session in the log: a digest of its
+// join token, which the log never holds.
+func (c *conn) sessionID() string {
+	sum := sha256.Sum256([]byte(c.tok))
+	return hex.EncodeToString(sum[:6])
+}
+
 // liveErrorText is the text of a live page's error for the browser, and
-// whether it is the error's own message: in development the error's text,
-// as an HTTP error's; else a *web.Error's message, or another error the
-// browser may read (live.PublicError, such as a form field that doesn't
-// parse), and for any other "Internal Server Error", the error's text
-// going to the log instead.
+// whether that is the error's whole text. In development it is the error's
+// text, whatever it says. Outside it, a *web.Error's message, or another
+// message the browser may read (live.PublicError: a form field that doesn't
+// parse, an event naming no handler as `live: no handler "c3:75"` without
+// whose it was), and for any other error "Internal Server Error": Go type
+// names, raw Go errors and panics' values go to the log only.
 func (a *App) liveErrorText(err error) (string, bool) {
-	if m, ok := live.PublicMessage(err); ok {
-		return m, true
-	}
+	m, public := live.PublicMessage(err)
 	if a.dev {
-		return err.Error(), false
+		return err.Error(), public && m == err.Error()
+	}
+	if public {
+		return m, m == err.Error()
 	}
 	return http.StatusText(http.StatusInternalServerError), false
 }
