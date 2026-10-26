@@ -2,6 +2,7 @@ package graphql
 
 import (
 	"reflect"
+	"slices"
 	"sync"
 
 	"github.com/vuka-lang/vuka/v2"
@@ -53,12 +54,12 @@ type Value string
 // @graphql.Deprecated("use displayName").
 type Deprecated string
 
-// ArgName names an argument; see Arg.
+// ArgName names an argument: the attribute Arg gives.
 type ArgName struct{ Param, Name string }
 
 // Arg names the argument a function's or method's parameter is, in place of
 // the parameter's name: @graphql.Arg("after", "cursor").
-func Arg(param, name string) ArgName { return ArgName{param, name} }
+func Arg(param, name string) vuka.Bundle { return vuka.Compose(ArgName{param, name}) }
 
 // Where each attribute goes (@vuka.Targets): anywhere else is a compile
 // error at the attribute.
@@ -71,9 +72,6 @@ func (Field) vukaTargets() [vuka.OnMethod]struct{}      { return [vuka.OnMethod]
 func (Value) vukaTargets() [vuka.OnVar]struct{}         { return [vuka.OnVar]struct{}{} }
 func (Deprecated) vukaTargets() [vuka.OnFunc | vuka.OnMethod | vuka.OnField | vuka.OnVar]struct{} {
 	return [vuka.OnFunc | vuka.OnMethod | vuka.OnField | vuka.OnVar]struct{}{}
-}
-func (ArgName) vukaTargets() [vuka.OnFunc | vuka.OnMethod]struct{} {
-	return [vuka.OnFunc | vuka.OnMethod]struct{}{}
 }
 
 // enum values' attributes, by type and value (RegisterValue)
@@ -89,8 +87,15 @@ type valueKey struct {
 // has no place for. The compiler generates the call for a constant carrying
 // any; Go code may call it too.
 func RegisterValue[T comparable](v T, attrs ...any) {
-	valueAttrs.Store(valueKey{reflect.TypeFor[T](), v}, attrs)
+	valueMu.Lock()
+	defer valueMu.Unlock()
+	k := valueKey{reflect.TypeFor[T](), v}
+	prev, _ := valueAttrs.Load(k)
+	old, _ := prev.([]any)
+	valueAttrs.Store(k, append(slices.Clip(old), attrs...))
 }
+
+var valueMu sync.Mutex
 
 func attrsOfValue(t reflect.Type, v any) []any {
 	a, _ := valueAttrs.Load(valueKey{t, v})

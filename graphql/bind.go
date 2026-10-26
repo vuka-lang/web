@@ -91,6 +91,34 @@ func Ptr[E any](v any) *E {
 	return nil
 }
 
+// Deref is the value p points to, nil for nil: a field or result of a
+// pointer to a scalar or an enum.
+func Deref[T any](p *T) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// OmitZero is v, nil when it is its type's zero value: a field tagged
+// graphql:",omitempty".
+func OmitZero[T comparable](v T) any {
+	var zero T
+	if v == zero {
+		return nil
+	}
+	return v
+}
+
+// OmitEmpty is the slice xs, nil when it is empty: a list field tagged
+// graphql:",omitempty".
+func OmitEmpty[E any](xs []E) any {
+	if len(xs) == 0 {
+		return nil
+	}
+	return xs
+}
+
 // Binding describes a Go type of the schema: Struct (an object), FormInput
 // (an input object) or Consts (an enum).
 type Binding interface{ binding() binding }
