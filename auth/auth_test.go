@@ -478,11 +478,11 @@ func TestRememberMe(t *testing.T) {
 		}
 	}
 	// JSON says it with a bool.
-	r := c.do("POST", "/auth/login", `{"login":"bob@example.com","password":"hunter22","remember":true}`, "Content-Type", "application/json")
+	r := c.do("POST", "/auth/login", `{"login":"bob@example.com","password":"hunter22","remember":true}`, "Content-Type", "application/json", "Sec-Fetch-Site", "same-origin")
 	if set := r.header.Get("Set-Cookie"); r.status != 200 || !strings.Contains(set, "Max-Age=") {
 		t.Errorf("JSON remember: %d %s", r.status, set)
 	}
-	r = c.do("POST", "/auth/login", `{"login":"bob@example.com","password":"hunter22"}`, "Content-Type", "application/json")
+	r = c.do("POST", "/auth/login", `{"login":"bob@example.com","password":"hunter22"}`, "Content-Type", "application/json", "Sec-Fetch-Site", "same-origin")
 	if set := r.header.Get("Set-Cookie"); strings.Contains(set, "Max-Age=") {
 		t.Errorf("JSON without remember: %s", set)
 	}
@@ -764,8 +764,8 @@ func TestCSRF(t *testing.T) {
 	if s := post("Sec-Fetch-Site", "same-origin", "Origin", c.srv.URL); s != 200 {
 		t.Errorf("a same-origin POST: %d", s)
 	}
-	if s := post(); s != 200 {
-		t.Errorf("a POST saying nothing of its origin (not a browser): %d", s)
+	if s := post(); s != 403 {
+		t.Errorf("a POST with the session cookie saying nothing of its origin, without a CSRF token: %d", s)
 	}
 	r := c.do("POST", "/auth/login", "login=ada@example.com&password=correct+horse", "Content-Type", "application/x-www-form-urlencoded",
 		"Accept", html, "Sec-Fetch-Site", "cross-site", "Origin", "https://evil.example")

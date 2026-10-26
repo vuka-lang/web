@@ -463,10 +463,11 @@ func TestCSRFContext(t *testing.T) {
 	}
 	form := "token=" + tok
 	ct := "application/x-www-form-urlencoded"
-	if _, ok, _ := do(t, h, "POST", "/check", form, "Content-Type", ct, "Cookie", cookie); ok != "true" {
+	same := "Sec-Fetch-Site" // a browser says where the post comes from
+	if _, ok, _ := do(t, h, "POST", "/check", form, "Content-Type", ct, "Cookie", cookie, same, "same-origin"); ok != "true" {
 		t.Errorf("valid token: %q", ok)
 	}
-	if _, ok, _ := do(t, h, "POST", "/check", form, "Content-Type", ct, "Cookie", csrfCookie+"=another-browser-cookie-value-x"); ok != "false" {
+	if _, ok, _ := do(t, h, "POST", "/check", form, "Content-Type", ct, "Cookie", csrfCookie+"=another-browser-cookie-value-x", same, "same-origin"); ok != "false" {
 		t.Errorf("another browser's token: %q", ok)
 	}
 }
