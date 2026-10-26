@@ -482,7 +482,7 @@ func (a *App) page(rq *request, n ui.Node) {
 	if !wholePage(r) {
 		if n != nil {
 			defer a.span(rq.ctx, "render", "page")()
-			if err := n.Render(rq.ctx, buf); err != nil {
+			if err := render(rq.ctx, n, buf); err != nil {
 				a.writeError(w, r, err, true)
 				return
 			}

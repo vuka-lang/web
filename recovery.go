@@ -1,13 +1,16 @@
 package web
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"runtime/debug"
 	"strings"
 
 	"github.com/coder/websocket"
+	"github.com/vuka-lang/ui/v2"
 )
 
 // recoverHTTP covers custom routers, middleware and framework handlers as
@@ -32,15 +35,31 @@ func (a *App) recoverRequest(w *trackingWriter, r *http.Request, html bool) {
 		if p == http.ErrAbortHandler {
 			panic(p)
 		}
-		logPanic(r, p)
+		failed, isFailure := ui.Failed(p)
+		if !isFailure {
+			logPanic(r, p)
+		}
 		if w.wrote {
 			if w.hijacked != nil {
 				w.hijacked.Close()
 			}
 			panic(http.ErrAbortHandler)
 		}
+		if isFailure {
+			// A (T, error) call in markup run outside a render (a layout's
+			// markup, a handler's): its error, as the render's would be.
+			a.panicResponse(w, r, failed, html)
+			return
+		}
 		a.panicResponse(w, r, fmt.Errorf("panic: %v", p), html)
 	}
+}
+
+// render renders n into w: a (T, error) call in its markup failing
+// (ui.Must) is its error, as a Mount error is.
+func render(ctx context.Context, n ui.Node, w io.Writer) (err error) {
+	defer ui.Catch(&err)
+	return n.Render(ctx, w)
 }
 
 // Drop framing and representation metadata from an unfinished response, while
