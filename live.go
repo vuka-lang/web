@@ -469,6 +469,10 @@ func matchName(names []string, name string) string {
 // live — a join would rebuild it with GET — so its script has no token.
 func (a *App) page(rq *request, n ui.Node) {
 	w, r := rq.w, rq.r
+	if rq.route != nil && rq.route.formPost {
+		a.formPost(rq, n)
+		return
+	}
 	if j, ok := r.Context().Value(joinKey{}).(*join); ok {
 		j.page, j.ctx = n, rq.ctx
 		return

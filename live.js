@@ -111,7 +111,8 @@
         }
         const done = [];
         for (const u of ups) if (!done.some((el) => el && el.isConnected && el.contains(byID(u.id)))) done.push(apply(u));
-        if (b && b.form && !m.error && b.form.isConnected) b.form.reset();
+        if (b && b.form && !m.error && b.form.isConnected && !b.form.hasAttribute("data-vk-form")) b.form.reset();
+        if (b && b.form && b.form.isConnected && b.form.hasAttribute("data-vk-form") && !b.aborted) submitted(b.form);
         if (m.error) fail(m.error, m.ref);
         if (n) arrived(n, m);
         else markActive();
@@ -239,6 +240,8 @@
     const el = owner(t, e.type);
     if (!el || el.hasAttribute("data-vk-js-" + e.type) && commands(el, e) === false) return;
     if (!el.hasAttribute("data-vk-on-" + e.type)) return;
+    const vf = el.tagName === "FORM" && el.hasAttribute("data-vk-form") ? el : null;
+    if (vf && e.type === "submit" && !joined) return; // no connection: the form posts to the page
     prevent(el, e);
     const keys = el.getAttribute("data-vk-key");
     if (keys && e.key !== undefined && !keys.split(/\s+/).includes(e.key)) return;
@@ -247,7 +250,13 @@
     if (typeof e.key === "string") msg.key = e.key;
     const v = valueOf(el);
     if (v !== undefined) msg.value = v;
-    if (e.type === "submit") msg.form = formOf(e.target.closest("form") || el, e.submitter);
+    if (vf) {
+      if (!formEvent(vf, t, e, msg)) return;
+      if (e.type !== "input" && e.type !== "submit") { // leaving a field, a choice: at once
+        flush();
+        return void send(msg);
+      }
+    } else if (e.type === "submit") msg.form = formOf(e.target.closest("form") || el, e.submitter);
     const wait = +el.getAttribute("data-vk-debounce");
     if (wait > 0 && e.type !== "submit") {
       const p = pending.get(el);
@@ -258,6 +267,68 @@
     flush();
     send(msg, el, e.type === "submit" ? e.target.closest("form") : null);
   }
+
+  // Struct forms (<ui.Form for>, data-vk-form): the server decides what
+  // shows of their checks, from what the runtime tells it — which fields the
+  // visitor used (left with something in them, or changed while showing an
+  // error), kept in the form's _vk_used field, and a sequence number on each
+  // change, so a change arriving after a submit can't undo its reply. A
+  // model.lazy field (data-vk-lazy) syncs on change, not on input. A submit
+  // sent while one is in flight is dropped (data-vk-submit="prevent", the
+  // default), sent with the first's reply ignored ("abort"), or sent
+  // ("allow").
+  let formSeq = 0;
+  const filled = (f) => checkable(f) ? f.checked : f.value !== "";
+
+  function formEvent(form, t, e, msg) {
+    const f = t && isField(t) && t.form === form ? t : null;
+    if (e.type === "input" && f && f.hasAttribute("data-vk-lazy")) return false;
+    if (e.type === "change" && f && !checkable(f) && f.tagName !== "SELECT" && !f.hasAttribute("data-vk-lazy")) return false; // focusout sends it
+    if (f && f.name && (e.type === "focusout" && filled(f) || f.getAttribute("aria-invalid") === "true" || e.type === "change" && checkable(f))) {
+      const used = form.querySelector('input[name="_vk_used"]');
+      if (used) {
+        const names = used.value ? used.value.split(",") : [];
+        if (!names.includes(f.name)) used.value = names.concat(f.name).join(",");
+      }
+    }
+    if (e.type === "submit") {
+      const policy = form.getAttribute("data-vk-submit") || "prevent";
+      for (const b of busy.values()) {
+        if (b.form !== form) continue;
+        if (policy === "prevent") return false;
+        if (policy === "abort") b.aborted = true;
+      }
+    }
+    msg.form = formOf(form, e.type === "submit" ? e.submitter : undefined);
+    msg.form._vk_seq = [String(++formSeq)];
+    return true;
+  }
+
+  // submitted follows a struct form's submit reply: a failed submit moves
+  // focus to the error summary (or the first field in error) and starts the
+  // page's title with "Error: "; a successful one takes the prefix off.
+  function submitted(form) {
+    const id = form.getAttribute("data-vk-form");
+    const bad = document.getElementById(id + "-summary") || form.querySelector('[aria-invalid="true"]');
+    const t = document.title;
+    if (bad) {
+      bad.focus();
+      if (!t.startsWith("Error: ")) document.title = "Error: " + t;
+    } else if (t.startsWith("Error: ")) document.title = t.slice(7);
+  }
+
+  // An error summary's links move focus to the field, its label in view.
+  document.addEventListener("click", (e) => {
+    const a = e.target instanceof Element && e.target.closest("[data-vk-summary] a[href^='#']");
+    if (!a || e.button || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    const el = document.getElementById(decodeURIComponent(a.getAttribute("href").slice(1)));
+    if (!el) return;
+    e.preventDefault();
+    const label = el.id && document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+    const legend = el.closest("fieldset") && el.closest("fieldset").querySelector("legend");
+    (legend || label || el).scrollIntoView();
+    el.focus({ preventScroll: true });
+  });
 
   function flush() {
     pending.forEach((p) => { clearTimeout(p.timer); send(p.msg); });

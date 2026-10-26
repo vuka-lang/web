@@ -301,6 +301,7 @@ func Module(cfg Config) web.Option {
 	return web.Options(
 		web.Provide(a),
 		web.CSRF(cfg.TrustedOrigins...),
+		web.SessionCookies(a.cfg.Cookie),
 		web.WrapRoutes(wrapperName, a.wrapRoute),
 		web.ParamFrom(func(r *http.Request) (*Identity, error) { return Current(r.Context()), nil }),
 		web.ParamFrom(func(r *http.Request) (Identity, error) {

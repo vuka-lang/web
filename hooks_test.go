@@ -58,8 +58,8 @@ func TestWrapRoutes(t *testing.T) {
 	if code, _, _ := do(t, h, "GET", "/counter", ""); code != 403 {
 		t.Errorf("a live page's attributes: %d", code)
 	}
-	if len(seen) != 3 {
-		t.Fatalf("routes seen: %+v", seen)
+	if len(seen) != 4 {
+		t.Fatalf("routes seen (a live page's forms post to a POST of its path): %+v", seen)
 	}
 	for _, info := range seen {
 		switch info.Path {
