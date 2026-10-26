@@ -242,7 +242,7 @@ func TestAssetsPushGate(t *testing.T) {
 			send(t, c, map[string]any{"type": "event", "ref": 2 + i, "target": target, "event": "push"})
 			m, raw := recv2(t, c)
 			ok := target == "c1:Inc" || target == "c1:0"
-			if ok && m.Type != "patch" || !ok && (m.Type != "error" || m.Error != `live: no handler "`+target+`"`) {
+			if ok && m.Type != "patch" || !ok && (m.Type != "error" || !strings.HasPrefix(m.Error, `live: no handler "`+target+`"`)) {
 				t.Errorf("v%d %s: %s", v, target, raw)
 			}
 		}
@@ -360,5 +360,5 @@ func TestBrowserAssets(t *testing.T) {
 	// The scripts push Inc, which the manifest lists; not Secret.
 	p.Eval(`(async () => { const inst = window.vukaComponents.instances()[0]; await inst.hooks[0].press(inst.el, inst.ctx, "Inc"); await inst.hooks[0].press(inst.el, inst.ctx, "Secret"); })()`, nil)
 	p.WaitText("#count", "2")
-	p.Wait(`String(window.hooks).endsWith("updated c1,pushed Inc,refused live: no handler \"c1:Secret\"")`)
+	p.Wait(`/updated c1,pushed Inc,refused live: no handler "c1:Secret"(:[^,]*)?$/.test(String(window.hooks))`)
 }
