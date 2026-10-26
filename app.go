@@ -446,6 +446,16 @@ func (a *App) build() (http.Handler, error) {
 			errs = append(errs, err)
 		}
 	}
+	if graphqlTool() {
+		// vuka graphql schema runs the app for its schema, which web.GraphQL's
+		// check writes and exits with: an app without one has none.
+		if len(errs) > 0 {
+			fmt.Fprintln(os.Stderr, errors.Join(errs...))
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "web: the app serves no GraphQL schema: mount one with web.GraphQL(\"/graphql\")")
+		os.Exit(1)
+	}
 	errs = append(errs, takeEnvErrors()...) // the routes' middleware may read Env
 	if err := a.checkRequired(); err != nil {
 		errs = append(errs, err)

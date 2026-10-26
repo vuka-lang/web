@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"reflect"
 	"sync"
 
@@ -164,6 +165,11 @@ func (a *App) callGuard() func(ctx context.Context, attrs []any, byDefault bool)
 		}
 		return nil
 	}
+}
+
+// graphqlTool reports whether the app runs for vuka graphql schema.
+func graphqlTool() bool {
+	return os.Getenv("VUKA_GRAPHQL_SCHEMA") != "" || os.Getenv("VUKA_GRAPHQL_CHECK") != ""
 }
 
 // LogError logs err for the request ctx belongs to, as a handler's server
