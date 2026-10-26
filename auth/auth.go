@@ -313,6 +313,7 @@ func Module(cfg Config) web.Option {
 		web.LiveCheck(a.liveCheck),
 		web.LiveIdentity(signedIn),
 		web.GuardLiveEvents(a.guardEvent),
+		web.GuardCalls(a.guardCall),
 		web.TrackRequests(),
 		web.CronContext(System),
 		web.GuardVars(a.guardVars),

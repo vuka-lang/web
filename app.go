@@ -99,6 +99,7 @@ type App struct {
 
 	procList     []any // ContextProcessors'
 	varGuards    []func(context.Context, []any) error
+	callGuards   []func(context.Context, []any, bool) error // GuardCalls'
 	personalPkgs []string
 	vars         *varSet // nil: no context processors
 	joinMessages msgStash
@@ -516,7 +517,7 @@ func (a *App) wrapRoute(s *routeSpec, h http.Handler) (http.Handler, error) {
 			inner.ServeHTTP(w, r)
 		})
 	}
-	info := RouteInfo{Method: s.method, Path: s.path, Where: s.where, Attrs: slices.Clip(s.attrs), Live: s.live != nil, HTML: s.html || s.live != nil, RootLayout: rootLayout(s)}
+	info := RouteInfo{Method: s.method, Path: s.path, Where: s.where, Attrs: slices.Clip(s.attrs), Live: s.live != nil, HTML: s.html || s.live != nil, RootLayout: rootLayout(s), Calls: s.calls}
 	if s.live != nil {
 		info.LiveType = s.live.typ
 	}

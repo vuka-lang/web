@@ -15,6 +15,8 @@ import (
 // catalogue, which `vuka explain` prints.
 func TestDiagnosticCodes(t *testing.T) {
 	files, _ := filepath.Glob("*.go")
+	more, _ := filepath.Glob("graphql/*.go")
+	files = append(files, more...)
 	codes := regexp.MustCompile(`"([EW]\d{4})"`)
 	n := 0
 	for _, f := range files {
