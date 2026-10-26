@@ -39,7 +39,7 @@ type Message struct {
 func (x *session) Join(ref int) any {
 	html, err := x.s.Render()
 	if err != nil {
-		return live.ServerMessage{Type: live.Error, Ref: ref, Error: err.Error()}
+		return live.ServerMessage{Type: live.Error, Ref: ref, Error: x.s.ErrorText(err)}
 	}
 	return Message{Type: live.Render, Ref: ref, V: 2, Trees: x.enc.Render(html), JS: x.s.JS()}
 }
@@ -50,7 +50,7 @@ func (x *session) Event(m live.ClientMessage) any {
 	}
 	p, err := x.s.Event(m.Event)
 	if err != nil {
-		return live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: err.Error()}
+		return live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: x.s.ErrorText(err)}
 	}
 	return x.patch(m.Ref, p)
 }
@@ -58,7 +58,7 @@ func (x *session) Event(m live.ClientMessage) any {
 func (x *session) Navigate(ref int, url string, rt live.Route, patch bool) (any, bool) {
 	p, err := x.s.Navigate(rt, patch)
 	if err != nil {
-		return live.ServerMessage{Type: live.Error, Ref: ref, Error: err.Error()}, false
+		return live.ServerMessage{Type: live.Error, Ref: ref, Error: x.s.ErrorText(err)}, false
 	}
 	m := x.patch(ref, p)
 	m.URL = url
@@ -69,7 +69,7 @@ func (x *session) Info(topic string, msg any) any {
 	p, err := x.s.Info(topic, msg)
 	switch {
 	case err != nil:
-		return live.ServerMessage{Type: live.Error, Error: err.Error()}
+		return live.ServerMessage{Type: live.Error, Error: x.s.ErrorText(err)}
 	case len(p.Updates) > 0 || len(p.JS) > 0 || p.Error != "":
 		return x.patch(0, p)
 	}
@@ -83,6 +83,10 @@ func (x *session) patch(ref int, p live.Patch) Message {
 	}
 	return Message{Type: live.PatchMsg, Ref: ref, Trees: x.enc.Patch(ups), JS: p.JS, Error: p.Error}
 }
+
+// SetErrorText sets the text the browser gets for an error
+// (live.Session.SetErrorText).
+func (x *session) SetErrorText(text func(error) string) { x.s.SetErrorText(text) }
 
 func (x *session) Topics() []string { return x.s.Topics() }
 func (x *session) Close()           { x.s.Close() }

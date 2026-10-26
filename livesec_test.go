@@ -173,7 +173,9 @@ func (p *secErrs) Render() ui.Node {
 
 // Outside development a live page's errors reach the browser as an HTTP
 // route's do: a *web.Error's message, else "Internal Server Error", the
-// error itself going to the log with the page and the handler.
+// error itself going to the log with the page and the handler; an event
+// naming no handler gets the short form, without Go type names. In
+// development the browser gets the full text.
 func TestLiveErrorsHidden(t *testing.T) {
 	var logs bytes.Buffer
 	old := slog.Default()
@@ -200,6 +202,15 @@ func TestLiveErrorsHidden(t *testing.T) {
 		if m := must(t, c); !strings.Contains(m.Error, `"x" isn't a whole number`) {
 			t.Errorf("dev %v: a field that doesn't parse: %q", dev, m.Error)
 		}
+		// A stale handler id: outside development the short form, naming no
+		// Go type; the log has whose it was.
+		id, _, _ := strings.Cut(handlerOf(t, html, "click", 0), ":")
+		send(t, c, map[string]any{"type": "event", "ref": 4, "target": id + ":99", "event": "click"})
+		short := `live: no handler "` + id + `:99"`
+		full := short + ": web.secErrs (" + id + "): its last render has 4"
+		if m := must(t, c); m.Type != live.Error || !dev && m.Error != short || dev && m.Error != full {
+			t.Errorf("dev %v: a stale handler: %+v", dev, m)
+		}
 		_, tok := pageToken(t, srv, "/p")
 		c2, err := dial(t, srv, strings.Replace(tok, tok, app.signToken("/p?fail=mount"), 1), nil)
 		if err != nil {
@@ -210,7 +221,8 @@ func TestLiveErrorsHidden(t *testing.T) {
 			t.Errorf("dev %v: Mount's error at the join: %+v", dev, m)
 		}
 		srv.Close()
-		for _, want := range []string{"password_hash", "secrets.env", "password authentication", "page=/p", "handler="} {
+		for _, want := range []string{"password_hash", "secrets.env", "password authentication", "page=/p", "handler=", "session=",
+			"err=\"live: no handler \\\"" + id + ":99\\\": web.secErrs (" + id + "): its last render has 4\"", "component=web.secErrs"} {
 			if !strings.Contains(logs.String(), want) {
 				t.Errorf("dev %v: the log lacks %q:\n%s", dev, want, logs.String())
 			}

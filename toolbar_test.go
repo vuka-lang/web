@@ -314,9 +314,18 @@ func TestToolbarLive(t *testing.T) {
 	if m := must(t, c); m.Type != live.Error {
 		t.Fatalf("an unknown handler: %+v", m)
 	}
+	// In development a stale handler's reply says whose it was, for the
+	// browser's console and the toolbar.
+	stale, _, _ := strings.Cut(handlerOf(t, m.HTML, "submit", 0), ":")
+	stale += ":99"
+	send(t, c, map[string]any{"type": "event", "ref": 4, "target": stale, "event": "click"})
+	full := `live: no handler "` + stale + `": web.chat (`
+	if m := must(t, c); m.Type != live.Error || !strings.HasPrefix(m.Error, full) {
+		t.Fatalf("a stale handler in development: %+v", m)
+	}
 
 	sum, html := fetchRecord(t, app.Handler(), id)
-	if sum["live"] != 4.0 || sum["tone"] != "err" {
+	if sum["live"] != 5.0 || sum["tone"] != "err" {
 		t.Errorf("summary: %v", sum)
 	}
 	for _, want := range []string{
@@ -324,7 +333,8 @@ func TestToolbarLive(t *testing.T) {
 		`<span class="type t-join">join</span> <code>/chat/lobby</code>`,
 		`<span class="type t-event">event</span> <code>chat.Send (submit)</code>`,
 		`<span class="type t-broadcast">broadcast</span> <code>room:lobby web.said</code>`,
-		`data-ref="3" data-err`, `live: no handler &#34;c9:9&#34;`,
+		`data-ref="3" data-err`, `live: no handler &#34;c9:9&#34;: no component c9 is mounted`,
+		`data-ref="4" data-err`, strings.ReplaceAll(full, `"`, "&#34;"),
 		`<span class="kind">handler</span> live page web.chat`, // the join ran the route
 	} {
 		if !strings.Contains(html, want) {

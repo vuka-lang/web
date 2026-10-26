@@ -492,10 +492,14 @@ logged to the console.
 
 **Errors.** What the browser reads of an error follows HTTP: a `*web.Error`'s
 message (`web.BadRequest("a name, please")`, `web.Status(409, …)`) as it is,
-and a field that doesn't parse; any other error — a handler's, `Mount`'s or
-`Update`'s, or a panic — is `Internal Server Error`, the error itself going
-to the log (`slog`, with the page and the handler). In development
-(`web.Dev()`, `VUKA_ENV=development`) the browser gets every error's text.
+and a field that doesn't parse; an event naming a handler the session no
+longer has is `live: no handler "c3:75"`; any other error — a handler's,
+`Mount`'s or `Update`'s, or a panic — is `Internal Server Error`. What the
+browser doesn't get of an error (all of it, or the detail of a no-handler
+error: whose handler it was, by Go type) goes to the log (`slog`, with the
+session, the page, the handler and the component). In development
+(`web.Dev()`, `VUKA_ENV=development`, `vuka run`) the browser — its console and
+the toolbar — gets every error's full text.
 
 **Broadcasts.** `web.Broadcast(ctx, topic, msg)` — from an event handler, an
 `Update`, or any request — delivers `msg` to every component subscribed to
