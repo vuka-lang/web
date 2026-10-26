@@ -308,3 +308,23 @@ func TestBuildErrors(t *testing.T) {
 		t.Errorf("no store: %v", err)
 	}
 }
+
+func TestCrossOrigin(t *testing.T) {
+	h := newApp(t, &auth.Identity{ID: "1"})
+	r := httptest.NewRequest("POST", "/graphql", strings.NewReader(`{"query":"{ users(first: 1) { name } }"}`))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	r.Header.Set("Origin", "https://elsewhere.example")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("a cross-origin POST: %d %s", w.Code, w.Body)
+	}
+	r = httptest.NewRequest("GET", "/graphql?query=%7Busers(first%3A1)%7Bname%7D%7D", nil)
+	r.Header.Set("Sec-Fetch-Site", "cross-site")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"ada"`) {
+		t.Errorf("a cross-origin GET of a query: %d %s", w.Code, w.Body)
+	}
+}
