@@ -39,6 +39,7 @@ type routeSpec struct {
 	reloads      []reflect.Type // ReloadLayout's layouts
 	recvCtor     reflect.Value  // the receiver's constructor (Receiver)
 	mwOf         []useOf        // UseOf's middleware, resolved when the app is built
+	formPost     bool           // a live page's forms' POST (formTwins)
 }
 
 type request struct {
@@ -53,6 +54,7 @@ func (a *App) newRequest(w http.ResponseWriter, r *http.Request, s *routeSpec) *
 	rq := &request{w: w, r: r, app: a, route: s}
 	rq.ctx = ui.WithInjector(context.WithValue(r.Context(), ctxKey{}, rq), injector{a})
 	rq.ctx = ui.WithPageURL(rq.ctx, r.URL, a.pathParam(r))
+	rq.ctx = ui.WithFormHost(rq.ctx, formHost{a})
 	a.withVars(rq)
 	return rq
 }

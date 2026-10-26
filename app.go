@@ -42,11 +42,14 @@ type App struct {
 	checks  []func(*App) error
 	recheck map[reflect.Type]bool // island pages whose check waits for their constructor
 
-	wraps      []routeWrap
-	binders    map[reflect.Type]func(*http.Request) (reflect.Value, error)
-	liveChecks []func(context.Context) error
-	liveGuards []func(context.Context, LiveHandler) error
-	csrf       *http.CrossOriginProtection
+	wraps          []routeWrap
+	binders        map[reflect.Type]func(*http.Request) (reflect.Value, error)
+	liveChecks     []func(context.Context) error
+	liveGuards     []func(context.Context, LiveHandler) error
+	csrf           *http.CrossOriginProtection
+	csrfBypass     []string     // CSRFBypass's patterns
+	formStore      ui.FormStore // FormStore's; nil: ui's, in memory
+	sessionCookies []string     // SessionCookies'
 
 	envFiles []string // nil: the defaults
 	env      *envLoad
@@ -110,7 +113,7 @@ type App struct {
 // the env files into the process environment (see LoadEnv), so constructors
 // and Start methods see their values through os.Getenv.
 func New(opts ...Option) *App {
-	a := &App{c: newContainer(), reg: snapshot(), liveTTL: 12 * time.Hour, liveMax: 2, hub: newHub(), adoptWindow: defaultLiveAdoptWindow}
+	a := &App{c: newContainer(), reg: snapshot(), liveTTL: 12 * time.Hour, liveMax: 2, hub: newHub(), adoptWindow: defaultLiveAdoptWindow, csrf: http.NewCrossOriginProtection()}
 	for _, o := range opts {
 		o.apply(a)
 	}
@@ -366,6 +369,7 @@ func (a *App) build() (http.Handler, error) {
 		specs = append(specs, ps...)
 	}
 	specs = append(specs, a.specs...)
+	specs = append(specs, formTwins(specs)...)
 	rec := &recordingRouter{Router: a.router}
 	a.router = rec
 	defer func() { a.router = rec.Router }()
@@ -429,6 +433,11 @@ func (a *App) build() (http.Handler, error) {
 			errs = append(errs, err)
 		}
 	}
+	for _, p := range a.csrfBypass {
+		if err := addBypass(a.csrf, p); err != nil {
+			errs = append(errs, err)
+		}
+	}
 	errs = append(errs, a.compileCrons()...)
 	errs = append(errs, a.compileVars()...)
 	for _, f := range a.checks {
@@ -474,9 +483,7 @@ func (a *App) build() (http.Handler, error) {
 		}
 		h = newSlashes(h, served, targets)
 	}
-	if a.csrf != nil {
-		h = a.csrfProtect(h)
-	}
+	h = a.csrfProtect(h)
 	for i := len(a.mw) - 1; i >= 0; i-- {
 		h = a.layer(a.mw[i], h)
 	}
@@ -501,6 +508,7 @@ func (a *App) wrapRoute(s *routeSpec, h http.Handler) (http.Handler, error) {
 				WithHelp("provide it, or add the module that does (web/auth for its gates)")
 		}
 	}
+	h = a.csrfTokens(h)
 	if a.trackRequests {
 		inner := h
 		h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

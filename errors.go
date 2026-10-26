@@ -99,6 +99,10 @@ type Redirect string
 func (r Redirect) Error() string                           { return "redirect to " + string(r) }
 func (r Redirect) Render(context.Context, io.Writer) error { return nil }
 
+// RedirectLocation is the URL: a live page's handler returning a Redirect
+// moves the page there (ui.RedirectOf).
+func (r Redirect) RedirectLocation() string { return string(r) }
+
 func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, htmlPage bool) {
 	// A redirect returned anywhere — a page handler, a live view's Mount or
 	// render — redirects, rather than becoming a 500. The request path handles
