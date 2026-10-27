@@ -961,6 +961,166 @@ test("navigate: a URL that isn't http or https is refused and rejects", async ()
   }
 });
 
+// Navigation over HTTP: a page that isn't live fetches the page with
+// Vk-Navigate and patches its body in place.
+const layout = (main) => `<header><input id="q"><a id="home" href="/" data-vk-link data-vk-active="exact">home</a></header><main>${main}</main>`;
+const plainShelf = (n) => layout(`<p id="at">page ${n}</p>
+  <a id="next" href="/shelf?page=${n + 1}" data-vk-link="patch">next</a>
+  <a id="book" href="/books/7#notes" data-vk-link><b>a book</b></a>
+  <a id="tab" href="/books/8" target="_blank" data-vk-link>tab</a>
+  <a id="away" href="https://elsewhere.test/x" data-vk-link>away</a>
+  <a id="full" href="/report" data-vk-link data-vk-reload>report</a>
+  <a id="jump" href="/shelf?page=${n}#at" data-vk-link>jump</a>`);
+const plainBook = (id) => layout(`<h1 id="notes">book ${id}</h1><a id="shelf" href="/shelf?page=2" data-vk-link>shelf</a>`);
+const docOf = (title, body, headExtra = "") => `<!doctype html><html><head><title>${title}</title>${headExtra}</head><body>${body}<script src="/_vuka/live.js?v=1" data-vk-build-id="b1" defer></script></body></html>`;
+const pageReply = (body, o = {}) => ({ headers: { "Vk-Page": "-", ...(o.headers || {}) }, body: docOf(o.title || "Book", body, o.head), ...(o.url ? { url: o.url } : {}), ...(o.status ? { status: o.status } : {}) });
+const plain = (o = {}) => open(plainShelf(1), { build: "b1", url: "http://test/shelf?page=1", ...o });
+
+test("http navigation: a link on a page that isn't live is fetched with Vk-Navigate and its body patched in place", async () => {
+  const p = plain();
+  const header = p.$("header"), q = p.$("#q");
+  q.value = "typed";
+  const seen = [];
+  p.window.addEventListener("vk:navigate", (e) => seen.push(e.detail));
+  const e = p.fire("#book b", "click", { button: 0 });
+  eq([e.defaultPrevented, p.fetches.length, p.fetches[0].url, p.fetches[0].headers["Vk-Navigate"], p.doc.documentElement.getAttribute("data-vk-navigating")],
+    [true, 1, "http://test/books/7", "b1", "/books/7"], "fetched, in flight");
+  p.reply(0, pageReply(plainBook(7), { title: "Dune", head: `<meta name="x" content="1">` }));
+  await flushed();
+  eq([p.$("header") === header, p.$("#q") === q, q.value, p.$("h1").textContent, p.doc.title, p.doc.head.querySelectorAll("meta").length],
+    [true, true, "typed", "book 7", "Dune", 1], "the layout's elements and what was typed stay; the head is merged");
+  eq([p.location.href, p.entries, p.doc.documentElement.hasAttribute("data-vk-navigating"), seen, p.loads],
+    ["http://test/books/7#notes", ["http://test/books/7#notes"], false, [{ url: "http://test/books/7#notes", patch: false }], []], "the address");
+  eq([p.doc.scrolled.length && p.doc.scrolled[0][0].id, p.doc.activeElement.tagName, p.history.scrollRestoration], ["notes", "MAIN", "manual"], "scroll to the hash, focus main, the runtime restores scroll");
+  p.fire("#shelf", "click");
+  p.reply(1, pageReply(plainShelf(2)));
+  await flushed();
+  eq([p.$("#at").textContent, p.scrolls, p.loads], ["page 2", [[0, 0]], []], "the next one, to the top");
+});
+
+test("http navigation: a patch link keeps scroll and focus; a command navigates too", async () => {
+  const p = plain();
+  p.$("#q").focus();
+  p.fire("#next", "click");
+  p.reply(0, pageReply(plainShelf(2)));
+  await flushed();
+  eq([p.$("#at").textContent, p.scrolls, p.doc.activeElement.id, p.location.href], ["page 2", [], "q", "http://test/shelf?page=2"], "patched");
+  p.window.vuka.run(p.doc.body, [["navigate", { href: "/books/9" }]]);
+  eq(p.fetches.map((f) => f.url), ["http://test/shelf?page=2", "http://test/books/9"], "the command fetches");
+});
+
+test("http navigation: what stays the browser's", () => {
+  const p = plain();
+  for (const [sel, init] of [["#next", { ctrlKey: true }], ["#next", { metaKey: true }], ["#next", { shiftKey: true }], ["#next", { button: 1 }], ["#tab", {}], ["#away", {}], ["#jump", {}], ["#full", {}]]) {
+    eq(p.fire(sel, "click", init).defaultPrevented, false, sel + " " + JSON.stringify(init));
+  }
+  eq(p.fetches.length, 0, "nothing fetched");
+  const old = open(plainShelf(1), { url: "http://test/shelf?page=1" });
+  eq([old.fire("#book", "click").defaultPrevented, old.fetches.length], [false, 0], "a page whose server names no build");
+});
+
+test("http navigation: what can't be patched is loaded", async () => {
+  const cases = [
+    ["another build", { headers: { "Vk-Reload": "build" }, status: 204 }, "http://test/books/7#notes"],
+    ["the route asks", { headers: { "Vk-Reload": "route" }, status: 204 }, "http://test/books/7#notes"],
+    ["plain scripts", { headers: { "Vk-Reload": "scripts" }, status: 204 }, "http://test/books/7#notes"],
+    ["another root layout", pageReply(plainBook(7), { headers: { "Vk-Page": "r2" } }), "http://test/books/7#notes"],
+    ["not a page", { headers: { "content-type": "application/json" }, body: "{}" }, "http://test/books/7#notes"],
+    ["a page the app wrote itself", { body: "<p>hi</p>" }, "http://test/books/7#notes"],
+    ["a redirect elsewhere", { url: "https://elsewhere.test/x", body: "x" }, "http://test/books/7#notes"],
+    ["a redirect to a file", { url: "/report.pdf", headers: { "content-type": "application/pdf" } }, "http://test/report.pdf"],
+    ["a network failure", { error: "offline" }, "http://test/books/7#notes"],
+  ];
+  for (const [what, r, want] of cases) {
+    const p = plain();
+    p.fire("#book", "click");
+    p.reply(0, r);
+    await flushed();
+    eq([p.loads, p.$("#at") && p.$("#at").textContent], [[["assign", want]], "page 1"], what);
+  }
+  const p = plain();
+  p.fire("#book", "click");
+  p.tick(10000);
+  eq([p.loads, p.fetches[0].aborted], [[["assign", "http://test/books/7#notes"]], true], "no reply in 10s");
+  p.reply(0, pageReply(plainBook(7)));
+  await flushed();
+  eq(p.$("#at").textContent, "page 1", "a late reply moves nothing");
+});
+
+test("http navigation: a redirect the fetch followed and an error page under the same root are patched", async () => {
+  const p = plain({ root: "r1" });
+  p.fire("#book", "click");
+  p.reply(0, pageReply(plainBook(8), { url: "/books/8", headers: { "Vk-Page": "r1" } }));
+  await flushed();
+  eq([p.loads, p.location.href, p.$("h1").textContent], [[], "http://test/books/8", "book 8"], "redirected");
+  p.fire("#shelf", "click");
+  p.reply(1, pageReply(`<h1>404 Not Found</h1>`, { status: 404, headers: { "Vk-Page": "r1" } }));
+  await flushed();
+  eq([p.loads, p.location.href, p.$("h1").textContent, p.fetches.length], [[], "http://test/shelf?page=2", "404 Not Found", 2], "the error page, not fetched again");
+});
+
+test("http navigation: another move aborts the one in flight", async () => {
+  const p = plain();
+  const first = settled(p.window.vuka.navigate("/books/7"));
+  p.fire("#next", "click");
+  await flushed();
+  eq([first.v, p.fetches[0].aborted, p.fetches.length], ["rejected live: another navigation took its place", true, 2], "superseded");
+  p.reply(1, pageReply(plainShelf(2)));
+  await flushed();
+  eq([p.$("#at").textContent, p.loads, p.location.href], ["page 2", [], "http://test/shelf?page=2"], "the second applied");
+});
+
+test("http navigation: back and forward fetch the entry's page and restore its scroll", async () => {
+  const p = plain();
+  const first = p.history.state;
+  p.fire("#book", "click");
+  p.reply(0, pageReply(plainBook(7)));
+  await flushed();
+  p.pop("/shelf?page=1", { ...first, x: 0, y: 300 });
+  eq(p.fetches.length, 2, "back fetched");
+  p.reply(1, pageReply(plainShelf(1)));
+  await flushed();
+  eq([p.$("#at").textContent, p.scrolls.pop(), p.entries.length, p.loads], ["page 1", [0, 300], 1, []], "back, scroll restored, no entry added");
+});
+
+test("http navigation: a live page reached joins, its token from the reply", async () => {
+  const p = plain();
+  p.fire("#book", "click");
+  p.reply(0, pageReply(`<main><div data-vk-id="c1"><h1>live</h1><a id="again" href="/shelf?page=3" data-vk-link>again</a></div></main>`, { headers: { "Vk-Live": "t9", "X-Vuka-Toolbar": "tb1" } }));
+  await flushed();
+  eq([p.sockets.length, p.ws().url.endsWith("?t=t9&tb=tb1")], [1, true], "connects with the page's token");
+  p.ws().onopen();
+  eq(p.ws().sent[0].type, "join", "joins");
+  p.server({ type: "render", ref: 1, html: `<main><div data-vk-id="c1"><h1>live</h1><a id="again" href="/shelf?page=3" data-vk-link>again</a></div></main>` });
+  p.fire("#again", "click");
+  eq([navs(p), p.fetches.length], [[{ type: "navigate", url: "/shelf?page=3" }], 1], "then over the connection");
+});
+
+test("http navigation: prefetch fetches the reply a click then uses, a few at a time, for 30s", async () => {
+  const links = `<a id="l1" href="/a" data-vk-link>a</a><a id="l2" href="/b" data-vk-link>b</a><a id="l3" href="/c" data-vk-link>c</a><a id="l4" href="/d" data-vk-link>d</a>`;
+  const p = open(layout(links), { build: "b1", url: "http://test/" });
+  for (const id of ["l1", "l2", "l3", "l4"]) p.fire("#" + id, "focusin");
+  eq(p.fetches.map((f) => [f.url, f.headers.Purpose, f.headers["Vk-Navigate"]]), [["http://test/a", "prefetch", "b1"], ["http://test/b", "prefetch", "b1"], ["http://test/c", "prefetch", "b1"]], "three in flight at most");
+  p.reply(0, pageReply(layout(`<p id="at">a</p>${links}`)));
+  await flushed();
+  p.fire("#l4", "focusin");
+  eq(p.fetches.length, 4, "a slot free: the next");
+  p.fire("#l1", "click");
+  await flushed();
+  eq([p.fetches.length, p.$("#at") && p.$("#at").textContent, p.location.href], [4, "a", "http://test/a"], "the click used the reply");
+  p.fire("#l2", "click");
+  eq(p.fetches.length, 4, "one still in flight is used too");
+  p.reply(1, pageReply(layout(`<p id="at">b</p>${links}`)));
+  await flushed();
+  eq(p.$("#at").textContent, "b", "applied once it came");
+  const q = open(layout(`<a id="l1" href="/a" data-vk-link>a</a>`), { build: "b1", url: "http://test/" });
+  q.fire("#l1", "focusin");
+  q.reply(0, pageReply(`<p id="at">a</p>`));
+  q.tick(30000);
+  q.fire("#l1", "click");
+  eq(q.fetches.length, 2, "after 30s the click fetches again");
+});
+
 test("attributes: no event handlers, srcdoc or script URLs", () => {
   const p = open(`<button data-vk-js-click='${js([
     ["set_attr", { to: { sel: "#a" }, name: "onmouseover", value: "window.pwned=1" }],

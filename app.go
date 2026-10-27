@@ -500,6 +500,7 @@ func (a *App) build() (http.Handler, error) {
 	for i := len(a.mw) - 1; i >= 0; i-- {
 		h = a.layer(a.mw[i], h)
 	}
+	h = a.navigations(h)
 	if a.tb != nil {
 		h = a.tb.wrap(h)
 	}
@@ -536,6 +537,7 @@ func (a *App) wrapRoute(s *routeSpec, h http.Handler) (http.Handler, error) {
 	if info.RootLayout != nil {
 		h = withRoot(info.RootLayout, h)
 	}
+	h = fullLoads(s, h)
 	for i := len(a.wraps) - 1; i >= 0; i-- {
 		if mw := a.wraps[i].f(info); mw != nil {
 			h = a.layer(mw, h)

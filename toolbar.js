@@ -41,6 +41,8 @@
   let page = null, build = { state: "" }, selected = pageID, tab = recall("tab") || "Request";
   let buildAt = 0;
   let current = pageID; // the record of the page on screen: a live navigation moves it
+  let opened = pageID; // the record of the page the live connection opens from: a navigation over HTTP moves it
+  const navRecords = new Map(); // URL → the record of a navigation over HTTP fetching it
   let going = ""; // where a live navigation in flight goes
   let wtab = recall("wtab") || "summary";
   const wires = new Map(); // "record:seq" → a socket message's frames, drawn: they don't change once sent
@@ -237,11 +239,17 @@
     drawHandle();
   }
   const fetch0 = window.fetch;
+  const bare = (u) => new URL(u, location.href).href.replace(/#.*$/, "");
   window.fetch = function (input, init) {
     const p = fetch0.apply(this, arguments);
     const method = (init && init.method) || (input instanceof Request ? input.method : "GET");
     const url = input instanceof Request ? input.url : String(input);
-    if (!url.includes("/_vuka/")) p.then((r) => track(method, url, r.headers.get(header), r.status), () => {});
+    const nav = !!(init && init.headers && init.headers["Vk-Navigate"]); // the runtime's navigation over HTTP
+    if (!url.includes("/_vuka/")) p.then((r) => {
+      const id = r.headers.get(header);
+      if (nav && id) { navRecords.set(bare(url), id); if (r.url) navRecords.set(bare(r.url), id); }
+      track(method, url, id, r.status);
+    }, () => {});
     return p;
   };
   const open0 = XMLHttpRequest.prototype.open;
@@ -269,15 +277,23 @@
     else if (!arriving) going = "";
     drawHandle();
   }).observe(html, { attributes: true, attributeFilter: ["data-vk-navigating"] });
+  // A navigation over HTTP is its fetch's record, which a live connection
+  // the page then opens joins.
   window.addEventListener("vk:navigate", async (e) => {
     const d = e.detail || {}, u = new URL(d.url || location.href);
     arriving = true;
-    const r = await get("r/" + encodeURIComponent(pageID)).catch(() => null);
-    const id = (r && !r.error && r.now) || current;
+    const fetched = navRecords.get(bare(u.href));
+    navRecords.delete(bare(u.href));
+    let id = fetched;
+    if (fetched) opened = fetched;
+    else {
+      const r = await get("r/" + encodeURIComponent(opened)).catch(() => null);
+      id = (r && !r.error && r.now) || current;
+    }
     const label = "page " + u.pathname + u.search;
     const follow = selected === current;
     let c = calls.find((x) => x.id === id);
-    if (!c) calls.push(c = { id, label, page: true }); else c.label = label;
+    if (!c) calls.push(c = { id, label, page: true }); else Object.assign(c, { label, page: true });
     current = id;
     if (follow) selected = id;
     drawSelect();

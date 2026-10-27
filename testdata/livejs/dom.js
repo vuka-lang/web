@@ -114,12 +114,12 @@ class Text extends Node {
   constructor(doc, v) { super(doc); this.nodeType = 3; this.nodeValue = v; }
   get textContent() { return this.nodeValue; }
   set textContent(v) { this.nodeValue = v; }
-  cloneNode() { return new Text(this.ownerDocument, this.nodeValue); }
+  cloneNode(deep, doc) { return new Text(doc || this.ownerDocument, this.nodeValue); }
 }
 
 class Fragment extends Node {
   constructor(doc) { super(doc); this.nodeType = 11; }
-  cloneNode(deep) { const f = new Fragment(this.ownerDocument); if (deep) this.childNodes.forEach((c) => f.appendChild(c.cloneNode(true))); return f; }
+  cloneNode(deep, doc) { const f = new Fragment(doc || this.ownerDocument); if (deep) this.childNodes.forEach((c) => f.appendChild(c.cloneNode(true, doc))); return f; }
 }
 
 class Element extends Node {
@@ -185,12 +185,12 @@ class Element extends Node {
   }
   get innerHTML() { return (this.content || this).childNodes.map(serialize).join(""); }
   get outerHTML() { return serialize(this); }
-  cloneNode(deep) {
-    const el = this.ownerDocument.createElement(this.tagName.toLowerCase());
+  cloneNode(deep, doc) {
+    const el = (doc || this.ownerDocument).createElement(this.tagName.toLowerCase());
     this.attributes.forEach((a) => el.setAttribute(a.name, a.value));
     if (deep) {
-      this.childNodes.forEach((c) => el.appendChild(c.cloneNode(true)));
-      if (this.content) this.content.childNodes.forEach((c) => el.content.appendChild(c.cloneNode(true)));
+      this.childNodes.forEach((c) => el.appendChild(c.cloneNode(true, doc)));
+      if (this.content) this.content.childNodes.forEach((c) => el.content.appendChild(c.cloneNode(true, doc)));
     }
     return el;
   }
@@ -218,7 +218,7 @@ class Document extends Node {
   }
   createElement(tag) { return new Element(this, tag); }
   createTextNode(v) { return new Text(this, v); }
-  importNode(n, deep) { return n.cloneNode(deep); }
+  importNode(n, deep) { return n.cloneNode(deep, this); }
   getElementById(id) { return this.querySelectorAll("*").find((e) => e.id === id) || null; }
   execCommand() { return true; }
 }
@@ -343,10 +343,31 @@ function matchComplex(el, parts, i = parts.length - 1) {
   return false;
 }
 
+// parseDocument is DOMParser's parseFromString: a whole document's head
+// and body, its title.
+function parseDocument(html) {
+  const d = new Document(), tmp = d.createElement("div");
+  parse(d, html, tmp);
+  const top = tmp.children.find((c) => c.tagName === "HTML");
+  const move = (from, to) => [...from.childNodes].forEach((c) => to.appendChild(c));
+  if (top) {
+    for (const c of top.children) {
+      if (c.tagName === "HEAD") move(c, d.head);
+      else if (c.tagName === "BODY") move(c, d.body);
+    }
+  } else move(tmp, d.body);
+  const t = d.head.querySelector("title");
+  d.title = t ? t.textContent : "";
+  return d;
+}
+
 // page loads live.js into a fresh context over body: options.live gives
-// the script a token (it connects), options.confirm answers window.confirm,
-// options.vuka is window.vuka before the runtime loads, options.url the
-// page's address (http://test/ by default).
+// the script a token (it connects), options.build the build that rendered
+// it (it navigates over HTTP when it isn't live), options.root its root
+// layout, options.confirm answers window.confirm, options.vuka is
+// window.vuka before the runtime loads, options.url the page's address
+// (http://test/ by default). The page's fetches wait in fetches until
+// reply answers one.
 function page(file, body, options = {}) {
   const doc = new Document();
   doc.body.innerHTML = body;
@@ -376,6 +397,7 @@ function page(file, body, options = {}) {
   };
   const history = {
     state: null,
+    scrollRestoration: "auto",
     pushState(st, _, u) { this.state = st; at.href = new URL(u, at.href).href; entries.push(at.href); },
     replaceState(st, _, u) { this.state = st; if (u) at.href = new URL(u, at.href).href; },
   };
@@ -394,14 +416,38 @@ function page(file, body, options = {}) {
     }
     [Symbol.iterator]() { return this.entries[Symbol.iterator](); }
   }
+  const dataset = options.live ? { vkToken: "tok" } : {};
+  if (options.build) dataset.vkBuildId = options.build;
+  if (options.root) dataset.vkRoot = options.root;
   const script = {
     src: "http://test/_vuka/live.js",
-    dataset: options.live ? { vkToken: "tok" } : {},
+    dataset,
     hasAttribute: (n) => !!options.live && n === "data-vk-token",
   };
+  // fetch: each call waits in fetches, {url, headers, aborted}, until
+  // reply(i, {status, headers, body, url}) answers it (or fails it, with
+  // error); an aborted one rejects.
+  const fetches = [];
+  class AbortController {
+    constructor() { const s = this.signal = { aborted: false, fns: [] }; this.abort = () => { if (!s.aborted) { s.aborted = true; s.fns.forEach((f) => f()); } }; }
+  }
+  const fetch = (url, init = {}) => new Promise((resolve, reject) => {
+    const f = { url: new URL(url, at.href).href, headers: init.headers || {}, aborted: false, resolve, reject };
+    fetches.push(f);
+    if (init.signal) init.signal.fns.push(() => { f.aborted = true; reject(Object.assign(new Error("aborted"), { name: "AbortError" })); });
+  });
+  const reply = (i, r = {}) => {
+    const f = typeof i === "number" ? fetches[i] : i;
+    if (r.error) return f.reject(new Error(r.error));
+    const hs = { "content-type": "text/html; charset=utf-8" };
+    for (const k in r.headers || {}) hs[k.toLowerCase()] = r.headers[k];
+    const url = r.url ? new URL(r.url, at.href).href : f.url;
+    f.resolve({ status: r.status || 200, url, redirected: url !== f.url, headers: { get: (k) => k.toLowerCase() in hs ? hs[k.toLowerCase()] : null }, text: () => Promise.resolve(r.body || "") });
+  };
+  class DOMParser { parseFromString(html) { return parseDocument(html); } }
   Object.defineProperty(doc, "currentScript", { value: script, configurable: true });
   const ctx = {
-    document: doc, Element, Node, Event, CustomEvent, KeyboardEvent, URL, FormData, WebSocket,
+    document: doc, Element, Node, Event, CustomEvent, KeyboardEvent, URL, FormData, WebSocket, fetch, AbortController, DOMParser,
     setTimeout, clearTimeout, requestAnimationFrame: (fn) => setTimeout(fn, 16),
     location, history, scrollX: 0, scrollY: 0, scrollTo: (x, y) => scrolls.push([x, y]),
     sessionStorage: { getItem: () => null, setItem() {} },
@@ -444,7 +490,7 @@ function page(file, body, options = {}) {
     history.state = state;
     ctx.dispatchEvent(Object.assign(new Event("popstate"), { state }));
   };
-  return { doc, $, fire, tick, ws, server, pop, sockets, logs, confirms, copied, loads, entries, scrolls, history, location, window: ctx, options };
+  return { doc, $, fire, tick, ws, server, pop, sockets, logs, confirms, copied, loads, entries, scrolls, history, location, window: ctx, options, fetches, reply };
 }
 
 module.exports = { page };
