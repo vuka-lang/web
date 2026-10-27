@@ -33,7 +33,9 @@ type execution struct {
 	op    *language.OperationDefinition
 	frags map[string]*language.FragmentDefinition
 	vars  map[string]any
-	sem   chan struct{} // goroutines a run may start beside its own; full, work runs inline
+	// varset is vars with what each was given, coerced again where used.
+	varset *varValues
+	sem    chan struct{} // goroutines a run may start beside its own; full, work runs inline
 
 	mu   sync.Mutex
 	errs []orderedErr
@@ -172,7 +174,7 @@ func (e *execution) include(ds []*language.Directive) bool {
 		default:
 			continue
 		}
-		args, err := e.s.coerceArgs(def.Args, d.Arguments, e.vars)
+		args, err := e.s.coerceArgs(def.Args, d.Arguments, e.varset)
 		if err != nil {
 			continue
 		}
@@ -277,7 +279,7 @@ func (e *execution) field(ctx context.Context, obj *Object, src any, path []any,
 		}
 		return nil, nil, true
 	}
-	args, aerr := e.s.coerceArgs(def.Args, node.Arguments, e.vars)
+	args, aerr := e.s.coerceArgs(def.Args, node.Arguments, e.varset)
 	if aerr != nil {
 		x := newErr(aerr.Error(), path, g.nodes)
 		x.Extensions = code(CodeBadUserInput)

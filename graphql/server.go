@@ -198,7 +198,7 @@ func (s *Server) execute(ctx context.Context, req Request) (*Response, Operation
 		ctx, cancel = context.WithTimeout(ctx, s.limits.Timeout)
 		defer cancel()
 	}
-	e := &execution{srv: s, s: schema, op: op, frags: c.frags, vars: vars, sem: make(chan struct{}, maxConcurrentResolvers)}
+	e := &execution{srv: s, s: schema, op: op, frags: c.frags, vars: vars, varset: newVarValues(op, vars, req.Variables), sem: make(chan struct{}, maxConcurrentResolvers)}
 	data := e.run(ctx)
 	return &Response{Data: data, Errors: e.errors(), Executed: true}, info
 }

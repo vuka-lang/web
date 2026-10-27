@@ -25,11 +25,11 @@ func enumValue(v *EnumValueDef) any {
 // coerceLiteral is the value literal v gives an input of type t, its
 // variables read from vars (already coerced). A variable vars lacks gives
 // errMissingVar, for the caller to treat as absent.
-func (s *Schema) coerceLiteral(v language.Value, t TypeDef, vars map[string]any) (any, error) {
+func (s *Schema) coerceLiteral(v language.Value, t TypeDef, vars *varValues) (any, error) {
 	if vr, ok := v.(*language.Variable); ok {
-		val, ok := vars[vr.Name]
-		if !ok {
-			return nil, errMissingVar
+		val, err := vars.at(s, vr.Name, t)
+		if err != nil {
+			return nil, err
 		}
 		if _, nn := t.(*NonNull); nn && val == nil {
 			return nil, fmt.Errorf("Expected value of type %q, found null.", TypeString(t))
@@ -197,10 +197,15 @@ func containsVariable(v language.Value) bool {
 
 // literalJSON is a literal as the JSON a variable would carry: numbers as
 // json.Number, an enum value as its name.
-func literalJSON(v language.Value, vars map[string]any) (any, error) {
+func literalJSON(v language.Value, vars *varValues) (any, error) {
 	switch x := v.(type) {
 	case *language.Variable:
-		val, ok := vars[x.Name]
+		if vars != nil {
+			if raw, ok := vars.raw[x.Name]; ok {
+				return raw, nil
+			}
+		}
+		val, ok := vars.value(x.Name)
 		if !ok {
 			return nil, errMissingVar
 		}
@@ -446,6 +451,65 @@ func printPath(path []any) string {
 	return b.String()
 }
 
+// varValues are an operation's variables: their values coerced by their
+// definitions' types, and what each was given — JSON, or the definition's
+// default — which a use coerces again by the type where it is used: a
+// scalar of a Go type there (IntIDOf, an enum's Go values) converts the
+// value as that position takes it.
+type varValues struct {
+	vals     map[string]any
+	raw      map[string]any // the variables given, as given
+	defaults map[string]language.Value
+}
+
+// newVarValues are op's variables: vals coerced, given as the request gave
+// them.
+func newVarValues(op *language.OperationDefinition, vals, given map[string]any) *varValues {
+	vs := &varValues{vals: vals, raw: map[string]any{}, defaults: map[string]language.Value{}}
+	for _, def := range op.VariableDefinitions {
+		if v, ok := given[def.Variable]; ok {
+			vs.raw[def.Variable] = v
+		} else if def.DefaultValue != nil {
+			vs.defaults[def.Variable] = def.DefaultValue
+		}
+	}
+	return vs
+}
+
+func (vs *varValues) value(name string) (any, bool) {
+	if vs == nil {
+		return nil, false
+	}
+	v, ok := vs.vals[name]
+	return v, ok
+}
+
+// at is variable name's value used where t is.
+func (vs *varValues) at(s *Schema, name string, t TypeDef) (any, error) {
+	if vs == nil {
+		return nil, errMissingVar
+	}
+	if raw, ok := vs.raw[name]; ok {
+		var errs []inputError
+		v := s.coerceInput(raw, t, nil, &errs)
+		if len(errs) > 0 {
+			msg := fmt.Sprintf("Variable \"$%s\" got invalid value %s", name, inspect(errs[0].val))
+			if len(errs[0].path) > 0 {
+				msg += fmt.Sprintf(" at \"%s%s\"", name, printPath(errs[0].path))
+			}
+			return nil, errors.New(msg + "; " + errs[0].msg)
+		}
+		return v, nil
+	}
+	if def, ok := vs.defaults[name]; ok {
+		return s.coerceLiteral(def, t, nil)
+	}
+	if v, ok := vs.vals[name]; ok {
+		return v, nil
+	}
+	return nil, errMissingVar
+}
+
 // coerceVariables is the operation's variables' values (CoerceVariableValues).
 func (s *Schema) coerceVariables(op *language.OperationDefinition, given map[string]any) (map[string]any, []*Error) {
 	out := map[string]any{}
@@ -521,7 +585,7 @@ func (s *Schema) typeFromRef(r language.TypeRef) TypeDef {
 
 // coerceArgs is a field's or directive's arguments (CoerceArgumentValues):
 // absent ones without defaults left out.
-func (s *Schema) coerceArgs(defs []*ArgDef, given []*language.Argument, vars map[string]any) (map[string]any, error) {
+func (s *Schema) coerceArgs(defs []*ArgDef, given []*language.Argument, vars *varValues) (map[string]any, error) {
 	out := make(map[string]any, len(defs))
 	for _, d := range defs {
 		var arg *language.Argument
