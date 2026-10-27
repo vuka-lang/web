@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime/debug"
+	"slices"
 	"sync"
 	"time"
 
@@ -65,7 +66,17 @@ type loadEntry[V any] struct {
 	v     V
 	err   error
 	w     *batchWaiters // its batch's
+	ord   []int         // where the field first asking for it is in the response
 	ready chan struct{}
+}
+
+// ordKey keys a field's position in the response in its resolver's
+// context.
+type ordKey struct{}
+
+func ordOf(ctx context.Context) []int {
+	o, _ := ctx.Value(ordKey{}).([]int)
+	return o
 }
 
 // batchWaiters counts the goroutines waiting for a batch, for the
@@ -101,7 +112,7 @@ func NewLoader[K comparable, V any](name string, fetch func(ctx context.Context,
 func (l *LoaderOf[K, V]) Load(ctx context.Context, key K) (V, error) {
 	st := stateOf(ctx)
 	l.mu.Lock()
-	e, w := l.ask(key, st)
+	e, w := l.ask(key, st, ordOf(ctx))
 	l.mu.Unlock()
 	if w != nil && st == nil {
 		l.run(ctx, nil, l.take())
@@ -116,10 +127,11 @@ func (l *LoaderOf[K, V]) LoadMany(ctx context.Context, keys []K) ([]V, error) {
 	st := stateOf(ctx)
 	entries := make([]*loadEntry[V], len(keys))
 	queued := false
+	ord := ordOf(ctx)
 	l.mu.Lock()
 	for i, k := range keys {
 		var w *batchWaiters
-		entries[i], w = l.ask(k, st)
+		entries[i], w = l.ask(k, st, ord)
 		queued = queued || w != nil
 	}
 	l.mu.Unlock()
@@ -139,7 +151,7 @@ func (l *LoaderOf[K, V]) LoadMany(ctx context.Context, keys []K) ([]V, error) {
 
 // ask is key's entry, queued in the next batch when nothing has asked for
 // it yet (then the batch is returned too). l.mu is held.
-func (l *LoaderOf[K, V]) ask(key K, st *state) (*loadEntry[V], *batchWaiters) {
+func (l *LoaderOf[K, V]) ask(key K, st *state, ord []int) (*loadEntry[V], *batchWaiters) {
 	if e := l.got[key]; e != nil {
 		return e, nil
 	}
@@ -149,7 +161,7 @@ func (l *LoaderOf[K, V]) ask(key K, st *state) (*loadEntry[V], *batchWaiters) {
 			st.sched.enqueue(l.next)
 		}
 	}
-	e := &loadEntry[V]{w: l.next.w, ready: make(chan struct{})}
+	e := &loadEntry[V]{w: l.next.w, ord: ord, ready: make(chan struct{})}
 	l.got[key] = e
 	l.next.keys = append(l.next.keys, key)
 	l.next.entries = append(l.next.entries, e)
@@ -205,6 +217,20 @@ func (b *loadBatch[K, V]) runBatch(ctx context.Context, s *sched) {
 func (l *LoaderOf[K, V]) run(ctx context.Context, s *sched, b *loadBatch[K, V]) {
 	if b == nil {
 		return
+	}
+	if s != nil {
+		// The keys in the order of the fields asking for them in the
+		// response: the same batch however the fields' goroutines ran.
+		idx := make([]int, len(b.keys))
+		for i := range idx {
+			idx[i] = i
+		}
+		slices.SortStableFunc(idx, func(i, j int) int { return slices.Compare(b.entries[i].ord, b.entries[j].ord) })
+		keys, entries := make([]K, len(idx)), make([]*loadEntry[V], len(idx))
+		for i, j := range idx {
+			keys[i], entries[i] = b.keys[j], b.entries[j]
+		}
+		b.keys, b.entries = keys, entries
 	}
 	start := time.Now()
 	st := stateOf(ctx)

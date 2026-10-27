@@ -288,9 +288,15 @@ func (e *execution) field(ctx context.Context, obj *Object, src any, path []any,
 	}
 	var start time.Time
 	rctx := ctx
+	if !def.Trivial {
+		// Where the field is in the response: a loader orders a batch's
+		// keys by it, so a batch is the same whatever order the fields
+		// asked in.
+		rctx = context.WithValue(ctx, ordKey{}, ord)
+	}
 	if e.trace != nil && !def.Trivial {
 		start = time.Now()
-		rctx = e.trace.context(ctx, pathString(path), obj.Name+"."+def.Name)
+		rctx = e.trace.context(rctx, pathString(path), obj.Name+"."+def.Name)
 	}
 	res, rerr := e.resolve(rctx, def, ResolveParams{Source: src, Args: args, Info: info})
 	if e.trace != nil && !def.Trivial {

@@ -53,6 +53,7 @@ func requestLoader[K comparable, V any](ctx context.Context, name string, mk fun
 
 type loaderWorld struct {
 	log        batchLog
+	firstKeys  []int // OrdersByUser's first call's
 	users      int
 	failOrders error
 	slow       bool
@@ -63,6 +64,9 @@ func (w *loaderWorld) orders(ctx context.Context) *LoaderOf[int, []lOrder] {
 	return requestLoader(ctx, "OrdersByUser", func() *LoaderOf[int, []lOrder] {
 		return NewLoader("OrdersByUser", func(ctx context.Context, users []int) (map[int][]lOrder, error) {
 			w.log.add("OrdersByUser", len(users))
+			if w.firstKeys == nil {
+				w.firstKeys = slices.Clone(users)
+			}
 			if w.slow {
 				time.Sleep(5 * time.Millisecond)
 			}
@@ -163,6 +167,11 @@ func TestLoaderBatchesALevel(t *testing.T) {
 	}
 	if got := w.log.get("ItemsByOrder"); !slices.Equal(got, []int{180}) {
 		t.Errorf("ItemsByOrder calls = %v, want [180]", got)
+	}
+	// The keys come in the order of the fields asking for them in the
+	// response, whatever order their goroutines ran in.
+	if !slices.IsSorted(w.firstKeys) || len(w.firstKeys) != 100 {
+		t.Errorf("OrdersByUser's keys aren't in the response's order: %v", w.firstKeys)
 	}
 	users := res.Data.values[0].([]any)
 	u10 := users[9].(*OrderedMap)
