@@ -511,7 +511,7 @@ func (a *App) page(rq *request, n ui.Node) {
 	pending := pendingParts(rq.ctx)
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (pending || !testing.Testing() || streamInTests) {
 		pctx, parts = ui.WithParts(rq.ctx, a.partsOptions(r, pending || r.Method == http.MethodHead)) // HEAD's never run: it has no body
-		defer parts.Stop() // the methods of parts that won't be written
+		defer parts.Stop()                                                                            // the methods of parts that won't be written
 	}
 	info, err := ui.RenderPage(pctx, n, buf)
 	html := buf.Bytes()
