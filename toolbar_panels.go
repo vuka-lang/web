@@ -92,6 +92,14 @@ func renderPanels(w io.Writer, r tbRecord, extra ...panelView) error {
 		}
 		add("Live", count(len(r.Live)), tone, "live", lv)
 	}
+	if len(r.GQLFields)+len(r.GQLBatches) > 0 {
+		g := graphqlOf(r)
+		tone := ""
+		if slices.ContainsFunc(r.GQLFields, func(f GraphQLField) bool { return f.Err }) || slices.ContainsFunc(r.GQLBatches, func(b GraphQLBatch) bool { return b.Err != "" }) {
+			tone = "err"
+		}
+		add("GraphQL", count(len(r.GQLFields)), tone, "graphql", g)
+	}
 	if len(r.Assets) > 0 {
 		add("Assets", count(len(r.Assets)), "", "assets", assetsOf(r.Assets))
 	}
@@ -170,14 +178,16 @@ type sqlView struct {
 type sqlRow struct {
 	N, Times           int
 	SQL, Args, Err, DB string
+	Origin             string // the GraphQL field or loader running it
 	Rows               string
 	Ms, Tone           string
 	Bar                template.CSS
 }
 
 type nPlusOne struct {
-	SQL   string
-	Times int
+	SQL    string
+	Times  int
+	Fields []string // the GraphQL fields running it, when GraphQL did
 }
 
 // sqlOf lays the statements out: the same statement run more than once is
@@ -186,9 +196,13 @@ type nPlusOne struct {
 func sqlOf(qs []Statement) sqlView {
 	v := sqlView{Count: len(qs)}
 	times, args := map[string]int{}, map[string]map[string]bool{}
+	fields := map[string][]string{}
 	var total, longest time.Duration
 	for _, q := range qs {
 		times[q.SQL]++
+		if q.Field != "" && !slices.Contains(fields[q.SQL], q.Field) {
+			fields[q.SQL] = append(fields[q.SQL], q.Field)
+		}
 		if args[q.SQL] == nil {
 			args[q.SQL] = map[string]bool{}
 		}
@@ -200,6 +214,12 @@ func sqlOf(qs []Statement) sqlView {
 	seen := map[string]bool{}
 	for i, q := range qs {
 		row := sqlRow{N: i + 1, Times: times[q.SQL], SQL: q.SQL, DB: q.DB, Ms: ms(q.Duration), Rows: ""}
+		switch {
+		case q.Origin != "":
+			row.Origin = q.Origin + " (" + q.Field + ")"
+		case q.Field != "":
+			row.Origin = q.Field
+		}
 		if len(q.Args) > 0 {
 			row.Args = fmt.Sprint(q.Args)
 		}
@@ -221,7 +241,7 @@ func sqlOf(qs []Statement) sqlView {
 			v.Repeated++
 		}
 		if row.Times >= 3 && len(args[q.SQL]) > 1 && !seen[q.SQL] {
-			v.NPlusOne = append(v.NPlusOne, nPlusOne{q.SQL, row.Times})
+			v.NPlusOne = append(v.NPlusOne, nPlusOne{q.SQL, row.Times, fields[q.SQL]})
 		}
 		seen[q.SQL] = true
 		v.Rows = append(v.Rows, row)

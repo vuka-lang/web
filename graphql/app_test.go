@@ -83,6 +83,7 @@ func (u *User) FullName(ctx context.Context, upper bool) string {
 // usersByID is @graphql.Loader UsersByID's function: the users of ids.
 func usersByID(ctx context.Context, ids []int64, store *Store) (map[int64]*User, error) {
 	store.batches = append(store.batches, len(ids))
+	web.NoteStatement(ctx, web.Statement{SQL: "SELECT * FROM users WHERE id IN (?)", Rows: -1})
 	out := map[int64]*User{}
 	for i := range store.users {
 		if slices.Contains(ids, store.users[i].ID) {
@@ -543,5 +544,42 @@ func TestConnection(t *testing.T) {
 	_, out = post(t, h, `{ __type(name: "Query") { fields { name args { name type { name } } type { ofType { name } } } } }`, nil)
 	if got := js(out); !strings.Contains(got, `"args":[{"name":"first","type":{"name":"Int"}},{"name":"after","type":{"name":"String"}},{"name":"last","type":{"name":"Int"}},{"name":"before","type":{"name":"String"}}],"name":"usersPage","type":{"ofType":{"name":"UserConnection"}}`) {
 		t.Errorf("the schema: %s", got)
+	}
+}
+
+// TestToolbarTrace: in development the toolbar's record of a GraphQL
+// request has a GraphQL panel — each field resolved with its path and its
+// SQL, each loader batch — the SQL panel names what ran each statement, and
+// the GraphiQL panel is there to run queries.
+func TestToolbarTrace(t *testing.T) {
+	t.Setenv(web.DevDirEnv, t.TempDir())
+	app := web.New(auth.Module(auth.Config{Users: authtest.NewUsers()}), authtest.As(&auth.Identity{ID: "1"}), web.GraphQL("/graphql"))
+	app.Service(NewStore)
+	if err := app.Build(); err != nil {
+		t.Fatal(err)
+	}
+	h := app.Handler()
+	body := `{"query":"{ users(first: 2) { name manager { name } } }"}`
+	r := httptest.NewRequest("POST", "/graphql", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	id := w.Header().Get(web.ToolbarHeader)
+	if id == "" {
+		t.Fatalf("no toolbar record: %s", w.Body)
+	}
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/_vuka/toolbar/r/"+id+"?panels", nil))
+	var rec struct{ HTML string }
+	if err := json.Unmarshal(w.Body.Bytes(), &rec); err != nil {
+		t.Fatal(err, w.Body)
+	}
+	for _, want := range []string{
+		`data-tab="GraphQL"`, `<code>users.1.manager</code>`, `User.manager`, `<code>loader UsersByID</code>`,
+		`from <code>loader UsersByID</code>`, `data-tab="GraphiQL"`, `data-endpoint="/graphql"`,
+	} {
+		if !strings.Contains(rec.HTML, want) {
+			t.Errorf("the panels have no %s:\n%s", want, rec.HTML)
+		}
 	}
 }

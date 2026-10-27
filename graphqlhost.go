@@ -43,6 +43,7 @@ func GraphQL(path string, opts ...any) Option {
 			}
 		)
 		where := fmt.Sprintf("web.GraphQL(%q)", path)
+		a.graphqlPath = path
 		a.Handle(http.MethodGet, path, handler, routeOpt(func(s *routeSpec) { s.calls, s.where = true, where }))
 		a.Handle(http.MethodPost, path, handler, routeOpt(func(s *routeSpec) { s.calls, s.where = true, where }))
 		a.checks = append(a.checks, func(a *App) error {

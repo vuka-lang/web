@@ -15,9 +15,10 @@ type Trace struct {
 	Field func(FieldTrace)
 	Batch func(BatchTrace)
 	// Context is the context a field's resolver (or a batch) runs with,
-	// given what it is: what the resolver records under it — the SQL it
-	// runs — is then the field's.
-	Context func(ctx context.Context, origin string) context.Context
+	// given its path and what it is ("Pet.owner"; a batch: "" and "loader
+	// OrdersByUser"): what the resolver records under it — the SQL it runs
+	// — is then the field's.
+	Context func(ctx context.Context, path, field string) context.Context
 }
 
 // FieldTrace is a field a request resolved.
@@ -53,11 +54,11 @@ func (t *tracer) batch(name string, keys int, start time.Time, d time.Duration, 
 	}
 }
 
-func (t *tracer) context(ctx context.Context, origin string) context.Context {
+func (t *tracer) context(ctx context.Context, path, field string) context.Context {
 	if t.t.Context == nil {
 		return ctx
 	}
-	return t.t.Context(ctx, origin)
+	return t.t.Context(ctx, path, field)
 }
 
 // pathString is a response path as the toolbar shows it: pets.0.owner.

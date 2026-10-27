@@ -7,6 +7,8 @@ import (
 	"runtime/debug"
 	"sync"
 	"time"
+
+	"github.com/vuka-lang/vuka/v2"
 )
 
 // Loader makes a function a loader, @graphql.Loader: a function from a
@@ -29,7 +31,7 @@ type Loader struct {
 	Chunk int
 }
 
-func (Loader) vukaTargets() [0]struct{} { return [0]struct{}{} }
+func (Loader) vukaTargets() [vuka.OnFunc]struct{} { return [vuka.OnFunc]struct{}{} }
 
 // DefaultChunk is how many keys one call of a loader's function takes at
 // most unless @graphql.Loader{Chunk: n} says otherwise: more keys are split
@@ -207,7 +209,7 @@ func (l *LoaderOf[K, V]) run(ctx context.Context, s *sched, b *loadBatch[K, V]) 
 	start := time.Now()
 	st := stateOf(ctx)
 	if st != nil && st.trace != nil {
-		ctx = st.trace.context(ctx, "loader "+l.name)
+		ctx = st.trace.context(ctx, "", "loader "+l.name)
 	}
 	var err error
 	for i := 0; i < len(b.keys) && err == nil; i += l.chunk {

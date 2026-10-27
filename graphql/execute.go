@@ -290,7 +290,7 @@ func (e *execution) field(ctx context.Context, obj *Object, src any, path []any,
 	rctx := ctx
 	if e.trace != nil && !def.Trivial {
 		start = time.Now()
-		rctx = e.trace.context(ctx, pathString(path))
+		rctx = e.trace.context(ctx, pathString(path), obj.Name+"."+def.Name)
 	}
 	res, rerr := e.resolve(rctx, def, ResolveParams{Source: src, Args: args, Info: info})
 	if e.trace != nil && !def.Trivial {
