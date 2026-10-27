@@ -76,7 +76,7 @@ class Node {
   }
   get children() { return this.childNodes.filter((c) => c.nodeType === 1); }
   get firstElementChild() { return this.children[0] || null; }
-  get textContent() { return this.childNodes.map((c) => c.textContent).join(""); }
+  get textContent() { return this.childNodes.filter((c) => c.nodeType !== 8).map((c) => c.textContent).join(""); }
   set textContent(v) {
     this.childNodes.forEach((c) => { c.parentNode = null; });
     this.childNodes = [];
@@ -115,6 +115,14 @@ class Text extends Node {
   get textContent() { return this.nodeValue; }
   set textContent(v) { this.nodeValue = v; }
   cloneNode(deep, doc) { return new Text(doc || this.ownerDocument, this.nodeValue); }
+}
+
+class Comment extends Node {
+  constructor(doc, v) { super(doc); this.nodeType = 8; this.data = v; }
+  get textContent() { return this.data; }
+  get nodeValue() { return this.data; }
+  set nodeValue(v) { this.data = v; }
+  cloneNode(deep, doc) { return new Comment(doc || this.ownerDocument, this.data); }
 }
 
 class Fragment extends Node {
@@ -218,6 +226,15 @@ class Document extends Node {
   }
   createElement(tag) { return new Element(this, tag); }
   createTextNode(v) { return new Text(this, v); }
+  createComment(v) { return new Comment(this, v); }
+  // createTreeWalker walks root's descendants, in document order, of the
+  // kinds whatToShow names (1 elements, 4 text, 128 comments).
+  createTreeWalker(root, whatToShow) {
+    const all = [], walk = (n) => n.childNodes.forEach((c) => { if (whatToShow & (1 << (c.nodeType - 1))) all.push(c); walk(c); });
+    walk(root.nodeType === 9 ? root.documentElement : root);
+    let i = 0;
+    return { nextNode: () => all[i++] || null };
+  }
   importNode(n, deep) { return n.cloneNode(deep, this); }
   getElementById(id) { return this.querySelectorAll("*").find((e) => e.id === id) || null; }
   execCommand() { return true; }
@@ -236,7 +253,10 @@ function parse(doc, html, into) {
   const re = /<!--[\s\S]*?-->|<\/([a-zA-Z][\w-]*)\s*>|<([a-zA-Z][\w-]*)((?:\s+[^\s=/>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+))?)*)\s*(\/?)>|([^<]+|<)/g;
   let m;
   while ((m = re.exec(html))) {
-    if (m[1]) {
+    if (m[0].startsWith("<!--")) {
+      const parent = top();
+      (parent.content || parent).appendChild(doc.createComment(m[0].slice(4, -3)));
+    } else if (m[1]) {
       const tag = m[1].toUpperCase();
       for (let i = stack.length - 1; i > 0; i--) if (stack[i].tagName === tag) { stack.length = i; break; }
     } else if (m[2]) {
@@ -256,6 +276,7 @@ function parse(doc, html, into) {
 
 function serialize(n) {
   if (n.nodeType === 3) return esc(n.nodeValue);
+  if (n.nodeType === 8) return "<!--" + n.data + "-->";
   if (n.nodeType === 11) return n.childNodes.map(serialize).join("");
   const tag = n.tagName.toLowerCase();
   const attrs = n.attributes.map((a) => " " + a.name + (a.value === "" ? "" : '="' + esc(a.value, true) + '"')).join("");
@@ -426,7 +447,8 @@ function page(file, body, options = {}) {
   };
   // fetch: each call waits in fetches, {url, headers, aborted}, until
   // reply(i, {status, headers, body, url}) answers it (or fails it, with
-  // error); an aborted one rejects.
+  // error); an aborted one rejects. With stream set, the body arrives in
+  // pieces: reply returns {push(text), end()}, body the first piece.
   const fetches = [];
   class AbortController {
     constructor() { const s = this.signal = { aborted: false, fns: [] }; this.abort = () => { if (!s.aborted) { s.aborted = true; s.fns.forEach((f) => f()); } }; }
@@ -442,12 +464,26 @@ function page(file, body, options = {}) {
     const hs = { "content-type": "text/html; charset=utf-8" };
     for (const k in r.headers || {}) hs[k.toLowerCase()] = r.headers[k];
     const url = r.url ? new URL(r.url, at.href).href : f.url;
-    f.resolve({ status: r.status || 200, url, redirected: url !== f.url, headers: { get: (k) => k.toLowerCase() in hs ? hs[k.toLowerCase()] : null }, text: () => Promise.resolve(r.body || "") });
+    const res = { status: r.status || 200, url, redirected: url !== f.url, headers: { get: (k) => k.toLowerCase() in hs ? hs[k.toLowerCase()] : null }, text: () => Promise.resolve(r.body || "") };
+    if (!r.stream) return f.resolve(res);
+    const pieces = [], waiting = [];
+    let ended = false;
+    const give = () => {
+      while (waiting.length && (pieces.length || ended)) {
+        const w = waiting.shift();
+        w(pieces.length ? { done: false, value: new TextEncoder().encode(pieces.shift()) } : { done: true });
+      }
+    };
+    const s = { push: (t) => { pieces.push(t); give(); }, end: () => { ended = true; give(); }, canceled: false };
+    if (r.body) pieces.push(r.body);
+    res.body = { getReader: () => ({ read: () => new Promise((w) => { waiting.push(w); give(); }), cancel: () => { s.canceled = true; ended = true; give(); return Promise.resolve(); } }) };
+    f.resolve(res);
+    return s;
   };
   class DOMParser { parseFromString(html) { return parseDocument(html); } }
   Object.defineProperty(doc, "currentScript", { value: script, configurable: true });
   const ctx = {
-    document: doc, Element, Node, Event, CustomEvent, KeyboardEvent, URL, FormData, WebSocket, fetch, AbortController, DOMParser,
+    document: doc, Element, Node, Event, CustomEvent, KeyboardEvent, URL, FormData, WebSocket, fetch, AbortController, DOMParser, TextDecoder, TextEncoder,
     setTimeout, clearTimeout, requestAnimationFrame: (fn) => setTimeout(fn, 16),
     location, history, scrollX: 0, scrollY: 0, scrollTo: (x, y) => scrolls.push([x, y]),
     sessionStorage: { getItem: () => null, setItem() {} },
