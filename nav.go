@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"log/slog"
 	"net/http"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/vuka-lang/vuka/v2"
 )
@@ -26,6 +28,8 @@ import (
 //	Vk-Reload  why the browser must load the URL instead: the build
 //	           changed ("build"), the route asks for it ("route", FullLoad),
 //	           the page's body has scripts of its own ("scripts")
+//	Vk-Reload-Detail  in development, why in words, for the browser's
+//	           console and the toolbar (the terminal says it too, once)
 //
 // A response without Vk-Page (a redirect elsewhere, a file, JSON, a page
 // the app wrote itself) is the browser's to load too. Nothing in the
@@ -36,6 +40,7 @@ const (
 	navPageHeader  = "Vk-Page"
 	navLiveHeader  = "Vk-Live"
 	navReload      = "Vk-Reload"
+	navReloadWhy   = "Vk-Reload-Detail"
 )
 
 // navigation reports whether r is the runtime fetching a page to patch in
@@ -78,7 +83,7 @@ func (a *App) navigations(next http.Handler) http.Handler {
 			return
 		}
 		if r.Header.Get(NavigateHeader) != a.buildID() {
-			reload(w, "build")
+			a.reload(w, r, "build", "")
 			return
 		}
 		varyNav(w.Header())
@@ -87,12 +92,96 @@ func (a *App) navigations(next http.Handler) http.Handler {
 }
 
 // reload answers a navigation with Vk-Reload: the browser loads the URL.
-func reload(w http.ResponseWriter, why string) {
+// what is the cause's subject: the route (route), the script tag
+// (scripts). In development the response says why in words
+// (Vk-Reload-Detail) and the app logs it, once per cause.
+func (a *App) reload(w http.ResponseWriter, r *http.Request, why, what string) {
 	h := w.Header()
 	h.Set(navReload, why)
+	if a.dev {
+		detail := reloadDetail(why, what)
+		h.Set(navReloadWhy, detail)
+		a.warnFullLoad(r, why, what, detail)
+	}
 	h.Set("Cache-Control", "no-store")
 	varyNav(h)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// reloadDetail says why a navigation loads in full, for people: in the
+// terminal, the browser's console and the toolbar. ASCII, for a header.
+func reloadDetail(why, what string) string {
+	switch why {
+	case "build":
+		return "the app was rebuilt since the page loaded (expected after a rebuild)"
+	case "route":
+		return "its route " + what + " is web.FullLoad: its pages always load as a document"
+	case "scripts":
+		return "its body runs a script of its own: " + what + "; move it into <head>, make it a component script, or mark the link reload"
+	}
+	return why
+}
+
+// scriptText is a script tag as a detail names it: whitespace collapsed,
+// ASCII, at most 160 bytes.
+func scriptText(tag []byte) string {
+	const max = 160
+	var b strings.Builder
+	space := false
+	for _, c := range tag {
+		switch {
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f':
+			space = true
+			continue
+		case c < 0x20 || c >= 0x7f:
+			c = '?'
+		}
+		if space && b.Len() > 0 && c != '>' {
+			b.WriteByte(' ')
+		}
+		space = false
+		b.WriteByte(c)
+	}
+	s := b.String()
+	if len(s) > max {
+		s = s[:max-4] + "...>"
+	}
+	return s
+}
+
+// fullLoadsSeen is what a development app has said of navigations that load in
+// full: each cause once.
+type fullLoadsSeen struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+// warnFullLoad logs a navigation that loads in full, once per cause (why
+// and what: the route, the script tag), and notes it on the request's
+// toolbar record. A rebuild's is expected, logged at debug.
+func (a *App) warnFullLoad(r *http.Request, why, what, detail string) {
+	NoteRequest(r.Context(), RequestNote{Section: "Navigation", Name: "full load: " + why, Value: detail, Refused: true})
+	key := why + "\x00" + what
+	a.fullLoadsSeen.mu.Lock()
+	seen := a.fullLoadsSeen.seen[key]
+	if !seen && len(a.fullLoadsSeen.seen) < 256 {
+		if a.fullLoadsSeen.seen == nil {
+			a.fullLoadsSeen.seen = map[string]bool{}
+		}
+		a.fullLoadsSeen.seen[key] = true
+	}
+	a.fullLoadsSeen.mu.Unlock()
+	if seen {
+		return
+	}
+	level := slog.LevelWarn
+	switch why {
+	case "build":
+		level = slog.LevelDebug
+	case "route":
+		level = slog.LevelInfo
+	}
+	slog.Log(r.Context(), level, "web: navigation to "+r.URL.Path+" loads in full: "+detail)
 }
 
 // varyNav adds NavigateHeader to h's Vary, once.
@@ -144,13 +233,13 @@ type fullLoad struct{}
 
 // fullLoads wraps a FullLoad route: its navigations answer Vk-Reload
 // before it runs.
-func fullLoads(s *routeSpec, h http.Handler) http.Handler {
+func (a *App) fullLoads(s *routeSpec, h http.Handler) http.Handler {
 	if !slices.ContainsFunc(s.attrs, func(x any) bool { _, ok := x.(fullLoad); return ok }) {
 		return h
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if navigation(r) {
-			reload(w, "route")
+			a.reload(w, r, "route", s.method+" "+s.path)
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -160,9 +249,9 @@ func fullLoads(s *routeSpec, h http.Handler) http.Handler {
 // navPage is what a.page tells a navigation's response: the page's root
 // layout, its join token when live; ok false when the browser must load
 // it instead (its body runs scripts of its own: it has answered).
-func navPage(w http.ResponseWriter, r *http.Request, html []byte, token string) bool {
-	if plainScripts(html) {
-		reload(w, "scripts")
+func (a *App) navPage(w http.ResponseWriter, r *http.Request, html []byte, token string) bool {
+	if tag := plainScripts(html); tag != nil {
+		a.reload(w, r, "scripts", scriptText(tag))
 		return false
 	}
 	h := w.Header()
@@ -205,12 +294,13 @@ func etagged(w http.ResponseWriter, r *http.Request, parts ...[]byte) bool {
 	return false
 }
 
-// plainScripts reports whether a page's body has scripts of its own: a
-// <script> that would run as the document loads, which a patch of the body
-// doesn't run. Data blocks (JSON, templates), modules the head loads and
-// the runtime's own tags (added after this check) don't count; scripts in
-// the head are merged into the document's head, run once added.
-func plainScripts(html []byte) bool {
+// plainScripts is the first script of a page's body's own, its tag from
+// "<script" to its ">"; nil when it has none: a <script> that would run as
+// the document loads, which a patch of the body doesn't run. Data blocks
+// (JSON, templates), modules the head loads and the runtime's own tags
+// (added after this check) don't count; scripts in the head are merged
+// into the document's head, run once added.
+func plainScripts(html []byte) []byte {
 	body := html
 	if i := indexTag(html, "<body", false); i >= 0 {
 		body = html[i:]
@@ -220,18 +310,19 @@ func plainScripts(html []byte) bool {
 	for {
 		i := indexTag(body, "<script", false)
 		if i < 0 {
-			return false
+			return nil
 		}
+		tag := body[i:]
 		body = body[i+len("<script"):]
 		if len(body) > 0 && !isSpaceOrEnd(body[0]) {
 			continue // <scripts…>, another tag
 		}
 		end := bytes.IndexByte(body, '>')
 		if end < 0 {
-			return true
+			return tag
 		}
 		if runs(body[:end]) {
-			return true
+			return tag[:len("<script")+end+1]
 		}
 		body = body[end:]
 	}

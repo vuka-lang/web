@@ -1,8 +1,10 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -38,10 +40,10 @@ func (l *navOther) Render(ctx context.Context, w io.Writer) error {
 	return ui.El("html", nil, ui.El("body", nil, l.Children)).Render(ctx, w)
 }
 
-func navApp() *App {
+func navApp(opts ...Option) *App {
 	navShellLoads.Store(0)
 	meterMounts.Store(0)
-	app := New(Only("none"))
+	app := New(append([]Option{Only("none")}, opts...)...)
 	shell := LayoutOf[navShell]()
 	text := func(s string) func() ui.Node {
 		return func() ui.Node { return ui.El("p", attrs("id", "at"), ui.Text(s)) }
@@ -52,6 +54,9 @@ func navApp() *App {
 	app.Get("/nav/other", text("other"), LayoutOf[navOther]())
 	app.Get("/nav/script", func() ui.Node {
 		return ui.Safe(`<div><script>window.ran = 1</script></div>`)
+	}, shell)
+	app.Get("/nav/theme", func() ui.Node {
+		return ui.Safe("<div>themed<script\n  src=\"/static/theme.js\"   defer></script></div>")
 	}, shell)
 	app.Get("/nav/data", func() ui.Node {
 		return ui.Safe(`<div><script type="application/json">{"a":1}</script>data</div>`)
@@ -165,6 +170,58 @@ func TestNavigationToALivePage(t *testing.T) {
 	}
 }
 
+// In development a navigation that loads in full says why: the app logs it
+// once per cause, the reply says it (Vk-Reload-Detail), the toolbar's record
+// of the navigation shows it. A production app says nothing.
+func TestNavigationFullLoadWhy(t *testing.T) {
+	withToolbar(t)
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	defer slog.SetDefault(old)
+
+	for _, dev := range []bool{true, false} {
+		logs.Reset()
+		var opts []Option
+		if dev {
+			opts = append(opts, Dev())
+		}
+		h := navApp(opts...).Handler()
+		page := tbDo(t, h, "GET", "/nav/a").body
+		build := buildRe.FindStringSubmatch(page)[1]
+		if strings.Contains(page, " data-vk-dev") != dev {
+			t.Errorf("dev %v: the runtime's tag: %s", dev, page)
+		}
+		const want = `its body runs a script of its own: <script src="/static/theme.js" defer>; move it into <head>, make it a component script, or mark the link reload`
+		var id string
+		for range 2 {
+			a := tbDo(t, h, "GET", "/nav/theme", NavigateHeader, build)
+			if a.status != http.StatusNoContent || a.header.Get(navReload) != "scripts" {
+				t.Fatalf("dev %v: %d %v", dev, a.status, a.header)
+			}
+			if got := a.header.Get(navReloadWhy); dev && got != want || !dev && got != "" {
+				t.Errorf("dev %v: Vk-Reload-Detail %q", dev, got)
+			}
+			id = a.header.Get(ToolbarHeader)
+		}
+		tbDo(t, h, "GET", "/nav/full", NavigateHeader, build)
+		got := logs.String()
+		if !dev {
+			if got != "" {
+				t.Errorf("production logged: %s", got)
+			}
+			continue
+		}
+		if n := strings.Count(got, "loads in full"); n != 2 || strings.Count(got, "/nav/theme loads in full: "+strings.ReplaceAll(want, `"`, `\"`)) != 1 ||
+			!strings.Contains(got, "level=WARN") || !strings.Contains(got, "its route GET /nav/full is web.FullLoad") {
+			t.Errorf("the log, want the script once and the route:\n%s", got)
+		}
+		if _, html := fetchRecord(t, h, id); !strings.Contains(html, "<h4>Navigation</h4>") || !strings.Contains(html, "full load: scripts") || !strings.Contains(html, "/static/theme.js") {
+			t.Errorf("the toolbar's record: %s", html)
+		}
+	}
+}
+
 func TestPlainScripts(t *testing.T) {
 	for html, want := range map[string]bool{
 		`<html><head><script src="/x.js"></script></head><body><p>x</p></body></html>`:   false,
@@ -176,7 +233,7 @@ func TestPlainScripts(t *testing.T) {
 		`<p>no body tag</p><SCRIPT>x</SCRIPT>`:                                           true,
 		`<p>none</p>`:                                                                    false,
 	} {
-		if got := plainScripts([]byte(html)); got != want {
+		if got := plainScripts([]byte(html)) != nil; got != want {
 			t.Errorf("plainScripts(%s) = %v, want %v", html, got, want)
 		}
 	}

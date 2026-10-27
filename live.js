@@ -17,6 +17,7 @@
   let toolbar = script.dataset.vkToolbar; // development: the page's toolbar record, which the socket's messages join
   const build = script.dataset.vkBuildId || ""; // the build that rendered the page: a navigation over HTTP names it
   const root = script.dataset.vkRoot || "-"; // the page's root layout: a page under another is another document
+  const dev = script.hasAttribute("data-vk-dev"); // rendered in development: say why a navigation loads in full
   const nobubble = new Set(["focus", "blur", "mouseenter", "mouseleave", "load", "error", "scroll"]);
   const listening = new Set();
   const busy = new Map(); // ref → {el, form}: elements waiting for their reply
@@ -1773,20 +1774,21 @@
     const key = u.href.replace(/#.*$/, "");
     return new Promise((resolve, reject) => {
       const n = nav = { href: u.href, patch, pop, replace, resolve, reject };
-      const fail = (to) => {
+      const fail = (to, why, detail) => {
         if (nav !== n) return;
         clearTimeout(n.timer);
         nav = null;
+        fullLoad(u, why, detail);
         load(to || u.href, again);
       };
-      n.timer = setTimeout(() => { if (n.abort) n.abort(); fail(); }, 10000);
+      n.timer = setTimeout(() => { if (n.abort) n.abort(); fail(null, "timeout", "no reply in 10s"); }, 10000);
       document.documentElement.setAttribute("data-vk-navigating", at); // where to, for the development toolbar
       let req = fetchedAhead(key);
       if (!req) {
         req = fetched(key, false);
         n.abort = req.abort;
       }
-      req.then((r) => { if (nav === n) landed(n, r, fail); }, () => fail());
+      req.then((r) => { if (nav === n) landed(n, r, fail); }, (err) => fail(null, "network", err && err.message || "the fetch failed"));
     });
   }
 
@@ -1795,11 +1797,13 @@
     const res = r.res, h = (k) => res.headers.get(k) || "";
     const final = res.url ? httpURL(res.url) : null;
     const moved = res.redirected && final ? final.href : null; // a redirect the fetch followed
-    if (final && final.origin !== location.origin) return fail();
-    if (h("Vk-Reload") || h("Vk-Page") !== root || !/^text\/html/i.test(h("Content-Type"))) return fail(moved);
+    if (final && final.origin !== location.origin) return fail(null, "another origin", "it redirected to " + final.origin);
+    if (h("Vk-Reload")) return fail(moved, h("Vk-Reload"), h("Vk-Reload-Detail"));
+    if (!/^text\/html/i.test(h("Content-Type")) || !h("Vk-Page")) return fail(moved, "not a page", "the reply is " + res.status + " " + (h("Content-Type") || "with no Content-Type") + (h("Vk-Page") ? "" : ", not a page the app rendered"));
+    if (h("Vk-Page") !== root) return fail(moved, "another root layout", (res.status >= 400 ? "the " + res.status + " error page" : "the page") + " is under " + (h("Vk-Page") === "-" ? "no root layout" : "root layout " + h("Vk-Page")) + ", this one under " + (root === "-" ? "none" : root));
     if (moved) n.href = moved;
     toolbar = h("X-Vuka-Toolbar") || toolbar;
-    try { page(r.html); } catch (err) { console.error("vuka: live: " + err.message); return fail(n.href); }
+    try { page(r.html); } catch (err) { console.error("vuka: live: " + err.message); return fail(n.href, "patch", err.message); }
     arrived(n, {});
     emit("vk:patched", { ids: ["c0"] });
     const tok = h("Vk-Live");
@@ -1808,6 +1812,18 @@
       live = true;
       connect();
     }
+  }
+
+  // fullLoad says in the console, on a page rendered in development, why a
+  // navigation to u loads in full: once per cause.
+  const fullLoads = new Set();
+  function fullLoad(u, why, detail) {
+    if (!dev || !why) return;
+    const key = why + "\n" + (detail || "");
+    if (fullLoads.has(key)) return;
+    fullLoads.add(key);
+    const line = "vuka: navigation to " + u.pathname + " loads in full (" + why + ")" + (detail ? ": " + detail : "");
+    why === "build" ? console.info(line) : console.warn(line);
   }
 
   // supersede ends the navigation in flight: another takes its place.

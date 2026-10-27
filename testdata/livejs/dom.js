@@ -364,7 +364,7 @@ function parseDocument(html) {
 // page loads live.js into a fresh context over body: options.live gives
 // the script a token (it connects), options.build the build that rendered
 // it (it navigates over HTTP when it isn't live), options.root its root
-// layout, options.confirm answers window.confirm, options.vuka is
+// layout, options.dev marks it rendered in development, options.confirm answers window.confirm, options.vuka is
 // window.vuka before the runtime loads, options.url the page's address
 // (http://test/ by default). The page's fetches wait in fetches until
 // reply answers one.
@@ -422,7 +422,7 @@ function page(file, body, options = {}) {
   const script = {
     src: "http://test/_vuka/live.js",
     dataset,
-    hasAttribute: (n) => !!options.live && n === "data-vk-token",
+    hasAttribute: (n) => !!options.live && n === "data-vk-token" || !!options.dev && n === "data-vk-dev",
   };
   // fetch: each call waits in fetches, {url, headers, aborted}, until
   // reply(i, {status, headers, body, url}) answers it (or fails it, with
@@ -455,7 +455,7 @@ function page(file, body, options = {}) {
     isSecureContext: true,
     confirm: (msg) => { confirms.push(msg); return options.confirm !== false; },
     console: {
-      log: (...a) => logs.push(a.join(" ")), warn: (...a) => logs.push("warn " + a.join(" ")),
+      log: (...a) => logs.push(a.join(" ")), info: (...a) => logs.push("info " + a.join(" ")), warn: (...a) => logs.push("warn " + a.join(" ")),
       error: (...a) => logs.push("error " + a.join(" ")),
     },
   };
