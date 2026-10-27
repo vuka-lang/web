@@ -510,8 +510,10 @@ func (a *App) page(rq *request, n ui.Node) {
 	pctx, parts := rq.ctx, (*ui.Parts)(nil)
 	pending := pendingParts(rq.ctx)
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (pending || !testing.Testing() || streamInTests) {
-		pctx, parts = ui.WithParts(rq.ctx, a.partsOptions(r, pending || r.Method == http.MethodHead)) // HEAD's never run: it has no body
-		defer parts.Stop()                                                                            // the methods of parts that won't be written
+		// HEAD's methods never run: it has no body. Stop cancels those of
+		// parts that won't be written.
+		pctx, parts = ui.WithParts(rq.ctx, a.partsOptions(r, pending || r.Method == http.MethodHead))
+		defer parts.Stop()
 	}
 	info, err := ui.RenderPage(pctx, n, buf)
 	html := buf.Bytes()
