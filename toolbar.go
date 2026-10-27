@@ -137,13 +137,16 @@ type tbRecord struct {
 	Notes   []tbNote
 	Assets  []tbAsset     // the page's scoped components and the app-wide assets
 	Facts   []RequestNote // NoteRequest's rows
-	Live    []*tbEntry
-	Ref     int    // a socket message's ref
-	Bytes   int    // its reply's size
-	Err     string // its reply's error
-	Dropped int    // rows over toolbarMaxRows
-	Seq     int    // a socket message's number, for its frames' views
-	Frames  []tbFrame
+	// GQLFields and GQLBatches are a GraphQL request's field trace.
+	GQLFields  []GraphQLField
+	GQLBatches []GraphQLBatch
+	Live       []*tbEntry
+	Ref        int    // a socket message's ref
+	Bytes      int    // its reply's size
+	Err        string // its reply's error
+	Dropped    int    // rows over toolbarMaxRows
+	Seq        int    // a socket message's number, for its frames' views
+	Frames     []tbFrame
 	// FramesDropped says a socket message's frames were dropped, the
 	// page's record keeping the latest messages' (wirePageMax).
 	FramesDropped bool
@@ -190,6 +193,9 @@ type Statement struct {
 	// Refused is a statement the database layer refused before sending it;
 	// Err says why.
 	Refused bool
+	// Origin and Field are what ran it, as StatementOrigin marked its
+	// context: a GraphQL field's path and name; NoteStatement fills them.
+	Origin, Field string
 }
 
 // NoteStatement records a statement the request of ctx (or its live page's
@@ -197,6 +203,9 @@ type Statement struct {
 // context that no development toolbar watches.
 func NoteStatement(ctx context.Context, q Statement) {
 	if e := entryOf(ctx); e != nil {
+		if o := originOf(ctx); o.field != "" && q.Field == "" {
+			q.Origin, q.Field = o.path, o.field
+		}
 		e.mu.Lock()
 		if e.room() {
 			e.Queries = append(e.Queries, q)
@@ -243,7 +252,7 @@ func AddPanel(name string, render func(notes []any) ui.Node) {
 }
 
 func (e *tbEntry) room() bool {
-	if len(e.Queries)+len(e.Spans)+len(e.Logs)+len(e.Notes) < toolbarMaxRows {
+	if len(e.Queries)+len(e.Spans)+len(e.Logs)+len(e.Notes)+len(e.GQLFields)+len(e.GQLBatches) < toolbarMaxRows {
 		return true
 	}
 	e.Dropped++
@@ -276,6 +285,7 @@ func (e *tbEntry) snapshot() tbRecord {
 	r.Params, r.Queries, r.Spans = slices.Clone(r.Params), slices.Clone(r.Queries), slices.Clone(r.Spans)
 	r.Logs, r.Notes, r.Live = slices.Clone(r.Logs), slices.Clone(r.Notes), slices.Clone(r.Live)
 	r.Facts = slices.Clone(r.Facts)
+	r.GQLFields, r.GQLBatches = slices.Clone(r.GQLFields), slices.Clone(r.GQLBatches)
 	r.Frames = slices.Clone(r.Frames)
 	r.Encoding, r.Body, r.Wire = e.wire.get()
 	if !r.Done {
@@ -803,7 +813,7 @@ func (a *App) routeToolbar() {
 		out := summary(rec)
 		if r.URL.Query().Has("panels") {
 			var b bytes.Buffer
-			if err := renderPanels(&b, rec, a.cronPanel()...); err != nil {
+			if err := renderPanels(&b, rec, append(a.cronPanel(), a.graphiqlPanel()...)...); err != nil {
 				fmt.Fprintf(&b, "<p class=err>%s</p>", err)
 			}
 			out["html"] = b.String()

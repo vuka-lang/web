@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 
 	"github.com/vuka-lang/vuka/v2/diag"
@@ -39,10 +41,15 @@ func GraphQL(path string, opts ...any) Option {
 					a.writeError(w, r, errors.New("web: GraphQL isn't built"), false)
 					return
 				}
+				if a.tb != nil && r.Method == http.MethodGet && r.URL.RawQuery == "" && strings.Contains(r.Header.Get("Accept"), "text/html") {
+					a.graphiqlPage(w, r, path)
+					return
+				}
 				h(ctx, w, r)
 			}
 		)
 		where := fmt.Sprintf("web.GraphQL(%q)", path)
+		a.graphqlPath = path
 		a.Handle(http.MethodGet, path, handler, routeOpt(func(s *routeSpec) { s.calls, s.where = true, where }))
 		a.Handle(http.MethodPost, path, handler, routeOpt(func(s *routeSpec) { s.calls, s.where = true, where }))
 		a.checks = append(a.checks, func(a *App) error {
@@ -63,6 +70,17 @@ func GraphQL(path string, opts ...any) Option {
 			return nil
 		})
 	})
+}
+
+// graphiqlPage is what a browser opening the endpoint gets in development:
+// a page whose toolbar opens on its GraphiQL panel.
+func (a *App) graphiqlPage(w http.ResponseWriter, r *http.Request, path string) {
+	tag := strings.Replace(a.tb.tag(r), "<script ", "<script data-vk-graphiql ", 1)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	fmt.Fprintf(w, `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>GraphQL · %[1]s</title>%[2]s</head>`+
+		`<body style="margin:2rem;font:14px/1.5 system-ui,sans-serif"><p>The development toolbar's GraphiQL panel runs queries against <code>%[1]s</code>; each run is a call of its list, with the request's field trace.</p></body></html>`,
+		template.HTMLEscapeString(path), tag)
 }
 
 // GraphQLHandler answers a GraphQL request, given the request's context:

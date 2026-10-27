@@ -87,6 +87,10 @@ type Object struct {
 	// into the *T the fields' resolvers take); nil keeps it. A nil result
 	// is null.
 	Value func(v any) any
+	// Paged marks a connection (Connection[T]): in a query's complexity
+	// its lists count as many items as the field returning it asks for
+	// (its first or last argument).
+	Paged bool
 }
 
 // FieldDef is a field of an Object or Interface.
