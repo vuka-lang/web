@@ -16,17 +16,22 @@ function eq(got, want, what) {
 
 // open runs the toolbar of a page served under vuka run; send hands it a
 // build state as the server's stream would.
-function open() {
-  const streams = [];
+function open(o = {}) {
+  const streams = [], gets = [];
   class EventSource { constructor(url) { this.url = url; streams.push(this); } }
   class XMLHttpRequest { open() {} addEventListener() {} }
-  const p = page(file, "<main></main>", {
+  const p = page(file, o.body || "<main></main>", {
+    build: o.build, url: o.url,
     globals: {
       EventSource, XMLHttpRequest, Request: class {},
-      MutationObserver: class { observe() {} },
+      MutationObserver: class { observe() {} takeRecords() { return []; } },
       CSS: { escape: (s) => s },
       setInterval: () => 0,
-      fetch: () => Promise.resolve({ headers: { get: () => null }, json: () => Promise.resolve({ ms: "3ms", queries: 0 }) }),
+      fetch: (url, init) => {
+        gets.push(String(url));
+        if (o.fetch && !String(url).includes("/_vuka/")) return o.fetch(url, init);
+        return Promise.resolve({ headers: { get: () => null }, json: () => Promise.resolve({ ms: "3ms", queries: 0 }) });
+      },
     },
   });
   const w = p.window;
@@ -38,7 +43,7 @@ function open() {
   vm.runInContext(toolbarSrc, w);
   const $ = (s) => p.doc.querySelector("vuka-toolbar vk-shadow " + s);
   const send = async (st) => { streams[0].onmessage({ data: JSON.stringify(st) }); await settle(); };
-  return { $, send, streams };
+  return { $, send, streams, gets, p };
 }
 
 const viteFailed = { failed: true, islands: true, output: "vite islands (web/islands/Levels.vue): vite build: exit status 1\n[vite:vue] Unexpected token\n" };
@@ -79,6 +84,22 @@ test("styles or scripts failing say asset build failed", async () => {
   await settle();
   await t.send({ state: "ok", assets: { failed: true, output: "app.css: bad\n" } });
   eq(t.$(".state").textContent, "asset build failed", "the handle");
+});
+
+test("a navigation over HTTP shows as a page: its fetch's record", async () => {
+  const doc = `<!doctype html><html><head><title>b</title></head><body><main><h1>book</h1></main></body></html>`;
+  const t = open({
+    body: `<main><a id="go" href="/books/7" data-vk-link>go</a></main>`, build: "b1", url: "http://test/shelf",
+    fetch: (url) => Promise.resolve({ url: "http://test/books/7", redirected: false, status: 200,
+      headers: { get: (k) => ({ "x-vuka-toolbar": "r2", "vk-page": "-", "content-type": "text/html" })[k.toLowerCase()] || null },
+      text: () => Promise.resolve(doc) }),
+  });
+  await settle();
+  t.p.fire("#go", "click");
+  await settle();
+  const opts = t.$("select").querySelectorAll("option").map((o) => [o.getAttribute("value"), o.textContent]);
+  eq([t.p.$("h1") && t.p.$("h1").textContent, opts.some(([v, l]) => v === "r2" && l.includes("page /books/7")), t.gets.some((u) => u.endsWith("/_vuka/toolbar/r/r2"))],
+    ["book", true, true], "the page's record follows the navigation");
 });
 
 (async () => {

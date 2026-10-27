@@ -757,7 +757,7 @@ func (h *tbLogHandler) WithGroup(name string) slog.Handler {
 // tag is the script a full page gets for the toolbar of its request.
 func (tb *toolbar) tag(r *http.Request) string {
 	e := entryOf(r.Context())
-	if e == nil || r.Context().Value(joinKey{}) != nil {
+	if e == nil || r.Context().Value(joinKey{}) != nil || navigation(r) {
 		return ""
 	}
 	switch r.Header.Get("Sec-Fetch-Dest") {

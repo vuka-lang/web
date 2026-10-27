@@ -134,6 +134,7 @@ func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, html
 		return
 	}
 	if htmlPage {
+		navError(w, r)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(e.Status)
 		fmt.Fprintf(w, "<!doctype html>\n<title>%d %s</title>\n<h1>%s</h1>\n<p>%s</p>\n",

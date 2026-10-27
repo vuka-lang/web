@@ -91,7 +91,7 @@ func pagesApp(opts ...Option) *App {
 	return app
 }
 
-var pageVolatile = regexp.MustCompile(`data-vk-(token|toolbar)="[^"]*"`)
+var pageVolatile = regexp.MustCompile(`data-vk-(token|toolbar|build-id)="[^"]*"`)
 
 // TestPagesGolden pins the HTML of whole pages, live and not, with and
 // without the dev toolbar: a faster page path must not change a byte.

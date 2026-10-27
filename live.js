@@ -4,16 +4,19 @@
 // keeping focus, selection and what the user is typing. It also runs JS
 // commands (data-vk-js-<event>): changes to the page made in the browser,
 // with or without a live connection. Links marked data-vk-link move a live
-// page to another URL over its connection.
+// page to another URL over its connection, and a page that isn't live in
+// place over HTTP.
 (() => {
   "use strict";
   const script = document.currentScript;
   if (!script || window.vuka && window.vuka.connect) return;
-  const live = script.hasAttribute("data-vk-token"); // a page with no live parts has none
+  let live = script.hasAttribute("data-vk-token"); // a page with no live parts has none, until a navigation reaches one
   const src = new URL(script.src, location.href);
   const url = (src.protocol === "https:" ? "wss://" : "ws://") + src.host + src.pathname.replace(/\.js$/, "") + "?t=";
   let token = script.dataset.vkToken || ""; // the page's: a navigation brings the next one
-  const toolbar = script.dataset.vkToolbar; // development: the page's toolbar record, which the socket's messages join
+  let toolbar = script.dataset.vkToolbar; // development: the page's toolbar record, which the socket's messages join
+  const build = script.dataset.vkBuildId || ""; // the build that rendered the page: a navigation over HTTP names it
+  const root = script.dataset.vkRoot || "-"; // the page's root layout: a page under another is another document
   const nobubble = new Set(["focus", "blur", "mouseenter", "mouseleave", "load", "error", "scroll"]);
   const listening = new Set();
   const busy = new Map(); // ref → {el, form}: elements waiting for their reply
@@ -1465,22 +1468,103 @@
       replace ? location.replace(u.href) : location.hash = u.hash;
       return Promise.resolve({ url: u.href, patch: true });
     }
-    if (!live || !joined || u.origin !== location.origin) {
+    if (u.origin !== location.origin || (live ? !joined : !build)) {
       load(u.href, again);
       return new Promise(() => {});
     }
+    manual();
+    if (!live) return fetchGo(u, at, patch, pop, replace);
     if (!pop) save();
     flush();
-    if (nav) {
-      clearTimeout(nav.timer);
-      nav.reject(Object.assign(new Error("live: another navigation took its place"), { name: "AbortError" }));
-    }
+    supersede();
     return new Promise((resolve, reject) => {
       nav = { ref: ++ref, href: u.href, patch, pop, replace, resolve, reject, timer: setTimeout(() => load(u.href, again), 10000) };
       document.documentElement.setAttribute("data-vk-navigating", at); // where to, for the development toolbar
       ws.send(JSON.stringify({ type: "navigate", ref: nav.ref, url: at, patch: patch || undefined }));
     });
   }
+
+  // Over HTTP: a page that isn't live fetches the URL with Vk-Navigate (its
+  // build) and patches the body in place with the reply, the route having
+  // run as for a page load (nav.go). Its head is merged, scroll and focus
+  // follow as over a connection, and a live page reached so joins, the
+  // session its render parked adopted. What can't be patched loads: a
+  // reply naming another build or root layout, one that isn't a page (a
+  // redirect elsewhere, a file, JSON), a page whose body runs scripts of
+  // its own, a route asking for it (web.FullLoad), no reply in 10s, a
+  // network failure. Another move aborts the one in flight.
+  function fetched(href, ahead) {
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const headers = { "Vk-Navigate": build };
+    if (ahead) headers.Purpose = "prefetch"; // the server parks a live page's session as long as the runtime keeps the reply
+    const p = fetch(href, { headers, credentials: "same-origin", signal: ctl ? ctl.signal : undefined })
+      .then((res) => res.text().then((html) => ({ res, html })));
+    p.abort = () => { if (ctl) ctl.abort(); };
+    return p;
+  }
+
+  function fetchGo(u, at, patch, pop, replace) {
+    const again = !!(pop || replace);
+    if (!pop) save();
+    supersede();
+    const key = u.href.replace(/#.*$/, "");
+    return new Promise((resolve, reject) => {
+      const n = nav = { href: u.href, patch, pop, replace, resolve, reject };
+      const fail = (to) => {
+        if (nav !== n) return;
+        clearTimeout(n.timer);
+        nav = null;
+        load(to || u.href, again);
+      };
+      n.timer = setTimeout(() => { if (n.abort) n.abort(); fail(); }, 10000);
+      document.documentElement.setAttribute("data-vk-navigating", at); // where to, for the development toolbar
+      let req = fetchedAhead(key);
+      if (!req) {
+        req = fetched(key, false);
+        n.abort = req.abort;
+      }
+      req.then((r) => { if (nav === n) landed(n, r, fail); }, () => fail());
+    });
+  }
+
+  // landed applies a navigation's reply over HTTP, or loads the URL.
+  function landed(n, r, fail) {
+    const res = r.res, h = (k) => res.headers.get(k) || "";
+    const final = res.url ? httpURL(res.url) : null;
+    const moved = res.redirected && final ? final.href : null; // a redirect the fetch followed
+    if (final && final.origin !== location.origin) return fail();
+    if (h("Vk-Reload") || h("Vk-Page") !== root || !/^text\/html/i.test(h("Content-Type"))) return fail(moved);
+    if (moved) n.href = moved;
+    toolbar = h("X-Vuka-Toolbar") || toolbar;
+    try { page(r.html); } catch (err) { console.error("vuka: live: " + err.message); return fail(n.href); }
+    arrived(n, {});
+    emit("vk:patched", { ids: ["c0"] });
+    const tok = h("Vk-Live");
+    if (tok) { // a live page: its session waits, parked, for this join
+      token = tok;
+      live = true;
+      connect();
+    }
+  }
+
+  // supersede ends the navigation in flight: another takes its place.
+  function supersede() {
+    if (!nav) return;
+    clearTimeout(nav.timer);
+    if (nav.abort) nav.abort();
+    nav.reject(Object.assign(new Error("live: another navigation took its place"), { name: "AbortError" }));
+    nav = null;
+  }
+
+  // manual has the runtime restore scroll on back and forward, not the
+  // browser, from the moment it moves the page in place.
+  let restoring = false; // the runtime restores scroll, not the browser
+  function manual() {
+    restoring = true;
+    try { if ("scrollRestoration" in history) history.scrollRestoration = "manual"; } catch (_) {}
+  }
+  window.addEventListener("pagehide", () => { try { if (restoring) history.scrollRestoration = "auto"; } catch (_) {} }); // a document loaded on the entry later
+  window.addEventListener("pageshow", (e) => { if (e.persisted && restoring) manual(); });
 
   // move is go for the runtime's own callers, who don't wait for it.
   const move = (href, patch, pop, replace) => { go(href, patch, pop, replace).catch(() => {}); };
@@ -1639,8 +1723,22 @@
   // <link rel=prefetch>); after 30s it is dropped. The fetch is a page's
   // HTTP render: a live page's session starts when the page is opened. A
   // link moving a live page over its connection isn't fetched: the
-  // server renders only what changes below the layouts kept.
+  // server renders only what changes below the layouts kept. A link the
+  // runtime follows over HTTP (a page that isn't live) prefetches the
+  // navigation's reply itself, at most a few at a time, and a click
+  // within 30s uses it instead of fetching again.
   const prefetched = new Map(); // href → when
+  const navAhead = new Map(); // href → {p, at}: navigation replies fetched ahead
+  let aheadFlying = 0;
+  const maxAhead = 3;
+  const inPlace = (a) => !live && build && a.hasAttribute("data-vk-link") && !a.hasAttribute("data-vk-reload");
+  // fetchedAhead takes the reply fetched ahead for href, once.
+  function fetchedAhead(href) {
+    const e = navAhead.get(href);
+    if (!e) return null;
+    navAhead.delete(href);
+    return Date.now() - e.at < 30000 ? e.p : null;
+  }
   const speculation = typeof HTMLScriptElement !== "undefined" && HTMLScriptElement.supports && HTMLScriptElement.supports("speculationrules");
   function prefetchable(a) {
     if (!a || !a.matches("a[href]") || a.hasAttribute("download") || /^(?!_self$)./.test(a.getAttribute("target") || "")) return null;
@@ -1656,6 +1754,16 @@
   function prefetch(a) {
     const href = prefetchable(a);
     if (!href || Date.now() - (prefetched.get(href) || -Infinity) < 30000) return;
+    if (inPlace(a)) {
+      if (aheadFlying >= maxAhead) return;
+      prefetched.set(href, Date.now());
+      const p = fetched(href, true), done = () => { aheadFlying--; };
+      aheadFlying++;
+      p.then(done, done);
+      navAhead.set(href, { p, at: Date.now() });
+      setTimeout(() => { prefetched.delete(href); if (navAhead.has(href) && navAhead.get(href).p === p) navAhead.delete(href); }, 30000);
+      return;
+    }
     prefetched.set(href, Date.now());
     let el;
     if (speculation) {
@@ -1696,19 +1804,22 @@
   bindIn(document.body, page0);
   markActive();
   watchViewport();
-  // A link moves over the connection; data-vk-replace (VukaLink's replace)
-  // also takes the place of the current history entry when it loads.
+  // A link moves over the connection, or in place over HTTP on a page that
+  // isn't live; data-vk-replace (VukaLink's replace) also takes the place of
+  // the current history entry when it loads. data-vk-reload leaves the
+  // link to the browser.
   document.addEventListener("click", (e) => {
     const t = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
     const a = t && t.closest("a[data-vk-link]"), href = a && a.getAttribute("href");
-    if (!href || !joined && !a.hasAttribute("data-vk-replace") || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey ||
+    const taken = joined || !live && build;
+    if (!href || !taken && !a.hasAttribute("data-vk-replace") || a.hasAttribute("data-vk-reload") || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey ||
       /^(?!_self$)./.test(a.getAttribute("target") || "") || a.hasAttribute("download")) return;
     const u = new URL(href, location.href);
     if (u.origin !== location.origin || u.pathname + u.search === here && u.hash) return;
     e.preventDefault();
     move(u.href, a.getAttribute("data-vk-link") === "patch", null, a.hasAttribute("data-vk-replace"));
   });
-  if (!live) return;
+  if (!live && !build) return;
   history.replaceState({ ...history.state, vk: pageID }, "");
   window.addEventListener("popstate", (e) => {
     markActive();
@@ -1717,9 +1828,9 @@
     move(location.href, st.vk === pageID, st);
   });
   window.addEventListener("scroll", () => { clearTimeout(saving); saving = setTimeout(save, 200); }, { passive: true });
-  window.addEventListener("online", () => { if (!ws) { attempt = 0; connect(); } });
+  window.addEventListener("online", () => { if (live && !ws) { attempt = 0; connect(); } });
   document.addEventListener("visibilitychange", () => {
-    if (sleeping && document.visibilityState !== "hidden" && !ws) { sleeping = false; attempt = 0; connect(); }
+    if (live && sleeping && document.visibilityState !== "hidden" && !ws) { sleeping = false; attempt = 0; connect(); }
   });
-  connect();
+  if (live) connect();
 })();

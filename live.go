@@ -460,8 +460,10 @@ func matchName(names []string, name string) string {
 // components (or event handlers) is live: the runtime script and a join token
 // go before </body>. A page with only JS commands (data-vk-js-*) that push
 // to no handler gets the script without a token: it runs them and never
-// connects; links (data-vk-link) alone need no script. Under a join or a
-// navigation the page is the session's instead.
+// connects; so does one with links (data-vk-link), which the runtime
+// follows in place (nav.go). Under a join or a live navigation the page is
+// the session's instead; a navigation over HTTP (NavigateHeader) gets the
+// page with what the browser needs to patch it in (navPage).
 //
 // Another method's page is a fragment, as rendered, unless the browser
 // shows it as the document (wholePage: a form posted without script, which
@@ -532,6 +534,13 @@ func (a *App) page(rq *request, n ui.Node) {
 	if live && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		token = a.signToken(r.URL.RequestURI())
 	}
+	nav := navigation(r)
+	if nav && !navPage(w, r, html, token) {
+		if s != nil {
+			s.Close()
+		}
+		return
+	}
 	if token != "" {
 		// the messages this page showed show again when its socket joins
 		a.joinMessages.put(token, shownMessages(rq.ctx))
@@ -548,7 +557,8 @@ func (a *App) page(rq *request, n ui.Node) {
 		s.Close()
 	}
 	var script string
-	if live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS {
+	if live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS ||
+		bytes.Contains(html, []byte(" data-vk-link")) {
 		script = a.scriptTag(r, token)
 	}
 	html = withTitle(html, ui.PageTitle(rq.ctx))
@@ -566,6 +576,9 @@ func (a *App) page(rq *request, n ui.Node) {
 	if prefetching(r) && w.Header().Get("Cache-Control") == "" {
 		// the browser keeps a prefetched page as long as the runtime does
 		w.Header().Set("Cache-Control", "private, max-age="+strconv.Itoa(int(prefetchWindow/time.Second)))
+	}
+	if nav && token == "" && etagged(w, r, html, []byte(head), []byte(script)) {
+		return
 	}
 	writePage(w, html, head, script)
 }
@@ -666,8 +679,9 @@ func (a *App) scriptTag(r *http.Request, token string) string {
 	if t, ok := r.Context().Value(rootKey{}).(reflect.Type); ok {
 		root = ` data-vk-root="` + rootID(t) + `"` // the page's root layout: another one is a full page load
 	}
+	build := ` data-vk-build-id="` + a.buildID() + `"` // a navigation names it (nav.go)
 	if token == "" {
-		return `<script src="` + liveScript + `?v=` + liveJSTag + `"` + root + ` defer></script>`
+		return `<script src="` + liveScript + `?v=` + liveJSTag + `"` + root + build + ` defer></script>`
 	}
 	var tb string
 	if a.tb != nil {
@@ -675,7 +689,7 @@ func (a *App) scriptTag(r *http.Request, token string) string {
 			tb = ` data-vk-toolbar="` + e.ID + `"` // the socket's messages join the page's record
 		}
 	}
-	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + token + `"` + root + tb + ` defer></script>`
+	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + token + `"` + root + tb + build + ` defer></script>`
 }
 
 // A join token names the page a live connection rebuilds: its URI, when the
