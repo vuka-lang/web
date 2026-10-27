@@ -49,6 +49,9 @@ type Config struct {
 	// Observe, when set, is called after each request with the operation
 	// run (zero when none was), the response and how long it took.
 	Observe func(ctx context.Context, op OperationInfo, res *Response, d time.Duration)
+	// Trace, when set, is asked for each request's Trace: nil traces
+	// nothing.
+	Trace func(ctx context.Context) *Trace
 }
 
 // Server executes requests against a schema.
@@ -198,7 +201,15 @@ func (s *Server) execute(ctx context.Context, req Request) (*Response, Operation
 		ctx, cancel = context.WithTimeout(ctx, s.limits.Timeout)
 		defer cancel()
 	}
-	e := &execution{srv: s, s: schema, op: op, frags: c.frags, vars: vars, varset: newVarValues(op, vars, req.Variables), sem: make(chan struct{}, maxConcurrentResolvers)}
+	st := &state{}
+	if s.cfg.Trace != nil {
+		if t := s.cfg.Trace(ctx); t != nil {
+			st.trace = &tracer{t}
+		}
+	}
+	ctx = context.WithValue(ctx, stateKey{}, st)
+	st.sched = newSched(ctx, maxConcurrentResolvers)
+	e := &execution{srv: s, s: schema, op: op, frags: c.frags, vars: vars, varset: newVarValues(op, vars, req.Variables), sched: st.sched, trace: st.trace}
 	data := e.run(ctx)
 	return &Response{Data: data, Errors: e.errors(), Executed: true}, info
 }

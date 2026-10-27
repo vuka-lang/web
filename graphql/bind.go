@@ -23,7 +23,8 @@ import (
 type Package struct {
 	Path       string // the package's import path
 	Operations []Operation
-	Types      []Binding // Struct, FormInput and Consts values
+	Types      []Binding   // Struct, FormInput and Consts values
+	Loaders    []LoaderDef // its @graphql.Loader types
 }
 
 // Operation is a query or mutation: a function of the package.

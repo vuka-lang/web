@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/vuka-lang/web/v2/graphql/language"
 )
@@ -35,7 +36,8 @@ type execution struct {
 	vars  map[string]any
 	// varset is vars with what each was given, coerced again where used.
 	varset *varValues
-	sem    chan struct{} // goroutines a run may start beside its own; full, work runs inline
+	sched  *sched
+	trace  *tracer // nil unless the request is traced
 
 	mu   sync.Mutex
 	errs []orderedErr
@@ -223,18 +225,9 @@ func (e *execution) fields(ctx context.Context, obj *Object, src any, path []any
 				run(i)
 				continue
 			}
-			select {
-			case e.sem <- struct{}{}:
-				wg.Add(1)
-				go func() {
-					defer func() { <-e.sem; wg.Done() }()
-					run(i)
-				}()
-			default:
-				run(i)
-			}
+			e.sched.spawn(&wg, func() { run(i) })
 		}
-		wg.Wait()
+		e.sched.wait(&wg)
 	}
 	m := NewOrderedMap(len(groups))
 	for i, g := range groups {
@@ -293,7 +286,16 @@ func (e *execution) field(ctx context.Context, obj *Object, src any, path []any,
 			return fail(e.srv.present(ctx, gerr)...)
 		}
 	}
-	res, rerr := e.resolve(ctx, def, ResolveParams{Source: src, Args: args, Info: info})
+	var start time.Time
+	rctx := ctx
+	if e.trace != nil && !def.Trivial {
+		start = time.Now()
+		rctx = e.trace.context(ctx, pathString(path))
+	}
+	res, rerr := e.resolve(rctx, def, ResolveParams{Source: src, Args: args, Info: info})
+	if e.trace != nil && !def.Trivial {
+		e.trace.field(path, obj.Name+"."+def.Name, start, time.Since(start), rerr != nil)
+	}
 	if rerr != nil {
 		if errors.Is(rerr, context.DeadlineExceeded) && ctx.Err() != nil || errors.Is(rerr, context.Canceled) && ctx.Err() != nil {
 			return fail(e.srv.ctxError(ctx, path, g.nodes))
@@ -418,18 +420,9 @@ func (e *execution) completeList(ctx context.Context, t *List, nodes []*language
 	if n > 1 && isComposite(NamedOf(t.Of)) {
 		var wg sync.WaitGroup
 		for i := range n {
-			select {
-			case e.sem <- struct{}{}:
-				wg.Add(1)
-				go func() {
-					defer func() { <-e.sem; wg.Done() }()
-					one(i)
-				}()
-			default:
-				one(i)
-			}
+			e.sched.spawn(&wg, func() { one(i) })
 		}
-		wg.Wait()
+		e.sched.wait(&wg)
 	} else {
 		for i := range n {
 			one(i)
