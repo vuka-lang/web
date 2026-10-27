@@ -30,7 +30,7 @@
 	{{- if .Repeated}}<span class="warn"><b>{{.Repeated}}</b> repeated</span>{{end}}
 	{{- if .Failed}}<span class="err"><b>{{.Failed}}</b> failed</span>{{end}}
 </div>
-{{- range .NPlusOne}}<div class="alert err"><b>N+1</b> — this statement ran {{.Times}} times with different arguments, once per row of an earlier result: <code class="sqltext">{{sql .SQL}}</code> Read those rows in one statement (a join, or an <code>IN</code> list).</div>{{end}}
+{{- range .NPlusOne}}<div class="alert err"><b>N+1</b> — this statement ran {{.Times}} times with different arguments, once per row of an earlier result{{if .Fields}}, from the GraphQL field{{if gt (len .Fields) 1}}s{{end}} {{range $i, $f := .Fields}}{{if $i}}, {{end}}<code>{{$f}}</code>{{end}}{{end}}: <code class="sqltext">{{sql .SQL}}</code> {{if .Fields}}Load them through a <code>@graphql.Loader</code>: one statement for the whole list.{{else}}Read those rows in one statement (a join, or an <code>IN</code> list).{{end}}</div>{{end}}
 <table class="grid sql">
 	<tr><th class="n">#</th><th>Statement</th><th class="num">Rows</th><th class="time">Time</th></tr>
 	{{- range .Rows}}<tr class="{{.Tone}}">
@@ -38,6 +38,7 @@
 		<td><code class="sqltext">{{sql .SQL}}</code>{{if gt .Times 1}} <span class="times">×{{.Times}}</span>{{end}}
 			{{- if .Args}}<div class="args">{{.Args}}</div>{{end}}
 			{{- if .DB}}<div class="args">on {{.DB}}</div>{{end}}
+			{{- if .Origin}}<div class="args">from <code>{{.Origin}}</code></div>{{end}}
 			{{- if .Err}}<div class="errtext">{{.Err}}</div>{{end}}</td>
 		<td class="num">{{.Rows}}</td>
 		<td class="time"><span class="track"><i style="{{.Bar}}"></i></span><span class="num">{{.Ms}}</span></td>
@@ -128,3 +129,20 @@
 	</tr>{{end}}
 </table>
 <p class="foot">Each run is a record of its own, under Cron runs in the list above.</p>{{end}}
+
+{{define "graphql"}}<div class="stats">
+	<span><b>{{len .Fields}}</b> field{{if ne (len .Fields) 1}}s{{end}} resolved</span>
+	{{- if .Batches}}<span><b>{{len .Batches}}</b> loader batch{{if ne (len .Batches) 1}}es{{end}}</span>{{end}}
+	<span><b>{{.Total}}</b></span>
+	{{- if .Slowest}}<span class="dim">slowest {{.Slowest}}</span>{{end}}
+</div>
+{{- if .Batches}}<h4>Loader batches</h4><table class="grid gql">
+	<tr><th>Loader</th><th class="num">Keys</th><th class="num">SQL</th><th class="time">Time</th></tr>
+	{{- range .Batches}}<tr class="{{if .Err}}err{{end}}"><td><code>{{.Loader}}</code>{{if .Err}}<div class="errtext">{{.Err}}</div>{{end}}</td><td class="num">{{.Keys}}</td><td class="num">{{.SQL}}</td>
+		<td class="time"><span class="track"><i style="{{.Bar}}"></i></span><span class="num">{{.Ms}}</span></td></tr>{{end}}
+</table>{{end}}
+<h4>Fields</h4>{{if not .Fields}}<p class="empty">No field with a resolver of its own.</p>{{else}}<table class="grid gql">
+	<tr><th>Path</th><th>Field</th><th class="num">SQL</th><th class="time">Time</th></tr>
+	{{- range .Fields}}<tr class="{{if .Err}}err{{else if gt .SQL 0}}warn{{end}}"><td><code>{{.Path}}</code></td><td class="dim">{{.Field}}</td><td class="num">{{if .SQL}}{{.SQL}}{{end}}</td>
+		<td class="time"><span class="track"><i style="{{.Bar}}"></i></span><span class="num">{{.Ms}}</span></td></tr>{{end}}
+</table>{{end}}{{end}}

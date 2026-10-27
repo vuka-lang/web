@@ -128,6 +128,7 @@
         fail(m.error, m.ref);
         break;
       case "redirect":
+        if (b && b.form) leaving = true; // a submit's: its changes are saved
         load(m.url, n && (n.pop || n.replace));
         break;
     }
@@ -333,6 +334,253 @@
     el.focus({ preventScroll: true });
   });
 
+  // Leaving with unsaved changes: a form with data-vk-confirm-leave has
+  // changes not saved while the server says so (data-vk-dirty: its values
+  // differ from the ones it was loaded with) or one of its fields shows
+  // what the server didn't send it. The browser asks before the page goes
+  // (beforeunload), and the runtime before a link or navigate moves it;
+  // a form's own submit leaves without asking.
+  let leaving = false;
+  function differs(el) {
+    if (checkable(el)) return el.checked !== el.hasAttribute("checked");
+    if (el.tagName === "SELECT") {
+      const marked = Array.from(el.options).filter((o) => o.hasAttribute("selected"));
+      if (!marked.length && !el.multiple) return el.selectedIndex > 0;
+      return Array.from(el.options).some((o) => o.selected !== o.hasAttribute("selected"));
+    }
+    return el.value !== (el.tagName === "TEXTAREA" ? el.textContent : el.getAttribute("value") || "");
+  }
+  function unsaved() {
+    for (const f of document.querySelectorAll("form[data-vk-confirm-leave]")) {
+      if (f.hasAttribute("data-vk-dirty")) return f;
+      for (const el of f.elements) if (isField(el) && el.name && el.type !== "hidden" && !el.disabled && differs(el)) return f;
+    }
+    return null;
+  }
+  // confirmLeave asks the visitor whether to leave a form's changes; true
+  // to go on.
+  function confirmLeave() {
+    const f = unsaved();
+    if (!f || window.confirm(f.getAttribute("data-vk-confirm-leave"))) {
+      if (f) leaving = true;
+      return true;
+    }
+    return false;
+  }
+  window.addEventListener("beforeunload", (e) => {
+    if (leaving || !unsaved()) return;
+    e.preventDefault();
+    e.returnValue = "";
+  });
+  window.addEventListener("pageshow", () => { leaving = false; });
+  document.addEventListener("submit", (e) => { if (!e.defaultPrevented) leaving = true; }); // a form posting: the page goes on purpose
+
+  // Saved: a form saved in the last 2s (data-vk-saved, the ms left) asks
+  // the server again once the time is up, so what Saved showed goes.
+  document.addEventListener("vk:patched", () => {
+    document.querySelectorAll("form[data-vk-saved]").forEach((f) => {
+      const ms = f.getAttribute("data-vk-saved");
+      if (f.vkSaved && f.vkSaved.ms === ms) return;
+      if (f.vkSaved) clearTimeout(f.vkSaved.timer);
+      f.vkSaved = { ms, timer: setTimeout(() => {
+        f.vkSaved = null;
+        if (f.isConnected && f.hasAttribute("data-vk-saved")) f.dispatchEvent(new CustomEvent("vksaved", { bubbles: true }));
+      }, +ms) };
+    });
+  });
+
+  // Checks before a submit sent without a connection: the rules a control's
+  // data-vk-check lists — the field's own, in the server's order, with the
+  // server's messages — run in the browser, and a submit breaking one shows
+  // its errors and summary as the server's 422 would, without the round
+  // trip. Only what the browser decides exactly as the server is checked:
+  // a value it can't read the same way (letters in a number, a character
+  // not a digit where only digits go) is the server's to judge, and the
+  // server judges every submit that goes.
+  const goSpace = new RegExp("^[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+|[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000]+$", "g");
+  function checkValue(form, el, name, spec) {
+    const all = Array.from(form.elements).filter((x) => x.name === name && !x.disabled);
+    const clean = (v) => spec.t ? v.replace(goSpace, "") : v;
+    if (spec.k === "b") return all.some((x) => checkable(x) && x.checked);
+    if (spec.k === "l") {
+      const out = [];
+      for (const x of all) {
+        if (checkable(x)) { if (x.checked) out.push(clean(x.value)); }
+        else if (x.tagName === "SELECT") for (const o of x.selectedOptions) out.push(clean(o.value));
+      }
+      return out.filter((v) => v !== "");
+    }
+    const choices = all.filter(checkable);
+    if (choices.length) {
+      const c = choices.find((x) => x.checked);
+      return clean(c ? c.value : "");
+    }
+    return all.length ? clean(all[all.length - 1].value) : "";
+  }
+  const numberRe = { i: /^[+-]?\d+$/, u: /^\+?\d+$/, f: /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/ };
+  // verdict is the first rule of spec the value breaks, null when it breaks
+  // none, undefined when the browser can't tell.
+  function verdict(form, el, name, spec) {
+    const v = checkValue(form, el, name, spec);
+    let size = 0, zero = false;
+    switch (spec.k) {
+      case "b": zero = !v; break;
+      case "l": size = v.length; zero = !size; break;
+      case "s":
+        if (spec.d && !/^[\p{Nd} ]*$/u.test(v)) return undefined;
+        size = Array.from(v).length;
+        zero = v === "";
+        break;
+      default: {
+        const t = v.replace(/,/g, "");
+        if (t === "") { size = 0; zero = true; break; }
+        if (!numberRe[spec.k] || !numberRe[spec.k].test(t)) return undefined;
+        size = Number(t);
+        if (spec.k !== "f" && !Number.isSafeInteger(size)) return undefined;
+        zero = size === 0;
+      }
+    }
+    for (const r of spec.r || []) {
+      const p = r[1];
+      switch (r[0]) {
+        case "omitempty": if (zero) return null; break;
+        case "required": if (zero) return r; break;
+        case "email": {
+          if (v === "") break;
+          const at = v.lastIndexOf("@");
+          if (at <= 0 || !v.slice(at + 1).includes(".")) return r;
+          break;
+        }
+        case "oneof": if (!p.includes(v)) return r; break;
+        case "min": if (spec.k !== "b" && size < p) return r; break;
+        case "max": if (spec.k !== "b" && size > p) return r; break;
+        case "len": if (spec.k !== "b" && size !== p) return r; break;
+        default: return undefined;
+      }
+    }
+    return null;
+  }
+  const formWords = (form) => { try { return JSON.parse(form.getAttribute("data-vk-words") || "{}"); } catch (_) { return {}; } };
+  // the control a check's element stands for (a group's first) and where
+  // its error goes: before the control, or the group's choices
+  function checkSite(el) {
+    if (isField(el)) return { ctl: el, before: el.closest(".vk-check") || el, link: el };
+    const ctl = el.querySelector("input,select,textarea");
+    return { ctl, before: el.querySelector(".vk-choices") || el, link: el };
+  }
+  function clientErrors(form) {
+    form.querySelectorAll("[data-vk-client]").forEach((p) => dropClient(p));
+  }
+  function dropClient(p) {
+    const at = p.vkAt || {};
+    if (at.described) {
+      const ids = (at.described.getAttribute("aria-describedby") || "").split(/\s+/).filter((id) => id && id !== p.id);
+      ids.length ? at.described.setAttribute("aria-describedby", ids.join(" ")) : at.described.removeAttribute("aria-describedby");
+    }
+    if (at.invalid) at.invalid.removeAttribute("aria-invalid");
+    if (at.group) at.group.classList.remove("vk-field--invalid");
+    if (at.server) p.replaceWith(at.server);
+    else p.remove();
+  }
+  function showClient(form, el, rule) {
+    const site = checkSite(el);
+    if (!site.ctl || !site.before.parentNode) return null;
+    const id = site.ctl.id || "";
+    const p = document.createElement("p");
+    p.className = "vk-field__error";
+    p.id = id + "-error";
+    p.setAttribute("data-vk-error", rule[3] || "");
+    p.setAttribute("data-vk-client", "");
+    const sr = document.createElement("span");
+    sr.className = "vk-sr-only";
+    sr.textContent = formWords(form).error || "Error:";
+    p.append(sr, " " + rule[2]);
+    const at = p.vkAt = {};
+    const old = id && document.getElementById(id + "-error");
+    if (old && form.contains(old)) {
+      at.server = old;
+      old.replaceWith(p);
+    } else {
+      site.before.parentNode.insertBefore(p, site.before);
+      const d = isField(el) ? site.ctl : el;
+      const ids = (d.getAttribute("aria-describedby") || "").split(/\s+/).filter(Boolean);
+      if (!ids.includes(p.id)) { d.setAttribute("aria-describedby", ids.concat(p.id).join(" ")); at.described = d; }
+    }
+    if (isField(el) && site.ctl.getAttribute("aria-invalid") !== "true") { site.ctl.setAttribute("aria-invalid", "true"); at.invalid = site.ctl; }
+    const g = el.closest(".vk-field");
+    if (g && !g.classList.contains("vk-field--invalid")) { g.classList.add("vk-field--invalid"); at.group = g; }
+    return { id, text: rule[2] };
+  }
+  function precheck(form) {
+    clientErrors(form);
+    const shown = [];
+    for (const el of form.querySelectorAll("[data-vk-check]")) {
+      let spec;
+      try { spec = JSON.parse(el.getAttribute("data-vk-check")); } catch (_) { continue; }
+      const name = el.getAttribute("data-vk-name") || el.name;
+      const r = name && verdict(form, el, name, spec);
+      if (!r) continue;
+      const s = showClient(form, el, r);
+      if (s) shown.push(s);
+    }
+    if (!shown.length) return true;
+    const id = form.getAttribute("data-vk-form"), w = formWords(form);
+    const old = document.getElementById(id + "-summary");
+    const sum = document.createElement("div");
+    sum.className = "vk-summary";
+    sum.id = id + "-summary";
+    sum.tabIndex = -1;
+    sum.setAttribute("data-vk-summary", "");
+    sum.setAttribute("data-vk-client", "");
+    const alert = document.createElement("div"), h = document.createElement("h2"), ul = document.createElement("ul");
+    alert.setAttribute("role", "alert");
+    h.className = "vk-summary__title";
+    h.textContent = w.problem || "There is a problem";
+    ul.className = "vk-summary__list";
+    for (const s of shown) {
+      const li = document.createElement("li"), a = document.createElement("a");
+      a.href = "#" + s.id;
+      a.textContent = s.text;
+      li.append(a);
+      ul.append(li);
+    }
+    alert.append(h, ul);
+    sum.append(alert);
+    if (old && form.contains(old)) {
+      sum.vkAt = { server: old };
+      old.replaceWith(sum);
+    } else {
+      let at = form.firstChild;
+      while (at && (at.nodeType !== 1 || at.tagName === "INPUT" && at.type === "hidden")) at = at.nextSibling;
+      form.insertBefore(sum, at);
+    }
+    sum.focus();
+    if (!document.title.startsWith("Error: ")) document.title = "Error: " + document.title;
+    return false;
+  }
+  document.addEventListener("submit", (e) => {
+    const form = e.target;
+    if (joined || !form || form.tagName !== "FORM" || !form.hasAttribute("data-vk-form")) return;
+    if (e.submitter && e.submitter.name === "_vk_intent") return;
+    if (precheck(form)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
+  // a field showing a check's error drops it once it passes
+  const recheck = (e) => {
+    const t = e.target;
+    if (joined || !(t instanceof Element) || !isField(t) || !t.form || !t.form.hasAttribute("data-vk-form")) return;
+    const el = t.hasAttribute("data-vk-check") ? t : t.closest("[data-vk-check]");
+    const site = el && checkSite(el);
+    const err = site && site.ctl && document.getElementById(site.ctl.id + "-error");
+    if (!err || !err.hasAttribute("data-vk-client")) return;
+    let spec;
+    try { spec = JSON.parse(el.getAttribute("data-vk-check")); } catch (_) { return; }
+    if (verdict(t.form, el, el.getAttribute("data-vk-name") || el.name, spec) === null) dropClient(err);
+  };
+  document.addEventListener("input", recheck, true);
+  document.addEventListener("change", recheck, true);
+
   function flush() {
     pending.forEach((p) => { clearTimeout(p.timer); send(p.msg); });
     pending.clear();
@@ -381,11 +629,20 @@
     // but never morph into its subtree.
     if (el.hasAttribute("data-vk-island")) return attrs(el, next);
     if (!isField(el)) {
+      if (el.tagName === "FORM" && next.hasAttribute("data-vk-gen") && el.getAttribute("data-vk-gen") !== next.getAttribute("data-vk-gen")) {
+        // the form was loaded or reset: its fields take the server's values
+        const was = regen;
+        regen = el;
+        try {
+          attrs(el, next);
+          return keptText(el, next) || children(el, next);
+        } finally { regen = was; }
+      }
       attrs(el, next);
       return keptText(el, next) || children(el, next);
     }
-    const seen = fieldState(el), before = serverValue(el);
-    const typing = el === document.activeElement && !(sentField && sentField.el === el && sentField.shows === fieldShows(el));
+    const seen = fieldState(el), before = serverValue(el), fresh = regen && regen.contains(el);
+    const typing = !fresh && el === document.activeElement && !(sentField && sentField.el === el && sentField.shows === fieldShows(el));
     attrs(el, next);
     if (el.tagName === "TEXTAREA") {
       if (el.textContent !== next.textContent) el.textContent = next.textContent;
@@ -393,8 +650,11 @@
       children(el, next);
     }
     if (typing) restore(el, seen);
-    else if (serverValue(el) !== before) takeServer(el);
+    else if (fresh || serverValue(el) !== before) takeServer(el);
   }
+
+  // regen is a form being morphed whose generation changed.
+  let regen = null;
 
   // sentField is the focused field when the page last sent an event, and
   // what it showed.
@@ -1464,6 +1724,9 @@
       return Promise.reject(new Error(msg));
     }
     const at = u.pathname + u.search, again = !!(pop || replace);
+    if (!pop && !patch && at !== here && !leaving && !confirmLeave()) {
+      return Promise.reject(Object.assign(new Error("live: the visitor stayed, the form's changes not saved"), { name: "AbortError" }));
+    }
     if (!pop && at === here && u.hash) {
       replace ? location.replace(u.href) : location.hash = u.hash;
       return Promise.resolve({ url: u.href, patch: true });

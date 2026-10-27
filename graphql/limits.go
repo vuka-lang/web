@@ -104,6 +104,7 @@ type measure struct {
 	frags    map[string]*language.FragmentDefinition
 	vars     map[string]any
 	listSize int
+	page     int // the size of the connection being measured
 }
 
 func introspective(name string) bool { return strings.HasPrefix(name, "__") }
@@ -162,11 +163,25 @@ func (m *measure) cost(ss *language.SelectionSet, parent NamedType, onPath map[s
 				_, list = nullable(def.Type).(*List)
 				sub = NamedOf(def.Type)
 			}
+			size := 0
+			if list {
+				size = m.size(sel)
+				if o, ok := parent.(*Object); ok && o.Paged {
+					size = m.page // a connection's edges: a page of the size its field asks for
+				}
+			}
 			if sel.SelectionSet != nil {
-				child = m.cost(sel.SelectionSet, sub, onPath)
+				if o, ok := sub.(*Object); ok && o.Paged {
+					saved := m.page
+					m.page = m.size(sel)
+					child = m.cost(sel.SelectionSet, sub, onPath)
+					m.page = saved
+				} else {
+					child = m.cost(sel.SelectionSet, sub, onPath)
+				}
 			}
 			if list {
-				child *= m.size(sel)
+				child *= size
 			}
 			total += c + child
 		case *language.InlineFragment:

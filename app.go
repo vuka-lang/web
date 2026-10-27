@@ -78,6 +78,8 @@ type App struct {
 
 	tb        *toolbar // nil: no development toolbar
 	noToolbar bool
+	// graphqlPath is web.GraphQL's path, for the toolbar's GraphiQL panel.
+	graphqlPath string
 
 	noCSS     bool
 	cssSource string      // web.Tailwind's path, for the vuka command

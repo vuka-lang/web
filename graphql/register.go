@@ -47,6 +47,7 @@ type assembly struct {
 	enums    map[reflect.Type]*Enum
 	texts    map[reflect.Type]*Scalar
 	names    map[string]string // a type's name → what it names, for collisions
+	loaders  map[reflect.Type]*LoaderDef
 	errs     []error
 }
 
@@ -161,7 +162,7 @@ func (a *assembly) object(t reflect.Type) *Object {
 	if !ok {
 		return o
 	}
-	o.Description, o.Value = b.doc, b.norm
+	o.Description, o.Value, o.Paged = b.doc, b.norm, isConnection(t)
 	fieldAttrs := vuka.FieldAttrsOf(t)
 	seen := map[string]string{}
 	for _, m := range b.fields {
@@ -371,6 +372,7 @@ func (a *assembly) params(ps []Param, attrs []any, what string) ([]*ArgDef, func
 	type slot struct {
 		arg  string
 		form bool
+		page bool
 		dep  func(context.Context) (any, error)
 	}
 	slots := make([]slot, len(ps))
@@ -378,6 +380,8 @@ func (a *assembly) params(ps []Param, attrs []any, what string) ([]*ArgDef, func
 	names := map[string]bool{}
 	for i, p := range ps {
 		switch {
+		case p.Dep != nil && a.loaders[p.Dep] != nil:
+			slots[i].dep = a.loader(a.loaders[p.Dep], what)
 		case p.Dep != nil:
 			dep, err := a.host.Dependency(p.Dep, what)
 			if err != nil {
@@ -385,6 +389,14 @@ func (a *assembly) params(ps []Param, attrs []any, what string) ([]*ArgDef, func
 				continue
 			}
 			slots[i].dep = dep
+		case p.Type == PageArgs:
+			for _, n := range []struct {
+				name string
+				t    TypeDef
+			}{{"first", Int}, {"after", String}, {"last", Int}, {"before", String}} {
+				args = append(args, &ArgDef{Name: n.name, Type: n.t})
+			}
+			slots[i].page = true
 		case p.Type != nil:
 			name := a.field(p.Name)
 			if r, ok := renames[p.Name]; ok {
@@ -422,6 +434,8 @@ func (a *assembly) params(ps []Param, attrs []any, what string) ([]*ArgDef, func
 					return nil, err
 				}
 				c.args[i] = v
+			case s.page:
+				c.args[i] = Page{First: Ptr[int](in["first"]), After: Ptr[string](in["after"]), Last: Ptr[int](in["last"]), Before: Ptr[string](in["before"])}
 			case s.arg != "":
 				v := in[s.arg]
 				if s.form && v != nil {
@@ -439,6 +453,26 @@ func (a *assembly) params(ps []Param, attrs []any, what string) ([]*ArgDef, func
 		return c, nil
 	}
 	return args, fill
+}
+
+// loader fills a parameter taking a loader type: the request's loader of
+// that type, made with its dependencies the first time one is asked for.
+func (a *assembly) loader(def *LoaderDef, what string) func(context.Context) (any, error) {
+	_, fill := a.params(def.Params, nil, what+" (its loader "+def.Go+")")
+	key := loaderKey{t: def.Type}
+	return func(ctx context.Context) (any, error) {
+		mk := func() (any, error) {
+			c, err := fill(ctx, nil)
+			if err != nil {
+				return nil, err
+			}
+			return def.New(c), nil
+		}
+		if st := stateOf(ctx); st != nil {
+			return st.loader(key, mk)
+		}
+		return mk()
+	}
 }
 
 // closest is the name in names nearest to s, if near enough to suggest.
@@ -493,7 +527,13 @@ func (a *assembly) schema() (*Schema, error) {
 	a.objects, a.inputs, a.enums, a.texts = map[reflect.Type]*Object{}, map[reflect.Type]*InputObject{}, map[reflect.Type]*Enum{}, map[reflect.Type]*Scalar{}
 	a.names = map[string]string{}
 	pkgs := registered()
+	a.loaders = map[reflect.Type]*LoaderDef{}
 	for _, p := range pkgs {
+		for i := range p.Loaders {
+			if l := &p.Loaders[i]; a.loaders[l.Type] == nil {
+				a.loaders[l.Type] = l
+			}
+		}
 		for _, t := range p.Types {
 			b := t.binding()
 			if _, ok := a.bindings[bindKey{b.kind, b.t}]; !ok {

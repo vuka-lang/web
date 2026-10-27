@@ -68,6 +68,7 @@ func build(host web.GraphQLHost) (web.GraphQLHandler, error) {
 	cfg.Schema = schema
 	cfg.Present = func(ctx context.Context, err error) []*Error { return present(ctx, err, host.Dev) }
 	cfg.Observe = observe
+	cfg.Trace = trace
 	srv, err := NewServer(cfg)
 	if err != nil {
 		return nil, err
@@ -210,6 +211,28 @@ func statusCode(status int) string {
 		return CodeInvalidInput
 	}
 	return CodeBadRequest
+}
+
+// trace records a request's fields and loader batches for the development
+// toolbar's GraphQL panel, and has the SQL their resolvers run name them:
+// nothing unless the toolbar records the request.
+func trace(ctx context.Context) *Trace {
+	if !web.Recorded(ctx) {
+		return nil
+	}
+	return &Trace{
+		Field: func(f FieldTrace) {
+			web.NoteGraphQLField(ctx, web.GraphQLField{Path: f.Path, Field: f.Field, Start: f.Start, Dur: f.Dur, Err: f.Err})
+		},
+		Batch: func(b BatchTrace) {
+			n := web.GraphQLBatch{Loader: b.Loader, Keys: b.Keys, Start: b.Start, Dur: b.Dur}
+			if b.Err != nil {
+				n.Err = b.Err.Error()
+			}
+			web.NoteGraphQLBatch(ctx, n)
+		},
+		Context: web.StatementOrigin,
+	}
 }
 
 // observe notes the operation a request ran, and its errors, for the
