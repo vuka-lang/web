@@ -64,9 +64,11 @@ func (w *loaderWorld) orders(ctx context.Context) *LoaderOf[int, []lOrder] {
 	return requestLoader(ctx, "OrdersByUser", func() *LoaderOf[int, []lOrder] {
 		return NewLoader("OrdersByUser", func(ctx context.Context, users []int) (map[int][]lOrder, error) {
 			w.log.add("OrdersByUser", len(users))
+			w.log.mu.Lock()
 			if w.firstKeys == nil {
 				w.firstKeys = slices.Clone(users)
 			}
+			w.log.mu.Unlock()
 			if w.slow {
 				time.Sleep(5 * time.Millisecond)
 			}
