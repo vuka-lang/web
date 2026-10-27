@@ -14,7 +14,7 @@ function load(file) {
     document: {
       currentScript: { src: "http://test/_vuka/live.js", dataset: {}, hasAttribute: () => false },
       documentElement: { setAttribute: noop, getAttribute: () => null, outerHTML: "" },
-      addEventListener: noop, dispatchEvent: noop,
+      addEventListener: noop, dispatchEvent: noop, querySelectorAll: () => [],
     },
     location: { href: "http://test/" },
     WebSocket: class { send() {} },

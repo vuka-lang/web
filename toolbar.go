@@ -166,6 +166,8 @@ type tbSpan struct {
 	At, Dur    time.Duration
 	Depth      int
 	Open       bool
+	Err        string // a deferred part's method's error
+	SQL        int    // the statements a deferred part's method ran
 }
 
 type tbLog struct {
@@ -275,6 +277,33 @@ func (e *tbEntry) span(kind, name string) func() {
 		s := &e.Spans[i]
 		s.Dur, s.Open = time.Since(e.Start)-s.At, false
 		e.depth--
+	}
+}
+
+// partSpan opens the span of a deferred part's method, which runs beside
+// the others after the page is sent; the function returned closes it with
+// the method's error, counting the statements marked field's.
+func (e *tbEntry) partSpan(name, field string) func(error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.room() {
+		return func(error) {}
+	}
+	i := len(e.Spans)
+	e.Spans = append(e.Spans, tbSpan{Name: name, Kind: "part", At: time.Since(e.Start), Open: true})
+	return func(err error) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		s := &e.Spans[i]
+		s.Dur, s.Open = time.Since(e.Start)-s.At, false
+		if err != nil {
+			s.Err = err.Error()
+		}
+		for _, q := range e.Queries {
+			if q.Field == field {
+				s.SQL++
+			}
+		}
 	}
 }
 

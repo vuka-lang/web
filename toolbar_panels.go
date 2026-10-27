@@ -264,6 +264,8 @@ func highlightSQL(s string) template.HTML {
 type timelineRow struct {
 	Name, Kind, Ms string
 	Bar, Indent    template.CSS
+	Err            string // a deferred part's
+	SQL            int
 }
 
 // timelineOf draws the spans, and the statements as spans of their own,
@@ -314,7 +316,7 @@ func timelineOf(r tbRecord) []timelineRow {
 		if total > 0 {
 			left, width = 100*float64(it.At)/float64(total), max(0.5, 100*float64(d)/float64(total))
 		}
-		rows = append(rows, timelineRow{Name: it.Name, Kind: it.Kind, Ms: ms(d),
+		rows = append(rows, timelineRow{Name: it.Name, Kind: it.Kind, Ms: ms(d), Err: it.Err, SQL: it.SQL,
 			Bar: template.CSS(fmt.Sprintf("left:%.2f%%;width:%.2f%%", left, min(width, 100-left))), Indent: template.CSS(fmt.Sprintf("padding-left:%dpx", 4+12*it.Depth))})
 	}
 	return rows

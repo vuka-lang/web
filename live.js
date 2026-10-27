@@ -1737,6 +1737,7 @@
       return new Promise(() => {});
     }
     manual();
+    stopParts();
     if (!live) return fetchGo(u, at, patch, pop, replace);
     if (!pop) save();
     flush();
@@ -1761,10 +1762,91 @@
     const ctl = typeof AbortController === "function" ? new AbortController() : null;
     const headers = { "Vk-Navigate": build };
     if (ahead) headers.Purpose = "prefetch"; // the server parks a live page's session as long as the runtime keeps the reply
-    const p = fetch(href, { headers, credentials: "same-origin", signal: ctl ? ctl.signal : undefined })
-      .then((res) => res.text().then((html) => ({ res, html })));
+    const p = fetch(href, { headers, credentials: "same-origin", signal: ctl ? ctl.signal : undefined }).then(reply);
     p.abort = () => { if (ctl) ctl.abort(); };
     return p;
+  }
+
+  // Parts (ui.Part): a page's deferred parts follow it in its response,
+  // after the parts script (<script data-vk-parts>): each a <template
+  // data-vk-part="id"> and the call moving it into place, between the
+  // comments <!--vk-part:id--> and <!--/vk-part:id--> that stand for it
+  // until then. A navigation's reply is cut at that script: the page is
+  // patched in as soon as it has arrived, each part as it follows.
+  const partsMark = "<script data-vk-parts>";
+  let partsIn = null; // the parts of the page navigated to, still arriving
+  function reply(res) {
+    const cut = (text) => {
+      const i = text.indexOf(partsMark);
+      return i < 0 ? { res, html: text } : { res, html: text.slice(0, i), parts: partReader(null, null, text.slice(i)) };
+    };
+    if (!res.body || !res.body.getReader || typeof TextDecoder !== "function") return res.text().then(cut);
+    const rd = res.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    const step = () => rd.read().then(({ done, value }) => {
+      if (value) buf += dec.decode(value, { stream: true });
+      const i = buf.indexOf(partsMark);
+      if (i >= 0) return { res, html: buf.slice(0, i), parts: partReader(rd, dec, buf.slice(i)) };
+      if (done) return { res, html: buf + dec.decode() };
+      return step();
+    });
+    return step();
+  }
+  // partReader reads a reply's parts as they arrive: to(fn) has each, those
+  // read already first, go to fn(id, html); stop ends the reading.
+  function partReader(rd, dec, buf) {
+    const r = { q: [], fn: null, stopped: false };
+    const open = '<template data-vk-part="';
+    const drain = () => {
+      for (;;) {
+        const i = buf.indexOf(open), j = i < 0 ? -1 : buf.indexOf('">', i);
+        if (j < 0) break;
+        const id = buf.slice(i + open.length, j), end = '</template><script>__vkP("' + id + '")</script>', k = buf.indexOf(end, j);
+        if (k < 0) break;
+        r.q.push([id, buf.slice(j + 2, k)]);
+        buf = buf.slice(k + end.length);
+      }
+      while (r.fn && r.q.length && !r.stopped) r.fn(...r.q.shift());
+    };
+    const step = () => rd.read().then(({ done, value }) => {
+      if (r.stopped) return;
+      if (value) buf += dec.decode(value, { stream: true });
+      drain();
+      if (!done) step();
+    }, () => {});
+    drain();
+    if (rd) step();
+    r.to = (fn) => { r.fn = fn; drain(); };
+    r.stop = () => { r.stopped = true; if (rd) rd.cancel().catch(() => {}); };
+    return r;
+  }
+  function stopParts() {
+    if (partsIn) partsIn.stop();
+    partsIn = null;
+  }
+  // placePart moves a part into the place its comments hold for it.
+  function placePart(id, html) {
+    const w = document.createTreeWalker(document.body, 128); // comments
+    let s = null, n, x;
+    while ((n = w.nextNode())) if (n.data === "vk-part:" + id) { s = n; break; }
+    if (!s) return;
+    const p = s.parentNode;
+    for (n = s.nextSibling; n && !(n.nodeType === 8 && n.data === "/vk-part:" + id); n = x) { x = n.nextSibling; p.removeChild(n); }
+    listenIn(html);
+    p.insertBefore(fragment(html), s);
+    p.removeChild(s);
+    if (n) p.removeChild(n);
+    bindIn(p, html);
+    emit("vk:part", { id });
+  }
+  // leftoverParts places the parts a page loaded with but didn't place
+  // itself: a Content-Security-Policy refusing its inline scripts.
+  function leftoverParts() {
+    for (const t of Array.from(document.querySelectorAll("template[data-vk-part]"))) {
+      const id = t.getAttribute("data-vk-part"), html = t.innerHTML;
+      t.remove();
+      placePart(id, html);
+    }
   }
 
   function fetchGo(u, at, patch, pop, replace) {
@@ -1805,6 +1887,7 @@
     toolbar = h("X-Vuka-Toolbar") || toolbar;
     try { page(r.html); } catch (err) { console.error("vuka: live: " + err.message); return fail(n.href, "patch", err.message); }
     arrived(n, {});
+    if (r.parts) (partsIn = r.parts).to(placePart);
     emit("vk:patched", { ids: ["c0"] });
     const tok = h("Vk-Live");
     if (tok) { // a live page: its session waits, parked, for this join
@@ -2078,6 +2161,7 @@
 
   window.vuka = { connect, tree, register, push, emit: emitIsland, states, navigate, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   if (bodyWatch) bodyWatch.observe(document.body, { childList: true });
+  leftoverParts();
   const page0 = document.documentElement.outerHTML;
   listenIn(page0);
   bindIn(document.body, page0);

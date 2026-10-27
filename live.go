@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/vuka-lang/ui/v2"
@@ -191,6 +192,9 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	}
 	if err := a.checkCtor(ls.ctor, s.where); err != nil {
 		return nil, err
+	}
+	if err := ui.CheckParts(ls.typ, true); err != nil {
+		return nil, failure("E0346", what, s.where, err)
 	}
 	if err := a.checkParams(ls.typ, what, s.where); err != nil {
 		return nil, err
@@ -500,10 +504,18 @@ func (a *App) page(rq *request, n ui.Node) {
 	// something live: then a session renders it again, to mount its
 	// components and number its handlers.
 	end := a.span(rq.ctx, "render", "page")
-	info, err := ui.RenderPage(rq.ctx, n, buf)
+	// A GET page's deferred parts (ui.Part) render their fallbacks; their
+	// methods run once the page is sent (parts.go).
+	pctx, parts := rq.ctx, (*ui.Parts)(nil)
+	pending := pendingParts(rq.ctx)
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (pending || !testing.Testing() || streamInTests) {
+		pctx, parts = ui.WithParts(rq.ctx) // HEAD's never run: it has no body
+	}
+	info, err := ui.RenderPage(pctx, n, buf)
 	html := buf.Bytes()
 	var s *live.Session
 	if err == nil && (info.Live || info.Opaque && pageLive(html)) {
+		parts = nil // a live session renders the page again, its parts in place
 		s = live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
 		var out string
 		if out, err = s.Render(); err == nil {
@@ -556,8 +568,9 @@ func (a *App) page(rq *request, n ui.Node) {
 	} else if s != nil {
 		s.Close()
 	}
+	streams := err == nil && r.Method == http.MethodGet && !pending && parts.Pending()
 	var script string
-	if live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS ||
+	if streams || live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS ||
 		bytes.Contains(html, []byte(" data-vk-link")) ||
 		bytes.Contains(html, []byte(" data-vk-check=")) { // a form's browser checks (ui.Config.BrowserChecks)
 		script = a.scriptTag(r, token)
@@ -577,6 +590,10 @@ func (a *App) page(rq *request, n ui.Node) {
 	if prefetching(r) && w.Header().Get("Cache-Control") == "" {
 		// the browser keeps a prefetched page as long as the runtime does
 		w.Header().Set("Cache-Control", "private, max-age="+strconv.Itoa(int(prefetchWindow/time.Second)))
+	}
+	if streams {
+		a.streamPage(rq, html, head, script, parts)
+		return
 	}
 	if nav && token == "" && etagged(w, r, html, []byte(head), []byte(script)) {
 		return
@@ -610,7 +627,7 @@ func pageLive(html []byte) bool {
 // writePage writes html with script (the runtime's tag, if any) before its
 // last </body>, or at its end, and head (linkCSS's tags) where linkCSS
 // puts them, after the script when both go before one </body>.
-func writePage(w http.ResponseWriter, html []byte, head, script string) {
+func writePage(w io.Writer, html []byte, head, script string) {
 	if head == "" && script == "" {
 		w.Write(html)
 		return

@@ -604,6 +604,9 @@ func (a *App) compileNodePage(s *routeSpec, t reflect.Type) (http.Handler, error
 	if err := ui.CheckHooks(t); err != nil {
 		return nil, failure("E0337", what, s.where, err)
 	}
+	if err := ui.CheckParts(t, false); err != nil {
+		return nil, failure("E0347", what, s.where, err)
+	}
 	if err := a.checkParams(t, what, s.where); err != nil {
 		return nil, err
 	}
