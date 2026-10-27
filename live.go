@@ -548,7 +548,8 @@ func (a *App) page(rq *request, n ui.Node) {
 		s.Close()
 	}
 	var script string
-	if live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS {
+	if live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS ||
+		bytes.Contains(html, []byte(" data-vk-check=")) { // a form's browser checks (ui.Config.BrowserChecks)
 		script = a.scriptTag(r, token)
 	}
 	html = withTitle(html, ui.PageTitle(rq.ctx))
