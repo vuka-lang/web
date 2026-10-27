@@ -150,6 +150,9 @@ func describe(gs []Gate) string {
 // wrapRoute is the gate of a route, from its attributes.
 func (a *Auth) wrapRoute(info web.RouteInfo) web.Middleware {
 	gs, marked := gatesOf(info.Attrs)
+	if !marked && info.Calls {
+		return nil // web.GraphQL: each operation and field is gated (guardCall)
+	}
 	if !marked && !a.cfg.PublicByDefault {
 		gs = []Gate{{kind: required}}
 	}
@@ -198,6 +201,29 @@ func (a *Auth) wrapRoute(info web.RouteInfo) web.Middleware {
 			a.app.WriteError(w, r, err, html)
 		})
 	}
+}
+
+// guardCall decides a call by its declaration's attributes (web's
+// GuardCalls): a GraphQL operation's or field's gates, as a route's, against
+// the identity of the request ctx belongs to. An operation without a gate
+// (byDefault) needs a sign-in unless Config.PublicByDefault; a field without
+// one passes, its operation decided already.
+func (a *Auth) guardCall(ctx context.Context, attrs []any, byDefault bool) error {
+	gs, marked := gatesOf(attrs)
+	if !marked && byDefault && !a.cfg.PublicByDefault {
+		gs = []Gate{{kind: required}}
+	}
+	if len(gs) == 0 {
+		return nil
+	}
+	id := Current(ctx)
+	for _, g := range gs {
+		if err := g.allow(id); err != nil {
+			web.NoteRequest(ctx, web.RequestNote{Section: "Auth", Name: "Gate", Value: describe(gs) + ": refused, " + err.Error(), Refused: true})
+			return err
+		}
+	}
+	return nil
 }
 
 // loginURL is the login page, asked to come back to next.

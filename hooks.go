@@ -40,6 +40,11 @@ type RouteInfo struct {
 	// under one root layout share a document: in-app navigation between
 	// them patches the page, and between two roots is a full page load.
 	RootLayout reflect.Type
+	// Calls says the route gates each call it serves itself, by the
+	// call's declaration (GuardCalls): web.GraphQL's operations and
+	// fields. A library gating routes leaves such a route open unless its
+	// attributes carry a gate.
+	Calls bool
 }
 
 // A RouteAttr is a typed attribute that only a WrapRoutes function gives a

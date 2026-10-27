@@ -40,6 +40,7 @@ type routeSpec struct {
 	recvCtor     reflect.Value  // the receiver's constructor (Receiver)
 	mwOf         []useOf        // UseOf's middleware, resolved when the app is built
 	formPost     bool           // a live page's forms' POST (formTwins)
+	calls        bool           // gates each call it serves itself: web.GraphQL's
 }
 
 type request struct {
