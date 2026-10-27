@@ -61,6 +61,24 @@ type ArgName struct{ Param, Name string }
 // the parameter's name: @graphql.Arg("after", "cursor").
 func Arg(param, name string) vuka.Bundle { return vuka.Compose(ArgName{param, name}) }
 
+// IDParams makes parameters IDs: the attribute AsID gives.
+type IDParams []string
+
+// IntParams makes parameters Ints: the attribute AsInt gives.
+type IntParams []string
+
+// AsID makes the named parameters of a function or method arguments of type
+// ID — strings or integers a client sends back as it received them, "7" (or
+// 7). A parameter of an integer type named id, or ending in ID or Id
+// (ownerID), is one already; AsID is for others: @graphql.AsID("owner").
+// An input struct's field takes a graphql:",id" tag instead.
+func AsID(params ...string) vuka.Bundle { return vuka.Compose(IDParams(params)) }
+
+// AsInt keeps the named integer parameters Int though their names end in ID
+// or Id: @graphql.AsInt("lastSeenID"). An input struct's or an object's
+// field takes a graphql:",int" tag instead.
+func AsInt(params ...string) vuka.Bundle { return vuka.Compose(IntParams(params)) }
+
 // Where each attribute goes (@vuka.Targets): anywhere else is a compile
 // error at the attribute.
 func (Query) vukaTargets() [vuka.OnFunc]struct{}        { return [vuka.OnFunc]struct{}{} }

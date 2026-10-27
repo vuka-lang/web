@@ -40,6 +40,9 @@ import (
 //	@graphql.Query
 //	func Users(ctx context.Context, first int, store *Store) ([]User, error) { … }
 //
+//	@graphql.Query("user") @auth.Public
+//	func FindUser(ctx context.Context, id int64, store *Store) (*User, error) { … }
+//
 //	@graphql.Query("me") @auth.Public
 //	func CurrentUser(ctx context.Context, store *Store) (*User, error) { … }
 //
@@ -63,6 +66,7 @@ type User struct {
 	Joined     time.Time
 	Status     Status
 	LoginCount int
+	ManagerID  int64
 }
 
 func (u *User) FullName(ctx context.Context, upper bool) string {
@@ -73,8 +77,9 @@ func (u *User) FullName(ctx context.Context, upper bool) string {
 }
 
 type NewUser struct {
-	Name  string `validate:"required,max=10"`
-	Email string `validate:"required,email"`
+	Name      string `validate:"required,max=10"`
+	Email     string `validate:"required,email"`
+	ManagerID int64
 }
 
 func (n *NewUser) CleanName(ctx context.Context, store *Store) error {
@@ -102,6 +107,15 @@ func Users(ctx context.Context, first int, store *Store) ([]User, error) {
 	return store.users[:min(first, len(store.users))], nil
 }
 
+func FindUser(ctx context.Context, id int64, store *Store) (*User, error) {
+	for i := range store.users {
+		if store.users[i].ID == id {
+			return &store.users[i], nil
+		}
+	}
+	return nil, nil
+}
+
 func CurrentUser(ctx context.Context, store *Store) (*User, error) {
 	if id := auth.Current(ctx); id != nil {
 		return &store.users[0], nil
@@ -110,7 +124,7 @@ func CurrentUser(ctx context.Context, store *Store) (*User, error) {
 }
 
 func CreateUser(ctx context.Context, in NewUser, store *Store) (*User, error) {
-	u := User{ID: int64(len(store.users) + 1), Name: in.Name, Email: in.Email}
+	u := User{ID: int64(len(store.users) + 1), Name: in.Name, Email: in.Email, ManagerID: in.ManagerID}
 	store.users = append(store.users, u)
 	return &u, nil
 }
@@ -119,6 +133,7 @@ func init() {
 	vuka.RegisterFields[User](map[string][]any{"Email": {auth.Requires("users.email")}})
 	vuka.RegisterFunc((*User).FullName, graphql.Field("displayName"))
 	vuka.RegisterFunc(Users, *new(graphql.Query))
+	vuka.RegisterFunc(FindUser, append([]any{graphql.Query("user")}, auth.Public().Attrs()...)...)
 	vuka.RegisterFunc(CurrentUser, append([]any{graphql.Query("me")}, auth.Public().Attrs()...)...)
 	vuka.RegisterFunc(CreateUser, append([]any{*new(graphql.Mutation)}, auth.Requires("users.create").Attrs()...)...)
 	graphql.RegisterValue(StatusPastDue, graphql.Deprecated("use ACTIVE"))
@@ -132,6 +147,14 @@ func init() {
 				Type:   &graphql.NonNull{Of: graphql.ListOf[User](&graphql.NonNull{Of: graphql.ObjectOf[User]()})},
 				Resolve: func(ctx context.Context, c *graphql.Call) (any, error) {
 					return Users(ctx, graphql.Get[int](c, 1), graphql.Get[*Store](c, 2))
+				},
+			},
+			{
+				Go: "FindUser", Func: FindUser,
+				Params: []graphql.Param{{Name: "ctx"}, {Name: "id", Type: graphql.IntIDOf[int64]()}, {Name: "store", Dep: reflect.TypeFor[*Store]()}},
+				Type:   graphql.ObjectOf[User](),
+				Resolve: func(ctx context.Context, c *graphql.Call) (any, error) {
+					return FindUser(ctx, graphql.Get[int64](c, 1), graphql.Get[*Store](c, 2))
 				},
 			},
 			{
@@ -164,6 +187,7 @@ func init() {
 				}},
 				{Go: "Joined", Type: &graphql.NonNull{Of: graphql.DateTime}, Get: func(u *User) any { return u.Joined }},
 				{Go: "Status", Type: &graphql.NonNull{Of: graphql.EnumOf[Status]()}, Get: func(u *User) any { return u.Status }},
+				{Go: "ManagerID", Type: &graphql.NonNull{Of: graphql.IntIDOf[int64]()}, Get: func(u *User) any { return u.ManagerID }},
 				{Go: "LoginCount", Type: &graphql.NonNull{Of: graphql.Int}, Get: func(u *User) any { return u.LoginCount }},
 				{Go: "FullName", Type: &graphql.NonNull{Of: graphql.String},
 					Params: []graphql.Param{{Name: "ctx"}, {Name: "upper", Type: graphql.Boolean}},
@@ -174,6 +198,7 @@ func init() {
 			graphql.FormInput[NewUser]{Fields: []graphql.InputMember[NewUser]{
 				{Go: "Name", Type: graphql.String, Set: func(f *NewUser, v any) { f.Name = graphql.As[string](v) }},
 				{Go: "Email", Type: graphql.String, Set: func(f *NewUser, v any) { f.Email = graphql.As[string](v) }},
+				{Go: "ManagerID", Type: graphql.IntIDOf[int64](), Set: func(f *NewUser, v any) { f.ManagerID = graphql.As[int64](v) }},
 			}},
 			graphql.Consts[Status]{Values: []graphql.Const[Status]{
 				{Go: "StatusActive", Value: StatusActive},
@@ -326,5 +351,41 @@ func TestCrossOrigin(t *testing.T) {
 	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"name":"ada"`) {
 		t.Errorf("a cross-origin GET of a query: %d %s", w.Code, w.Body)
+	}
+}
+
+// TestIDs: an id goes out as a string, and comes back as the string or the
+// integer, as a literal or a variable; anything else is refused.
+func TestIDs(t *testing.T) {
+	h := newApp(t, &auth.Identity{ID: "1", Perms: []string{"users.*"}})
+	_, out := post(t, h, `{ users(first: 2) { id } }`, nil)
+	if got := js(out); got != `{"data":{"users":[{"id":"1"},{"id":"2"}]}}` {
+		t.Fatalf("ids out: %s", got)
+	}
+	for _, q := range []struct {
+		query string
+		vars  map[string]any
+	}{
+		{`{ user(id: "2") { name } }`, nil},
+		{`{ user(id: 2) { name } }`, nil},
+		{`query($id: ID) { user(id: $id) { name } }`, map[string]any{"id": "2"}},
+		{`query($id: ID) { user(id: $id) { name } }`, map[string]any{"id": 2}},
+	} {
+		if _, out := post(t, h, q.query, q.vars); js(out) != `{"data":{"user":{"name":"bob"}}}` {
+			t.Errorf("%s %v: %s", q.query, q.vars, js(out))
+		}
+	}
+	_, out = post(t, h, `{ user(id: "two") { name } }`, nil)
+	if got := js(out); !strings.Contains(got, `isn't a whole number`) || !strings.Contains(got, "GRAPHQL_VALIDATION_FAILED") {
+		t.Errorf("a literal that isn't a number: %s", got)
+	}
+	_, out = post(t, h, `query($id: ID) { user(id: $id) { name } }`, map[string]any{"id": "two"})
+	if got := js(out); !strings.Contains(got, `isn't a whole number`) || !strings.Contains(got, "BAD_USER_INPUT") {
+		t.Errorf("a variable that isn't a number: %s", got)
+	}
+	// The round trip: what a query gave, a mutation takes back.
+	_, out = post(t, h, `mutation($m: ID) { createUser(in: {name: "cy", email: "c@b.co", managerID: $m}) { id managerID } }`, map[string]any{"m": "1"})
+	if got := js(out); got != `{"data":{"createUser":{"id":"3","managerID":"1"}}}` {
+		t.Errorf("round trip: %s", got)
 	}
 }
