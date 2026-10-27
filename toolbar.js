@@ -490,5 +490,7 @@
   drawHandle();
   get("r/" + encodeURIComponent(pageID)).then((r) => { if (!r.error) { page = r; drawHandle(); } }, () => {});
   if (script.hasAttribute("data-vk-build")) watchBuild();
+  // The page a browser opening the GraphQL endpoint gets: the GraphiQL panel.
+  if (script.hasAttribute("data-vk-graphiql")) { tab = "GraphiQL"; toggle(true); }
   // Each page starts collapsed; opening is an explicit click or key press.
 })();
