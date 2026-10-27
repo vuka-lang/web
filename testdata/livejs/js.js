@@ -1047,6 +1047,33 @@ test("http navigation: what can't be patched is loaded", async () => {
   eq(p.$("#at").textContent, "page 1", "a late reply moves nothing");
 });
 
+test("http navigation: in development the console says why a link loaded in full, once per cause", async () => {
+  const detail = `its body runs a script of its own: <script src="/static/theme.js">; move it into <head>, make it a component script, or mark the link reload`;
+  const scripts = { headers: { "Vk-Reload": "scripts", "Vk-Reload-Detail": detail }, status: 204 };
+  const p = plain({ dev: true });
+  for (let i = 0; i < 2; i++) {
+    p.fire("#book", "click");
+    p.reply(i, scripts);
+    await flushed();
+  }
+  eq(p.logs, ["warn vuka: navigation to /books/7 loads in full (scripts): " + detail], "the server's reason, once");
+  const q = plain({ dev: true, root: "r1" });
+  q.fire("#book", "click");
+  q.reply(0, pageReply(`<h1>404 Not Found</h1>`, { status: 404 }));
+  await flushed();
+  q.fire("#next", "click");
+  q.tick(10000);
+  eq(q.logs, [
+    "warn vuka: navigation to /books/7 loads in full (another root layout): the 404 error page is under no root layout, this one under r1",
+    "warn vuka: navigation to /shelf loads in full (timeout): no reply in 10s",
+  ], "the runtime's own reasons");
+  const prod = plain();
+  prod.fire("#book", "click");
+  prod.reply(0, scripts);
+  await flushed();
+  eq([prod.logs, prod.loads.length], [[], 1], "nothing without data-vk-dev");
+});
+
 test("http navigation: a redirect the fetch followed and an error page under the same root are patched", async () => {
   const p = plain({ root: "r1" });
   p.fire("#book", "click");

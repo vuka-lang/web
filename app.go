@@ -28,19 +28,21 @@ import (
 // App is a web application: the routes, services and controllers declared
 // with decorators, and whatever was added in code.
 type App struct {
-	router  Router
-	c       *container
-	mw      []Middleware
-	only    map[string]bool
-	dev     bool
-	onError func(http.ResponseWriter, *http.Request, *Error, bool)
-	reg     registry
-	specs   []*routeSpec
-	statics []func()
-	needs   []reflect.Type
-	eager   []*provider
-	checks  []func(*App) error
-	recheck map[reflect.Type]bool // island pages whose check waits for their constructor
+	router Router
+	c      *container
+	mw     []Middleware
+	only   map[string]bool
+	dev    bool
+
+	fullLoadsSeen fullLoadsSeen // the navigations that loaded in full a development app has logged (nav.go)
+	onError       func(http.ResponseWriter, *http.Request, *Error, bool)
+	reg           registry
+	specs         []*routeSpec
+	statics       []func()
+	needs         []reflect.Type
+	eager         []*provider
+	checks        []func(*App) error
+	recheck       map[reflect.Type]bool // island pages whose check waits for their constructor
 
 	wraps          []routeWrap
 	binders        map[reflect.Type]func(*http.Request) (reflect.Value, error)
@@ -537,7 +539,7 @@ func (a *App) wrapRoute(s *routeSpec, h http.Handler) (http.Handler, error) {
 	if info.RootLayout != nil {
 		h = withRoot(info.RootLayout, h)
 	}
-	h = fullLoads(s, h)
+	h = a.fullLoads(s, h)
 	for i := len(a.wraps) - 1; i >= 0; i-- {
 		if mw := a.wraps[i].f(info); mw != nil {
 			h = a.layer(mw, h)

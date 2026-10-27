@@ -535,7 +535,7 @@ func (a *App) page(rq *request, n ui.Node) {
 		token = a.signToken(r.URL.RequestURI())
 	}
 	nav := navigation(r)
-	if nav && !navPage(w, r, html, token) {
+	if nav && !a.navPage(w, r, html, token) {
 		if s != nil {
 			s.Close()
 		}
@@ -681,6 +681,9 @@ func (a *App) scriptTag(r *http.Request, token string) string {
 		root = ` data-vk-root="` + rootID(t) + `"` // the page's root layout: another one is a full page load
 	}
 	build := ` data-vk-build-id="` + a.buildID() + `"` // a navigation names it (nav.go)
+	if a.dev {
+		build += ` data-vk-dev` // the runtime says in the console why a navigation loads in full
+	}
 	if token == "" {
 		return `<script src="` + liveScript + `?v=` + liveJSTag + `"` + root + build + ` defer></script>`
 	}

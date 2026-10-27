@@ -231,10 +231,10 @@
   root.addEventListener("keydown", (e) => { if (e.key === "Escape") toggle(false); });
 
   // Each fetch and XHR call answered with a record joins the list.
-  function track(method, url, id, status) {
+  function track(method, url, id, status, full) {
     if (!id || calls.some((c) => c.id === id)) return;
     const u = new URL(url, location.href);
-    calls.push({ id, label: `${method.toUpperCase()} ${u.origin === location.origin ? u.pathname + u.search : u.href} → ${status}` });
+    calls.push({ id, label: `${method.toUpperCase()} ${u.origin === location.origin ? u.pathname + u.search : u.href} → ${status}` + (full ? ` (full load: ${full})` : "") });
     drawSelect();
     drawHandle();
   }
@@ -248,7 +248,7 @@
     if (!url.includes("/_vuka/")) p.then((r) => {
       const id = r.headers.get(header);
       if (nav && id) { navRecords.set(bare(url), id); if (r.url) navRecords.set(bare(r.url), id); }
-      track(method, url, id, r.status);
+      track(method, url, id, r.status, nav && r.headers.get("Vk-Reload"));
     }, () => {});
     return p;
   };
