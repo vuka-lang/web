@@ -19,7 +19,9 @@ import (
 // form posts to the page itself, which this file answers: the page renders
 // as for a GET, the form's submit runs as its event would, and the answer
 // is 303 to where the submit handler sent the visitor (the page itself when
-// it sent them nowhere), or 422 with the page showing the form's errors.
+// it sent them nowhere), 422 with the page showing the form's errors, or
+// 200 with the page for a button's intent (the Update button of a field
+// other fields' choices depend on).
 
 // formHost is the app as ui's forms ask it (ui.FormHost): the CSRF token
 // a form carries, the key signing what it rendered, where submits'
@@ -128,19 +130,23 @@ func (a *App) formPost(rq *request, n ui.Node) {
 		a.writeError(w, r, p.Err, true)
 		return
 	}
+	intent := errors.Is(p.Err, ui.ErrFormIntent)
 	if err := refusedVars(rq.ctx); err != nil {
 		a.WriteError(w, r, err, true)
 		return
 	}
 	html := withTitle([]byte(s.HTML()), ui.PageTitle(rq.ctx))
-	html = errorTitle(html)
+	status := http.StatusOK // an intent's: the form again, its choices following its values
+	if !intent {
+		html, status = errorTitle(html), http.StatusUnprocessableEntity
+	}
 	var script string
-	if bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b")) {
+	if bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b")) || bytes.Contains(html, []byte(" data-vk-check=")) {
 		script = a.scriptTag(r, "")
 	}
 	head := a.headTags(r, html)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(http.StatusUnprocessableEntity)
+	w.WriteHeader(status)
 	writePage(w, html, head, script)
 }
 

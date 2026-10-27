@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/forms"
 	"github.com/vuka-lang/vuka/v2"
 	"github.com/vuka-lang/vuka/v2/diag"
 )
@@ -56,6 +57,11 @@ func (a *App) newRequest(w http.ResponseWriter, r *http.Request, s *routeSpec) *
 	rq.ctx = ui.WithInjector(context.WithValue(r.Context(), ctxKey{}, rq), injector{a})
 	rq.ctx = ui.WithPageURL(rq.ctx, r.URL, a.pathParam(r))
 	rq.ctx = ui.WithFormHost(rq.ctx, formHost{a})
+	if len(forms.Locales(rq.ctx)) == 0 {
+		if h := r.Header.Get("Accept-Language"); h != "" {
+			rq.ctx = forms.WithLocale(rq.ctx, forms.ParseAcceptLanguage(h)...)
+		}
+	}
 	a.withVars(rq)
 	return rq
 }
