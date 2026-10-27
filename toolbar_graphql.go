@@ -2,8 +2,11 @@ package web
 
 import (
 	"context"
+	_ "embed"
 	"fmt"
 	"html/template"
+	"io"
+	"net/http"
 	"slices"
 	"time"
 )
@@ -153,5 +156,58 @@ func (a *App) graphiqlPanel() []panelView {
 	if a.graphqlPath == "" {
 		return nil
 	}
-	return []panelView{{Name: "GraphiQL", Body: template.HTML(`<div class="gql-slot" data-endpoint="` + template.HTMLEscapeString(a.graphqlPath) + `"></div>`)}}
+	return []panelView{{Name: "GraphiQL", Body: template.HTML(`<div class="gql-slot" data-endpoint="` + template.HTMLEscapeString(a.graphqlPath) +
+		`" data-script="` + graphiqlJS + `?v=` + graphiqlTag + `"></div>`)}}
+}
+
+// The GraphiQL panel's editor is a script of its own, which the toolbar
+// loads when the panel first shows: pages that never open it don't fetch
+// it.
+const (
+	graphiqlJS    = livePrefix + "toolbar/graphiql.js"
+	graphiqlCheck = livePrefix + "toolbar/graphql/check"
+)
+
+//go:embed toolbar_graphiql.js
+var graphiqlScript []byte
+
+var graphiqlTag = cssTag(graphiqlScript)
+
+func (tb *toolbar) setGraphQLCheck(c func([]byte) []byte) {
+	tb.mu.Lock()
+	tb.gqlCheck = c
+	tb.mu.Unlock()
+}
+
+// routeGraphiQL serves the panel's script, and checks its query as it is
+// typed: the errors running it would meet before execution, as the app's
+// own engine finds them. Neither is recorded as a request.
+func (a *App) routeGraphiQL() {
+	tb := a.tb
+	a.router.Handle(http.MethodGet, graphiqlJS, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		serveTagged(w, r, "text/javascript; charset=utf-8", graphiqlTag, graphiqlScript)
+	}))
+	a.router.Handle(http.MethodPost, graphiqlCheck, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		// The toolbar's own request: a form on another site can't set the
+		// header.
+		if r.Header.Get(ToolbarHeader) == "" {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "check a query from the toolbar"})
+			return
+		}
+		tb.mu.Lock()
+		check := tb.gqlCheck
+		tb.mu.Unlock()
+		if check == nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "the app serves no GraphQL"})
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(check(body))
+	}))
 }

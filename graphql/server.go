@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -248,4 +249,41 @@ func (s *Server) ctxError(ctx context.Context, path []any, nodes []*language.Fie
 	e := newErr(msg, path, nodes)
 	e.Extensions, e.Err = code(CodeTimeout), ctx.Err()
 	return e
+}
+
+// Check is what Execute would refuse req for, without running it: its
+// syntax, the schema's rules, then — for the operation it names, or its
+// only one — its variables' values and the limits. Nothing is cached. The
+// development toolbar's GraphiQL panel checks its query as it is typed.
+func (s *Server) Check(req Request) []*Error {
+	if s.limits.Bytes > 0 && len(req.Query) > s.limits.Bytes {
+		return requestError(CodeSizeLimit, "The query is %d bytes, more than the limit of %d.", len(req.Query), s.limits.Bytes).Errors
+	}
+	doc, err := language.Parse(req.Query)
+	if err != nil {
+		var se *language.SyntaxError
+		if errors.As(err, &se) {
+			return []*Error{{Message: "Syntax Error: " + se.Message, Locations: []Location{{se.Line, se.Column}}, Extensions: code(CodeParseFailed)}}
+		}
+		return []*Error{{Message: err.Error(), Extensions: code(CodeParseFailed)}}
+	}
+	if errs := s.cfg.Schema.Validate(doc, s.cfg.Introspection); len(errs) > 0 {
+		return errs
+	}
+	op, bad := operationOf(doc, req.OperationName)
+	if bad != nil {
+		return nil // which operation runs is the run's to say
+	}
+	given := req.Variables
+	if given == nil {
+		given = map[string]any{}
+	}
+	vars, errs := s.cfg.Schema.coerceVariables(op, given)
+	if req.Variables == nil {
+		errs = slices.DeleteFunc(errs, func(e *Error) bool { return strings.Contains(e.Message, "was not provided") })
+	}
+	if len(errs) > 0 {
+		return errs
+	}
+	return s.limits.check(s.cfg.Schema, op, doc.Fragments(), vars)
 }

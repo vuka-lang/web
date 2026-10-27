@@ -107,6 +107,8 @@ type toolbar struct {
 	crons []*tbEntry // the latest cron runs (toolbar_crons.go)
 
 	streams *streams // pages hearing of vuka run -watch's build state
+
+	gqlCheck func(body []byte) []byte // web.GraphQL's check, for the GraphiQL panel (toolbar_graphql.go)
 }
 
 // tbEntry is a request's record, or a live page's socket message's.
@@ -835,6 +837,7 @@ func (a *App) routeToolbar() {
 		writeJSON(w, http.StatusOK, readBuildState(tb.dir, a.assets))
 	}))
 	a.routeCrons()
+	a.routeGraphiQL()
 }
 
 // buildState is how vuka run -watch's next build is going, from its
