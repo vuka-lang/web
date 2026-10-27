@@ -270,24 +270,10 @@ pre.json { margin: 0; max-height: 50vh; overflow: auto; padding: 8px 10px; borde
 .crons td { vertical-align: middle; }
 .preview { display: block; width: 100%; height: 360px; margin: 8px 0; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
 
-/* The GraphiQL panel. */
-.gql { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 360px; }
-.gql-bar { display: flex; align-items: center; gap: 10px; }
-.gql-schema { margin-left: auto; }
-.gql-panes { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
-@media (max-width: 720px) { .gql-panes { grid-template-columns: 1fr; } }
-.gql-edit { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.gql-area { position: relative; flex: 1; min-height: 160px; display: flex; }
-.gql textarea { flex: 1; width: 100%; min-height: 60px; resize: vertical; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--fg); tab-size: 2; }
-.gql textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-.gql-label { display: flex; flex-direction: column; gap: 3px; color: var(--dim); font-weight: 600; }
-.gql-vars { min-height: 70px; }
-.gql-result { margin: 0; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg2); white-space: pre-wrap; overflow-wrap: anywhere; }
-.gql-result.has-errors, .gql-result.err { border-color: var(--err); }
-.gql-result.err { color: var(--err); }
-.gql-complete { position: absolute; left: 8px; right: 8px; bottom: 6px; max-height: 45%; overflow: auto; margin: 0; padding: 3px 0; list-style: none; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); box-shadow: var(--shadow); z-index: 1; }
-.gql-complete[hidden] { display: none; }
-.gql-complete li { padding: 2px 8px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.gql-complete li[aria-selected="true"] { background: var(--accent-bg); }
-[data-panel="GraphiQL"] { display: flex; flex-direction: column; }
+/* The GraphiQL panel: its editor brings its own styles (toolbar_graphiql.js). */
+[data-panel="GraphiQL"] { display: flex; flex-direction: column; padding-bottom: 10px; }
 [data-panel="GraphiQL"][hidden] { display: none; }
+/* Full screen: the drawer takes the viewport, the panel all of it. */
+.vk.gql-full .drawer { width: 100vw; border-left: 0; }
+.vk.gql-full .bar, .vk.gql-full .tabs, .vk.gql-full .foot { display: none; }
+.vk.gql-full [data-panel="GraphiQL"] { padding: 10px 12px; }

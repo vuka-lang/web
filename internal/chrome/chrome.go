@@ -489,3 +489,65 @@ func (p *Page) Press(key string) {
 	p.must("Input.dispatchKeyEvent", down, nil)
 	p.must("Input.dispatchKeyEvent", up, nil)
 }
+
+// Keys types text into the element with the focus, a key press a
+// character, as a person types: the page sees each keydown first.
+func (p *Page) Keys(text string) {
+	p.b.t.Helper()
+	p.front()
+	for _, r := range text {
+		k := string(r)
+		p.must("Input.dispatchKeyEvent", map[string]any{"type": "keyDown", "key": k, "text": k, "unmodifiedText": k}, nil)
+		p.must("Input.dispatchKeyEvent", map[string]any{"type": "keyUp", "key": k}, nil)
+	}
+}
+
+// Key presses key with modifiers held — "ctrl", "shift", "alt", "meta" —
+// in the element with the focus: Key("Enter", "meta"), Key("p", "ctrl",
+// "shift"), Key(" ", "ctrl").
+func (p *Page) Key(key string, mods ...string) {
+	p.b.t.Helper()
+	p.front()
+	m := 0
+	for _, x := range mods {
+		m |= map[string]int{"alt": 1, "ctrl": 2, "meta": 4, "shift": 8}[x]
+	}
+	code, vk := key, 0
+	switch {
+	case key == " ":
+		code, vk = "Space", 32
+	case key == "Enter":
+		vk = 13
+	case key == "Escape":
+		vk = 27
+	case key == "Tab":
+		vk = 9
+	case key == "Backspace":
+		vk = 8
+	case key == "ArrowDown":
+		vk = 40
+	case key == "ArrowUp":
+		vk = 38
+	case len(key) == 1 && key[0] >= 'a' && key[0] <= 'z':
+		code, vk = "Key"+strings.ToUpper(key), int(key[0]-'a'+'A')
+	case len(key) == 1 && key[0] >= 'A' && key[0] <= 'Z':
+		code, vk = "Key"+key, int(key[0])
+	}
+	down := map[string]any{"type": "rawKeyDown", "key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": m}
+	if m&^8 == 0 && (len(key) == 1 || key == "Enter") {
+		text := key
+		if key == "Enter" {
+			text = "\r"
+		}
+		down["type"], down["text"] = "keyDown", text
+	}
+	p.must("Input.dispatchKeyEvent", down, nil)
+	p.must("Input.dispatchKeyEvent", map[string]any{"type": "keyUp", "key": key, "code": code, "windowsVirtualKeyCode": vk, "modifiers": m}, nil)
+}
+
+// MouseAt moves the pointer to x, y of the viewport.
+func (p *Page) MouseAt(x, y float64) {
+	p.b.t.Helper()
+	p.front()
+	p.must("Input.dispatchMouseEvent", map[string]any{"type": "mouseMoved", "x": x, "y": y}, nil)
+}

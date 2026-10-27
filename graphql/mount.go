@@ -2,6 +2,7 @@ package graphql
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -72,6 +73,21 @@ func build(host web.GraphQLHost) (web.GraphQLHandler, error) {
 	srv, err := NewServer(cfg)
 	if err != nil {
 		return nil, err
+	}
+	if host.SetCheck != nil {
+		host.SetCheck(func(body []byte) []byte {
+			var req Request
+			errs := []*Error{}
+			if msg := parseBody(body, &req); msg != "" {
+				if req.Query != "" {
+					errs = append(errs, &Error{Message: msg, Extensions: code(CodeBadRequest)})
+				}
+			} else if e := srv.Check(req); e != nil {
+				errs = e
+			}
+			b, _ := json.Marshal(map[string]any{"errors": errs})
+			return b
+		})
 	}
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 		srv.ServeHTTP(w, r.WithContext(ctx))

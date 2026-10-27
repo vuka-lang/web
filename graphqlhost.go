@@ -60,7 +60,11 @@ func GraphQL(path string, opts ...any) Option {
 				return diag.New("E0801", "%s: no GraphQL operation is linked into the program", where).
 					WithHelp("declare one with @graphql.Query or @graphql.Mutation on a function in a .vuka file, in a package the program imports")
 			}
-			h, err := build(GraphQLHost{Path: path, Options: opts, Dev: a.dev, Where: where, Dependency: a.graphqlDep, Guard: a.callGuard()})
+			host := GraphQLHost{Path: path, Options: opts, Dev: a.dev, Where: where, Dependency: a.graphqlDep, Guard: a.callGuard()}
+			if a.tb != nil {
+				host.SetCheck = a.tb.setGraphQLCheck
+			}
+			h, err := build(host)
 			if err != nil {
 				return err
 			}
@@ -103,6 +107,11 @@ type GraphQLHost struct {
 	// rule for a declaration carrying no gate (an operation's), rather than
 	// letting it through (a field's).
 	Guard func(ctx context.Context, attrs []any, byDefault bool) error
+	// SetCheck, when the development toolbar is on, takes what checks a
+	// document for its GraphiQL panel as the query is typed: given a
+	// request's JSON body, the errors running it would meet before
+	// execution, as a JSON object {"errors": […]}. Nil otherwise.
+	SetCheck func(check func(body []byte) []byte)
 }
 
 var (
