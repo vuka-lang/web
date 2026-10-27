@@ -1,6 +1,11 @@
-// Package viewtest helps test pages that read template variables: it
-// gives them the values a test chooses instead of what the app's context
-// processors (web.ContextProcessors) compute.
+// Package viewtest helps test pages: it gives pages that read template
+// variables the values a test chooses instead of what the app's context
+// processors (web.ContextProcessors) compute, and sets how a page's
+// deferred parts render.
+//
+// In a test binary a page's deferred parts (@ui.Defer, ui.Part) render in
+// place: the test reads the page whole, as it is once every part has
+// arrived. Pending renders the page as it first shows instead.
 package viewtest
 
 import (
@@ -42,4 +47,22 @@ func Context(ctx context.Context, vars ...any) context.Context {
 		ctx = web.WithVars(ctx, v)
 	}
 	return ctx
+}
+
+// Pending makes the app's pages render as they first show: each deferred
+// part's fallback in its place, its method never run. For a test of what
+// a page shows before its parts arrive:
+//
+//	app := web.New(pages.Routes(), viewtest.Pending())
+//
+// Outside a test binary it panics.
+func Pending() web.Option {
+	if !testing.Testing() {
+		panic("viewtest: Pending outside a test binary")
+	}
+	return web.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(web.WithPendingParts(r.Context())))
+		})
+	})
 }

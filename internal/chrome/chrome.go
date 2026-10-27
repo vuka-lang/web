@@ -234,7 +234,15 @@ func (b *Browser) Load(url string) *Page {
 	return b.open(url, `document.readyState === "complete"`)
 }
 
-func (b *Browser) open(url, ready string) *Page {
+// Start opens url in a new tab, scripts run first in each document it
+// loads, and returns once ready is true: what a page shows while it is
+// still loading.
+func (b *Browser) Start(url, ready string, scripts ...string) *Page {
+	b.t.Helper()
+	return b.open(url, ready, scripts...)
+}
+
+func (b *Browser) open(url, ready string, scripts ...string) *Page {
 	b.t.Helper()
 	var target struct {
 		TargetID string `json:"targetId"`
@@ -251,6 +259,9 @@ func (b *Browser) open(url, ready string) *Page {
 	p := &Page{b, attached.SessionID, target.TargetID}
 	p.must("Page.enable", nil, nil)
 	p.must("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": wireCounter}, nil)
+	for _, s := range scripts {
+		p.must("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": s}, nil)
+	}
 	p.must("Page.navigate", map[string]any{"url": url}, nil)
 	p.Wait(ready)
 	return p

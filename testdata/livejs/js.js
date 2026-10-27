@@ -1172,6 +1172,81 @@ test("attributes: no event handlers, srcdoc or script URLs", () => {
     [null, null, null, "keep()", null, null, null, null, null, "javascript: is fine here", "/save"]);
 });
 
+// Parts (ui.Part): a page's deferred parts follow it in its response, each
+// moved into its place as it arrives. The parts script is the server's
+// (ui.PartsScript), which js_test.go passes in VK_PARTS_SCRIPT.
+const partsScript = process.env.VK_PARTS_SCRIPT || "";
+const partSlot = (id, fallback) => `<!--vk-part:${id}-->${fallback}<!--/vk-part:${id}-->`;
+const partOf = (id, html) => `<template data-vk-part="${id}">${html}</template><script>__vkP("${id}")</script>`;
+// arrive is what the browser does with a part a full load streams: it
+// parses the template into the body, then runs the script after it.
+function arrive(p, id, html) {
+  const t = p.doc.createElement("div");
+  t.innerHTML = `<template data-vk-part="${id}">${html}</template>`;
+  p.doc.body.appendChild(t.firstChild);
+  require("vm").runInContext(`__vkP(${JSON.stringify(id)})`, p.window);
+}
+
+test("parts: a full load's parts move into their places as they arrive", () => {
+  if (!partsScript) throw new Error("no VK_PARTS_SCRIPT");
+  const p = open(`<h1>Apps</h1><p>${partSlot("vk-p1", `<span aria-busy="true"></span>`)} open</p><ul>${partSlot("vk-p2", "<li>…</li>")}</ul>`, { build: "b1" });
+  require("vm").runInContext(partsScript.replace(/^<script[^>]*>|<\/script>$/g, ""), p.window);
+  const seen = [];
+  p.doc.addEventListener("vk:part", (e) => seen.push(e.detail.id));
+  arrive(p, "vk-p2", "<li>a</li><li>b</li>");
+  eq([p.$("ul").innerHTML, p.$("p").innerHTML], [`<li>a</li><li>b</li>`, partSlot("vk-p1", `<span aria-busy="true"></span>`) + " open"], "the second first");
+  arrive(p, "vk-p1", "<b>7</b>");
+  eq([p.$("p").innerHTML, p.doc.querySelectorAll("template").length, seen], ["<b>7</b> open", 0, ["vk-p2", "vk-p1"]], "both, the templates gone");
+});
+
+test("parts: the runtime places the parts a page's scripts didn't (a CSP refusing inline scripts)", () => {
+  const p = open(`<p>${partSlot("vk-p1", "…")}</p><template data-vk-part="vk-p1"><b data-vk-js-click='${js([["add_class", { names: ["on"] }]])}'>7</b></template>`, { build: "b1" });
+  eq([p.$("p").innerHTML.replace(/ data-vk-js-click='[^']*'| data-vk-js-click="[^"]*"/, ""), p.doc.querySelectorAll("template").length], ["<b>7</b>", 0], "placed");
+  p.fire("b", "click");
+  eq(p.$("b").className, "on", "its commands run");
+});
+
+test("parts: a navigation patches the page in as soon as it arrives, its parts as they follow", async () => {
+  const p = plain();
+  const seen = [];
+  p.window.addEventListener("vk:navigate", () => seen.push("navigate"));
+  p.doc.addEventListener("vk:part", (e) => seen.push(e.detail.id));
+  p.fire("#book", "click");
+  const page = docOf("Book", layout(`<h1 id="notes">book 7</h1><p id="stats">${partSlot("vk-p1", `<span aria-busy="true"></span>`)}</p><ul id="recent">${partSlot("vk-p2", "")}</ul>`));
+  const cut = page.indexOf("</body>");
+  const s = p.reply(0, { headers: { "Vk-Page": "-" }, stream: true, body: page.slice(0, cut - 20) });
+  await flushed();
+  eq([p.$("h1"), seen], [null, []], "not yet: the page hasn't all arrived");
+  s.push(page.slice(cut - 20, cut) + partsScript);
+  await flushed();
+  eq([p.$("h1").textContent, p.$("#stats").innerHTML, p.location.href, seen], ["book 7", partSlot("vk-p1", `<span aria-busy="true"></span>`), "http://test/books/7#notes", ["navigate"]], "the page, at once");
+  s.push(partOf("vk-p2", "<li>a</li>").slice(0, 30));
+  await flushed();
+  eq(p.$("#recent").innerHTML, partSlot("vk-p2", ""), "half a part waits");
+  s.push(partOf("vk-p2", "<li>a</li>").slice(30) + partOf("vk-p1", "<b>7</b>"));
+  await flushed();
+  eq([p.$("#recent").innerHTML, p.$("#stats").innerHTML, seen], ["<li>a</li>", "<b>7</b>", ["navigate", "vk-p2", "vk-p1"]], "the parts");
+  s.push(page.slice(cut));
+  s.end();
+  await flushed();
+  eq([p.loads, p.doc.querySelectorAll("template").length], [[], 0], "the end");
+});
+
+test("parts: another navigation stops the parts of the page it leaves", async () => {
+  const p = plain();
+  p.fire("#book", "click");
+  const s = p.reply(0, { headers: { "Vk-Page": "-" }, stream: true, body: docOf("Book", plainBook(7) + partSlot("vk-p1", "…")).replace("</body>", partsScript) });
+  await flushed();
+  eq(p.$("h1").textContent, "book 7", "the first");
+  p.fire("#shelf", "click");
+  eq(s.canceled, true, "its reading stops");
+  p.reply(1, pageReply(plainShelf(2) + `<p id="late">${partSlot("vk-p1", "…")}</p>`));
+  await flushed();
+  s.push(partOf("vk-p1", "<b>stale</b>"));
+  await flushed();
+  eq([p.$("#at").textContent, p.$("#late").innerHTML], ["page 2", partSlot("vk-p1", "…")], "the old page's part goes nowhere");
+});
+
 test("an idle page (4002) connects again once it is in view", () => {
   const p = joined(`<p>x</p>`);
   p.ws().onclose({ code: 4002 });

@@ -46,7 +46,7 @@
 </table>{{end}}{{end}}
 
 {{define "timeline"}}{{if not .}}<p class="empty">No spans.</p>{{else}}<div class="timeline">
-	{{- range .}}<div class="span {{.Kind}}"><span class="name" style="{{.Indent}}" title="{{.Name}}"><span class="kind">{{.Kind}}</span> {{.Name}}</span><span class="track"><i style="{{.Bar}}"></i></span><span class="num">{{.Ms}}</span></div>{{end}}
+	{{- range .}}<div class="span {{.Kind}}"><span class="name" style="{{.Indent}}" title="{{.Name}}"><span class="kind">{{.Kind}}</span> {{.Name}}{{if .SQL}} <span class="dim">· {{.SQL}} SQL</span>{{end}}{{if .Err}} <span class="errtext">{{.Err}}</span>{{end}}</span><span class="track"><i style="{{.Bar}}"></i></span><span class="num">{{.Ms}}</span></div>{{end}}
 </div>{{end}}{{end}}
 
 {{define "logs"}}{{if not .}}<p class="empty">Nothing logged.</p>{{else}}<table class="grid logs">

@@ -194,6 +194,11 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 	}
 	htmlPage := s.view != nil || (out.data != nil && out.data.Implements(nodeType))
 	s.html = htmlPage
+	if out.data != nil && out.data.Implements(nodeType) && out.data.Kind() == reflect.Pointer && out.data.Elem().Kind() == reflect.Struct {
+		if err := ui.CheckParts(out.data, out.data.Implements(statefulType)); err != nil {
+			return nil, failure("E0347", what, s.where, err)
+		}
+	}
 	var v *view
 	if s.view != nil {
 		if out.data != nil && out.data.Implements(nodeType) {
