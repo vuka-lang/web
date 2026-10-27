@@ -1757,15 +1757,15 @@ fragment T on __Type { kind name ofType { kind name ofType { kind name ofType { 
       const text = JSON.stringify(JSON.parse(v), null, 2);
       ed.setText(text, sameToken(v, text, ed.ta.selectionStart, lexJSON));
     }
-    // formatFocused formats the editor with the focus; from elsewhere, the
-    // query and its variables.
+    // formatFocused formats the variables or the headers when they have
+    // the focus; else the query (or the definitions selected) and, when it
+    // formats, the variables and headers with it.
     function formatFocused() {
       const a = o.root.activeElement;
       if (a === vars.ta) return formatJSON(vars);
       if (a === headers.ta) return formatJSON(headers);
-      const focused = a === q.ta;
-      if (formatQuery() && !focused) formatJSON(vars, true);
-      q.focus();
+      if (formatQuery()) { formatJSON(vars, true); formatJSON(headers, true); }
+      q.focus(); // formatting the others moved the focus; the query's caret stays where formatting put it
     }
     $(".gql-format").addEventListener("mousedown", (e) => e.preventDefault()); // keep the focus where it is
     $(".gql-format").addEventListener("click", formatFocused);

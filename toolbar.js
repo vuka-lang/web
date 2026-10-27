@@ -347,7 +347,8 @@
     });
     ideLoading.then(() => {
       if (!ide) ide = window.__vukaGraphiQL.create({
-        endpoint: slot.dataset.endpoint, root, shell: $(".vk"), header, fetch0, check: base + "graphql/check",
+        endpoint: slot.dataset.endpoint, root, shell: $(".vk"), header, check: base + "graphql/check",
+        fetch0: (...a) => fetch0(...a),
         fetch: (...a) => window.fetch(...a),
         trace: (id) => { tab = "GraphQL"; remember("tab", tab); pick(id); },
       });

@@ -47,7 +47,7 @@ test("root fields, fuzzy", () => {
   eq(at("query { srch| }").labels[0], "search");
   has(at("mutation { |"), "createUser");
   lacks(at("mutation { |"), "users");
-  eq(at("{ |").labels.at(-2), "old", "deprecated last");
+  eq(at("{ |").labels.at(-1), "old", "deprecated last");
 });
 
 test("nested fields: the type at the cursor", () => {
@@ -197,7 +197,7 @@ fragment UserBits on User { id name email address { city street } }`,
   }
 }`,
   `subscription Added { userAdded { id } }`,
-  `query D($a: [Int!]! = [1, 2, 3], $b: GeoInput = {lat: 1, lng: 2}) { users(first: 1) @skip(if: false) { id } }`,
+  `query D($a: [Kind!]! = [USER, POST], $b: GeoInput = {lat: 1, lng: 2}) { users(first: 1, filter: {near: $b}) @skip(if: false) { id } search(text: "x", kinds: $a) { __typename } }`,
   `query Inline { ... on Query { users { id } } ... @include(if: true) { old } }`,
 ];
 
@@ -222,8 +222,10 @@ test("formatting: the shapes", () => {
   eq(format('{ search(text: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", kinds: [USER, POST, USER]) { __typename } }'),
     '{\n  search(\n    text: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n    kinds: [USER, POST, USER]\n  ) {\n    __typename\n  }\n}\n');
   eq(format("{ users(filter: {near: {lat: 1, lng: 2}}) { id } }"), "{\n  users(filter: { near: { lat: 1, lng: 2 } }) {\n    id\n  }\n}\n");
+  eq(format('mutation { createUser(in: {name: "someone with a long name", email: "someone@example.com"}) { id } }'),
+    'mutation {\n  createUser(\n    in: { name: "someone with a long name", email: "someone@example.com" }\n  ) {\n    id\n  }\n}\n', "an argument wraps, its object fits");
   eq(format('mutation { createUser(in: {name: "someone with a fairly long name", email: "someone@example.com"}) { id } }'),
-    'mutation {\n  createUser(\n    in: { name: "someone with a fairly long name", email: "someone@example.com" }\n  ) {\n    id\n  }\n}\n');
+    'mutation {\n  createUser(\n    in: {\n      name: "someone with a fairly long name"\n      email: "someone@example.com"\n    }\n  ) {\n    id\n  }\n}\n', "the object wraps too");
   eq(format("{ a } # end"), "{\n  a\n} # end\n");
   eq(format("{ a\n\n  b }"), "{\n  a\n\n  b\n}\n", "a blank line between fields kept");
   eq(g.format("{ a(").error != null, true, "a syntax error");
