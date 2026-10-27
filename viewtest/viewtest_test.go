@@ -58,7 +58,7 @@ type stats struct{}
 func (s *stats) Count(ctx context.Context) (int, error) { return 7, nil }
 
 func (s *stats) Render(ctx context.Context, w io.Writer) error {
-	return ui.El("p", nil, ui.Part(s.Count, ui.Text("…"), func(n int) ui.Node { return ui.Textf("%d open", n) })).Render(ctx, w)
+	return ui.El("p", nil, ui.Part(s, (*stats).Count, ui.Text("…"), func(n int) ui.Node { return ui.Textf("%d open", n) })).Render(ctx, w)
 }
 
 func init() { vuka.RegisterFunc((*stats).Count, ui.Defer("")) }

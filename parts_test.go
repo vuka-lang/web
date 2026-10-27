@@ -60,9 +60,9 @@ func init() {
 func (p *partsPage) Render(ctx context.Context, w io.Writer) error {
 	return fullPage(ui.Group{
 		ui.El("h1", nil, ui.Text("Apps")),
-		ui.Part(p.Stats, ui.Text("…"), func(n int) ui.Node { return ui.El("p", nil, ui.Textf("%d open", n)) }),
-		ui.Part(p.Recent, nil, func(rs []string) ui.Node { return ui.El("ul", nil, ui.Text(strings.Join(rs, ","))) }),
-		ui.Part(p.Broken, nil, func(s string) ui.Node { return ui.Text(s) }),
+		ui.Part(p, (*partsPage).Stats, ui.Text("…"), func(n int) ui.Node { return ui.El("p", nil, ui.Textf("%d open", n)) }),
+		ui.Part(p, (*partsPage).Recent, nil, func(rs []string) ui.Node { return ui.El("ul", nil, ui.Text(strings.Join(rs, ","))) }),
+		ui.Part(p, (*partsPage).Broken, nil, func(s string) ui.Node { return ui.Text(s) }),
 	}).Render(ctx, w)
 }
 

@@ -11,11 +11,12 @@ import (
 )
 
 // Parts of a page that isn't live (ui.Part, @ui.Defer on a method): a GET
-// page renders each deferred part's fallback, and is sent — its status and
-// headers decided, its guards, layouts' Load and every method that isn't
-// deferred run — up to its </body>, flushed through the compression. Then
-// its deferred methods run, ui.DefaultPartLimit at once, and each part is
-// appended as it arrives, a <template data-vk-part> and the script moving
+// page renders each deferred part's fallback, each deferred method starting
+// as the render meets it (ui.DefaultPartLimit at once), and is sent — its
+// status and headers decided, its guards, layouts' Load and every method
+// that isn't deferred run — up to its </body>, flushed through the
+// compression: a deferred method's error never changes the status. Then
+// each part is appended as it arrives, a <template data-vk-part> and the script moving
 // it into place, flushed; </body></html> ends the response. A navigation
 // over HTTP gets the same stream: the runtime patches the page in as soon
 // as its start arrives (the parts script marks it) and each part as it
@@ -48,7 +49,7 @@ func pendingParts(ctx context.Context) bool {
 
 // streamPage writes a page whose parts stream.
 func (a *App) streamPage(rq *request, html []byte, head, script string, parts *ui.Parts) {
-	w, r := rq.w, rq.r
+	w := rq.w
 	w.Header().Set("X-Accel-Buffering", "no")
 	doc := pageBufs.Get().(*bytes.Buffer)
 	defer putPageBuf(doc)
@@ -69,7 +70,18 @@ func (a *App) streamPage(rq *request, html []byte, head, script string, parts *u
 		return
 	}
 	// Stream flushes it with the parts script, then each part.
-	err := parts.Stream(rq.ctx, w, flush, ui.StreamOptions{
+	err := parts.Stream(w, flush)
+	if err != nil {
+		return // the client went away
+	}
+	w.Write(out[cut:])
+}
+
+// partsOptions are how the deferred methods of r's page run: their
+// spans in the toolbar, their errors' text and log lines.
+func (a *App) partsOptions(r *http.Request, pending bool) ui.PartsOptions {
+	return ui.PartsOptions{
+		Pending:   pending,
 		Observe:   a.observePart,
 		ErrorText: a.partErrorText,
 		Written: func(name string, err error) {
@@ -77,11 +89,7 @@ func (a *App) streamPage(rq *request, html []byte, head, script string, parts *u
 				log.Printf("web: %s %s: part %s: %v", r.Method, r.URL.Path, name, err)
 			}
 		},
-	})
-	if err != nil {
-		return // the client went away
 	}
-	w.Write(out[cut:])
 }
 
 // partErrorText is the message a failing part without an error fallback

@@ -504,12 +504,14 @@ func (a *App) page(rq *request, n ui.Node) {
 	// something live: then a session renders it again, to mount its
 	// components and number its handlers.
 	end := a.span(rq.ctx, "render", "page")
-	// A GET page's deferred parts (ui.Part) render their fallbacks; their
-	// methods run once the page is sent (parts.go).
+	// A GET page's deferred parts (ui.Part) render their fallbacks, each
+	// method starting as the render meets it; the parts follow the page
+	// (parts.go).
 	pctx, parts := rq.ctx, (*ui.Parts)(nil)
 	pending := pendingParts(rq.ctx)
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (pending || !testing.Testing() || streamInTests) {
-		pctx, parts = ui.WithParts(rq.ctx) // HEAD's never run: it has no body
+		pctx, parts = ui.WithParts(rq.ctx, a.partsOptions(r, pending || r.Method == http.MethodHead)) // HEAD's never run: it has no body
+		defer parts.Stop() // the methods of parts that won't be written
 	}
 	info, err := ui.RenderPage(pctx, n, buf)
 	html := buf.Bytes()
