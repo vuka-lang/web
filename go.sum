@@ -10,6 +10,8 @@ github.com/vuka-lang/ui/v2 v2.5.0 h1:pidhD/CJspXjeD62CNDVbCB5i3OaL3XuL0uwM84kVN4
 github.com/vuka-lang/ui/v2 v2.5.0/go.mod h1:xoRdX5EmVujKEZObsbHE9S3l72ZGSUaL6F8nKTgmlrA=
 github.com/vuka-lang/ui/v2 v2.6.0 h1:3GoTDjcWAMA7K9YnJhODd+XyckWY83k+fV33k9ERNBE=
 github.com/vuka-lang/ui/v2 v2.6.0/go.mod h1:mvrsQLCyBVSLUAB57L/lRBl27wHEbythZQGIMRGNVYo=
+github.com/vuka-lang/ui/v2 v2.6.1-0.20261027013336-1d581cade20b h1:6HkLAt3zH102Gju0QeTECSdvEkQjdH8Tenrfs6Kdntc=
+github.com/vuka-lang/ui/v2 v2.6.1-0.20261027013336-1d581cade20b/go.mod h1:mvrsQLCyBVSLUAB57L/lRBl27wHEbythZQGIMRGNVYo=
 github.com/vuka-lang/vuka/v2 v2.5.0 h1:Dxf/AMLEfxCEfAcbaOhkAq3zlSu+4IekNu8b69JvMag=
 github.com/vuka-lang/vuka/v2 v2.5.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/vuka-lang/vuka/v2 v2.6.0 h1:1RGQWHFDt5DvXdDzsQ0ZQ5FHYiVYcyOcmDvAHtdiSWU=
