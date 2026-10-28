@@ -141,6 +141,58 @@ test("ui.JS.Call: the component's own method first, then the app's, then vuka.re
   eq(p.$("#own").className, "after", "the chain went on once the method returned");
 });
 
+test("ref.all reads the current instance and watches changes after patches", async () => {
+  let read;
+  const log = [];
+  const body = (n) => `<main data-vk-s="k1" data-vk-id="c1">${Array.from({ length: n }, (_, i) => `<input data-vk-s="k1" data-vk-ref="item" id="item${i}">`).join("")}</main>`;
+  const p = joined(body(1), { m: { k1: "/k1.js" } }, { "/k1.js": [{
+    mounted(el, ctx) { read = ctx.ref.all("item"); read.watch((xs) => log.push(xs.length)); const off = read.watch(() => log.push("stopped")); off(); },
+  }] });
+  await settle();
+  eq(read().length, 1);
+  p.server({ type: "patch", updates: [{ id: "c1", html: body(2) }] });
+  eq(read().length, 2);
+  eq(log, [2]);
+  p.server({ type: "patch", updates: [{ id: "c1", html: body(2) }] });
+  eq(log, [2], "unchanged elements don't notify");
+  p.server({ type: "patch", updates: [{ id: "c1", html: body(0) }] });
+  eq(read().length, 0);
+  eq(log, [2, 0]);
+});
+
+test("listen removes early and on navigation; onDestroy runs once", async () => {
+  const log = [];
+  let target;
+  const p = joined(counter("c1", 0), { m: { k1: "/k1.js" } }, { "/k1.js": [{
+    mounted(el, ctx) {
+      target = ctx.ref("note");
+      ctx.listen(target, "click", () => log.push("click"));
+      const off = ctx.listen(target, "click", () => log.push("early"));
+      off(); off();
+      ctx.onDestroy(() => log.push("destroy"));
+    },
+  }] });
+  await settle();
+  p.fire(target, "click");
+  eq(log, ["click"]);
+  p.window.vuka.run(p.doc.body, [["navigate", { href: "/users" }]]);
+  const nav = p.ws().sent.find((m) => m.type === "navigate");
+  p.server({ type: "patch", ref: nav.ref, url: "/users", updates: [{ id: "c0", html: "<main>users</main>" }] });
+  await settle();
+  p.fire(target, "click");
+  eq(log, ["click", "destroy"]);
+});
+
+test("loop refs belong to their own instance even when nested scopes match", async () => {
+  const seen = {};
+  const body = `<main data-vk-s="k1" data-vk-id="c1"><input id="own" data-vk-s="k1" data-vk-ref="item"><section data-vk-s="k1" data-vk-id="c2"><input id="nested" data-vk-s="k1" data-vk-ref="item"></section></main>`;
+  joined(body, { m: { k1: "/k1.js" } }, { "/k1.js": [{
+    mounted(el, ctx) { seen[el.getAttribute("data-vk-id")] = ctx.ref.all("item")().map(x => x.id); },
+  }] });
+  await settle();
+  eq(seen, { c1: ["own"], c2: ["nested"] });
+});
+
 (async () => {
   let failed = 0;
   for (const t of tests) {

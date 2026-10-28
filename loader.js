@@ -53,6 +53,21 @@
   function context(inst) {
     const ons = new Map();
     inst.ons = ons;
+    inst.cleanups = new Set();
+    inst.refWatches = new Set();
+    const refs = (name) => [inst.el, ...inst.el.querySelectorAll("[data-vk-ref]")]
+      .filter((x) => x.getAttribute("data-vk-ref") === name && instanceOf(x) === inst);
+    const ref = (name) => refs(name)[0] || null;
+    ref.all = (name) => {
+      const read = () => refs(name);
+      read.watch = (fn) => {
+        const w = { read, fn, value: read() };
+        inst.refWatches.add(w);
+        return () => inst.refWatches.delete(w);
+      };
+      return read;
+    };
+    const onDestroy = (fn) => { inst.cleanups.add(fn); };
     return {
       el: inst.el,
       push: (name, payload) => window.vuka && window.vuka.push
@@ -71,9 +86,19 @@
         if (!ons.has(name)) ons.set(name, []);
         ons.get(name).push(fn);
       },
-      ref: (name) => {
-        const all = [inst.el, ...inst.el.querySelectorAll('[data-vk-ref="' + name + '"]')];
-        return all.find((x) => x.getAttribute("data-vk-ref") === name && scopeOf(x) === inst.id) || null;
+      ref,
+      onDestroy,
+      listen: (target, type, fn, options) => {
+        target.addEventListener(type, fn, options);
+        let active = true;
+        const off = () => {
+          if (!active) return;
+          active = false;
+          target.removeEventListener(type, fn, options);
+          inst.cleanups.delete(off);
+        };
+        onDestroy(off);
+        return off;
       },
       // value is a template variable the app lets the browser read
       // (web.Browser): the data-vk-vars of the element or the nearest
@@ -104,6 +129,11 @@
   function destroy(inst) {
     insts.delete(inst.el);
     if (inst.hooks) each(inst, "destroyed");
+    for (const fn of inst.cleanups || []) {
+      try { fn(); } catch (err) { console.error("vuka: cleanup:", err); }
+    }
+    if (inst.cleanups) inst.cleanups.clear();
+    if (inst.refWatches) inst.refWatches.clear();
   }
 
   // sync follows the page: instances gone are destroyed (an element the
@@ -120,7 +150,15 @@
     const patched = (d.ids || []).map((id) => id === "c0" ? document.body : document.querySelector('[data-vk-id="' + id + '"]')).filter(Boolean);
     for (const el of kept) {
       const inst = insts.get(el);
-      if (inst && inst.hooks && patched.some((p) => p.contains(el) || el.contains(p))) each(inst, "updated");
+      if (inst && inst.hooks && patched.some((p) => p.contains(el) || el.contains(p))) {
+        each(inst, "updated");
+        for (const w of inst.refWatches) {
+          const next = w.read();
+          if (next.length === w.value.length && next.every((x, i) => x === w.value[i])) continue;
+          w.value = next;
+          try { w.fn(next); } catch (err) { console.error("vuka: ref.all watch:", err); }
+        }
+      }
     }
   }
 
