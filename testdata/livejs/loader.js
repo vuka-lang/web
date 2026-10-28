@@ -146,7 +146,7 @@ test("ref.all reads the current instance and watches changes after patches", asy
   const log = [];
   const body = (n) => `<main data-vk-s="k1" data-vk-id="c1">${Array.from({ length: n }, (_, i) => `<input data-vk-s="k1" data-vk-ref="item" id="item${i}">`).join("")}</main>`;
   const p = joined(body(1), { m: { k1: "/k1.js" } }, { "/k1.js": [{
-    mounted(el, ctx) { read = ctx.ref.all("item"); read.watch((xs) => log.push(xs.length)); },
+    mounted(el, ctx) { read = ctx.ref.all("item"); read.watch((xs) => log.push(xs.length)); const off = read.watch(() => log.push("stopped")); off(); },
   }] });
   await settle();
   eq(read().length, 1);
@@ -181,6 +181,16 @@ test("listen removes early and on navigation; onDestroy runs once", async () => 
   await settle();
   p.fire(target, "click");
   eq(log, ["click", "destroy"]);
+});
+
+test("loop refs belong to their own instance even when nested scopes match", async () => {
+  const seen = {};
+  const body = `<main data-vk-s="k1" data-vk-id="c1"><input id="own" data-vk-s="k1" data-vk-ref="item"><section data-vk-s="k1" data-vk-id="c2"><input id="nested" data-vk-s="k1" data-vk-ref="item"></section></main>`;
+  joined(body, { m: { k1: "/k1.js" } }, { "/k1.js": [{
+    mounted(el, ctx) { seen[el.getAttribute("data-vk-id")] = ctx.ref.all("item")().map(x => x.id); },
+  }] });
+  await settle();
+  eq(seen, { c1: ["own"], c2: ["nested"] });
 });
 
 (async () => {
