@@ -24,6 +24,8 @@ github.com/vuka-lang/ui/v2 v2.9.0 h1:GHI4VWhilsnS5HvlIb5LflTRx42ZC2zOXOF/FPfDPMI
 github.com/vuka-lang/ui/v2 v2.9.0/go.mod h1:ApbY0LEpNlPzPuhbLvwmOfQHD5JJMYT4cvD5XXbmwFQ=
 github.com/vuka-lang/ui/v2 v2.10.0 h1:c/J1Z0NQW7v6C64QiFzQm3aSj2H6QFSIhiC+Qv0Sk/0=
 github.com/vuka-lang/ui/v2 v2.10.0/go.mod h1:6QEDwNqLp5F9yRwCT7TpQimmD+Pxm4dZMCbqAGZxfMM=
+github.com/vuka-lang/ui/v2 v2.11.0 h1:uGYhC3F6envQ1BWWbAygwoO5fps49uQvDXHvb28KHeY=
+github.com/vuka-lang/ui/v2 v2.11.0/go.mod h1:dBwzwDNUpfEA4jzZCI3j9lHfKAYrVpDXh/m69SAW+6c=
 github.com/vuka-lang/vuka/v2 v2.5.0 h1:Dxf/AMLEfxCEfAcbaOhkAq3zlSu+4IekNu8b69JvMag=
 github.com/vuka-lang/vuka/v2 v2.5.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/vuka-lang/vuka/v2 v2.6.0 h1:1RGQWHFDt5DvXdDzsQ0ZQ5FHYiVYcyOcmDvAHtdiSWU=
@@ -34,6 +36,8 @@ github.com/vuka-lang/vuka/v2 v2.9.0 h1:1Q95PZTWJ7G1oqcdTrjPbcpH/z/VJYKCLfPcHWlRR
 github.com/vuka-lang/vuka/v2 v2.9.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/vuka-lang/vuka/v2 v2.10.0 h1:KM5T+fmrZ82QN6jXzs2soDpRS8TnXac5U/8K6nfY+sw=
 github.com/vuka-lang/vuka/v2 v2.10.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
+github.com/vuka-lang/vuka/v2 v2.11.0 h1:cVV7AJ2dFxQfgk4gY8pNvdqvErxKiEkVaY5La9TNap8=
+github.com/vuka-lang/vuka/v2 v2.11.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
