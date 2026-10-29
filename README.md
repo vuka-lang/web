@@ -1470,6 +1470,22 @@ example is in [`examples/islands`](examples/islands).
 listing — and dotfiles and dot directories (`.env`, `.git/`) are never
 served, but `.well-known/`. `web.Frontend` serves the same way.
 
+Link to a file with `web.Asset`, giving the path it is served at:
+
+```html
+<img src={web.Asset("/static/images/logo.png")} alt="Logo" />
+```
+
+Under `vuka run` that is the path as written. In a binary `vuka build` made
+it is the file's content-hashed name (`/static/images/logo.3f9a1c2b.png`),
+served with `Cache-Control: public, max-age=31536000, immutable`; the plain
+name keeps working. `vuka build` and `vuka vet` check each literal path
+against the mounts of embedded directories. `url(…)`s in the stylesheets a
+mount serves, and in the app's Tailwind CSS, name the hashed files too.
+`web.AssetURL(ctx, path)` is the absolute URL, for emails: the request's
+scheme and host, or `web.BaseURL("https://example.com")`'s where there is no
+request.
+
 ## Security headers
 
 Every response carries, unless its handler sets them itself:

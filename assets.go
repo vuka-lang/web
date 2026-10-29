@@ -27,10 +27,10 @@ import (
 // component's module the first time the component renders on the page and
 // runs its hooks.
 
-// Asset is a stylesheet or script for a page: an option of @web.Live,
+// PageAsset is a stylesheet or script for a page: an option of @web.Live,
 // web.Layout, web.LiveLayout and web.New. The vuka command reads it from the
 // source and compiles it; the app itself only serves what it compiled.
-type Asset struct {
+type PageAsset struct {
 	kind   string
 	values []string
 }
@@ -49,7 +49,7 @@ const Global = ":global"
 // :deep(…) reaches into child components, :scope is the component's root
 // element. The stylesheets compile with the app's Tailwind CSS, in the order
 // listed (later ones win), so @apply, theme() and variants work.
-func Style(paths ...string) Asset { return Asset{"style", paths} }
+func Style(paths ...string) PageAsset { return PageAsset{"style", paths} }
 
 // Script names hook modules (TypeScript or JavaScript) for the component the
 // option belongs to, as Style does stylesheets. They are bundled in order
@@ -57,17 +57,17 @@ func Style(paths ...string) Asset { return Asset{"style", paths} }
 // may export default { mounted(el, ctx), updated(el, ctx), destroyed(el,
 // ctx), …methods }. ui.JS.Call("name") reaches the component's own methods
 // before vuka.register's and window's.
-func Script(paths ...string) Asset { return Asset{"script", paths} }
+func Script(paths ...string) PageAsset { return PageAsset{"script", paths} }
 
 // CSS is a stylesheet written inline, as Style's files are: web.CSS(`output { … }`).
-func CSS(src ...string) Asset { return Asset{"css", src} }
+func CSS(src ...string) PageAsset { return PageAsset{"css", src} }
 
 // JS is a hook module written inline, as Script's files are.
-func JS(src ...string) Asset { return Asset{"js", src} }
+func JS(src ...string) PageAsset { return PageAsset{"js", src} }
 
-func (Asset) apply(*App)           {}
-func (Asset) liveOption(*liveSpec) {}
-func (Asset) Attrs() []any         { return nil }
+func (PageAsset) apply(*App)           {}
+func (PageAsset) liveOption(*liveSpec) {}
+func (PageAsset) Attrs() []any         { return nil }
 
 const (
 	assetsPrefix  = livePrefix + "c/"

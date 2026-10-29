@@ -43,6 +43,12 @@ func RegisterEncoded(path, encoding string, data []byte) {
 	encodedReg[path][encoding] = data
 }
 
+func dropEncodings(path string) {
+	encodedMu.Lock()
+	defer encodedMu.Unlock()
+	delete(encodedReg, path)
+}
+
 func registeredEncoding(path, enc string) []byte {
 	encodedMu.Lock()
 	defer encodedMu.Unlock()

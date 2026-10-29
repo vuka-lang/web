@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"reflect"
@@ -39,6 +40,8 @@ type App struct {
 	reg           registry
 	specs         []*routeSpec
 	statics       []func()
+	mounts        []staticMount // Static's
+	baseURL       *url.URL      // BaseURL's
 	needs         []reflect.Type
 	eager         []*provider
 	checks        []func(*App) error
@@ -279,9 +282,10 @@ func (a *App) Delete(path string, fn any, opts ...RouteOption) *App {
 func (a *App) Static(prefix string, fsys fs.FS) *App {
 	a.mutable("Static")
 	prefix = "/" + strings.Trim(prefix, "/")
+	a.mounts = append(a.mounts, staticMount{prefix, fsys})
 	a.statics = append(a.statics, func() {
 		a.router.Handle(http.MethodGet, joinPath(prefix, "/{path...}"),
-			http.StripPrefix(strings.TrimSuffix(prefix, "/"), staticFS(fsys)))
+			http.StripPrefix(strings.TrimSuffix(prefix, "/"), mountFS(prefix, fsys)))
 	})
 	return a
 }
@@ -470,6 +474,7 @@ func (a *App) build() (http.Handler, error) {
 	for _, f := range a.statics {
 		f()
 	}
+	lastApp.Store(a)
 	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(serveLiveJS))
 	a.router.Handle(http.MethodGet, liveSocket, http.HandlerFunc(a.serveLive))
 	a.routeCSS()

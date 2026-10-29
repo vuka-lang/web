@@ -379,13 +379,17 @@ func CronContext(f func(context.Context) context.Context) Option {
 	return OptionFunc(func(a *App) { a.cronCtx = append(a.cronCtx, f) })
 }
 
-// staticFS serves fsys's files: never a directory's listing (a directory
+// mountFS serves fsys's files: never a directory's listing (a directory
 // is its index.html, else 404), nor a dotfile or anything under a dot
 // directory but .well-known. A file's ETag is a hash of its content, and
 // it is cached for good when its name carries one, else revalidated; the
 // .br or .gz beside it is sent to a browser taking that encoding.
-func staticFS(fsys fs.FS) http.Handler {
+//
+// Mounted at prefix, a file's content-hashed name (RegisterStatic) is the
+// file, cached for good, and a stylesheet's url(…)s name the hashed files.
+func mountFS(prefix string, fsys fs.FS) http.Handler {
 	files := http.FileServerFS(fsys)
+	base := strings.TrimSuffix(prefix, "/")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		if hiddenPath(name) {
@@ -397,6 +401,16 @@ func staticFS(fsys fs.FS) http.Handler {
 		}
 		slash := strings.HasSuffix(r.URL.Path, "/") || r.URL.Path == ""
 		fi, err := fs.Stat(fsys, name)
+		hashed := false
+		if err != nil && prefix != "" && !slash {
+			if plain, ok := plainStatic(base + "/" + name); ok {
+				if rel, ok := strings.CutPrefix(plain, base+"/"); ok {
+					if fi, err = fs.Stat(fsys, rel); err == nil {
+						name, hashed = rel, true
+					}
+				}
+			}
+		}
 		if err != nil {
 			http.NotFound(w, r)
 			return
@@ -415,8 +429,33 @@ func staticFS(fsys fs.FS) http.Handler {
 			files.ServeHTTP(w, r) // the redirect without the slash, or to the directory
 			return
 		}
-		serveFile(w, r, fsys, name, "", staticHashed(name), staticRevalidate)
+		immutable := hashed || staticHashed(name)
+		if prefix != "" && path.Ext(name) == ".css" && staticRegistered() {
+			if serveCSSFile(w, r, fsys, name, base+"/"+name, immutable) {
+				return
+			}
+		}
+		serveFile(w, r, fsys, name, "", immutable, staticRevalidate)
 	})
+}
+
+// serveCSSFile answers with the stylesheet name of fsys, its url(…)s naming
+// the hashed files; false when it can't be read whole.
+func serveCSSFile(w http.ResponseWriter, r *http.Request, fsys fs.FS, name, at string, immutable bool) bool {
+	fi, err := fs.Stat(fsys, name)
+	if err != nil || fi.Size() > staticEncodeMax {
+		return false
+	}
+	css, err := fs.ReadFile(fsys, name)
+	if err != nil {
+		return false
+	}
+	css = rewriteCSS(css, at)
+	if !immutable {
+		w.Header().Set("Cache-Control", staticRevalidate)
+	}
+	serveFixed(w, r, "text/css; charset=utf-8", cssTag(css), immutable, css)
+	return true
 }
 
 // hiddenPath reports whether a cleaned relative path names a dotfile or
