@@ -96,6 +96,10 @@ func (a *App) appCSS() *stylesheet {
 	cssMu.Lock()
 	defer cssMu.Unlock()
 	if css, ok := cssReg[cssName]; ok {
+		if out := rewriteCSS(css, cssPath); !bytes.Equal(out, css) {
+			dropEncodings(cssPath) // made of the stylesheet as it was
+			css = out
+		}
 		return newStylesheet(css)
 	}
 	return nil

@@ -72,7 +72,7 @@ func (u Uses) liveOption(s *liveSpec) { s.mw = append(s.mw, u.middleware()...) }
 // Layout wraps a Live page's component: the page is layout(component).
 // Styles and scripts (Style, Script, CSS, JS) given with it belong to the
 // layout's own markup.
-func Layout(layout func(page ui.Node) ui.Node, assets ...Asset) LiveOption {
+func Layout(layout func(page ui.Node) ui.Node, assets ...PageAsset) LiveOption {
 	return liveOptionFunc(func(s *liveSpec) { s.layout = layout })
 }
 
@@ -114,7 +114,7 @@ func (a *App) Live(path string, page any, opts ...RouteOption) *App {
 
 // LiveLayout is the layout of every Live page without its own. Styles and
 // scripts given with it belong to the layout's own markup, as Layout's do.
-func LiveLayout(layout func(page ui.Node) ui.Node, assets ...Asset) Option {
+func LiveLayout(layout func(page ui.Node) ui.Node, assets ...PageAsset) Option {
 	return OptionFunc(func(a *App) { a.liveLayout = layout })
 }
 
