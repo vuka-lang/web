@@ -391,6 +391,7 @@ function parseDocument(html) {
 // reply answers one.
 function page(file, body, options = {}) {
   const doc = new Document();
+  doc.readyState = "complete"; // the page has loaded: the runtime asks for its parts at once
   doc.body.innerHTML = body;
   const timers = [];
   let now = 0, seq = 0;

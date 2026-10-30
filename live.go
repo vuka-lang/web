@@ -505,19 +505,51 @@ func (a *App) page(rq *request, n ui.Node) {
 	// components and number its handlers.
 	end := a.span(rq.ctx, "render", "page")
 	// A GET page's deferred parts (ui.Part) render their fallbacks, each
-	// method starting as the render meets it; the parts follow the page
+	// method starting as the render meets it; the page is sent whole, its
+	// parts parked for the runtime's request for them once it has loaded
+	// (handoff). Without the hand-off (HEAD, PartsWindow(0))
+	// no method runs: the runtime's request renders the page again
 	// (parts.go).
 	pctx, parts := rq.ctx, (*ui.Parts)(nil)
 	pending := pendingParts(rq.ctx)
+	want := partsWanted(r)
+	handoff := want == nil && r.Method == http.MethodGet && !pending && a.partsWindow > 0
+	parked, cancelParts := false, context.CancelFunc(func() {})
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (pending || !testing.Testing() || streamInTests) {
-		// HEAD's methods never run: it has no body. Stop cancels those of
-		// parts that won't be written.
-		pctx, parts = ui.WithParts(rq.ctx, a.partsOptions(r, pending || r.Method == http.MethodHead))
-		defer parts.Stop()
+		base := rq.ctx
+		if handoff {
+			// The parts outlive the page's response: its values, not its
+			// cancellation.
+			base, cancelParts = context.WithCancel(context.WithoutCancel(rq.ctx))
+		}
+		pctx, parts = ui.WithParts(base, a.partsOptions(r, want == nil && !handoff, want))
+		ps := parts
+		defer func() {
+			if !parked { // the methods of parts that won't be written
+				ps.Stop()
+				cancelParts()
+			}
+		}()
+	} else {
+		want, handoff = nil, false
 	}
 	info, err := ui.RenderPage(pctx, n, buf)
 	html := buf.Bytes()
 	var s *live.Session
+	if want != nil && err == nil {
+		end()
+		if err := refusedVars(rq.ctx); err != nil {
+			a.WriteError(w, r, err, true)
+			return
+		}
+		if info.Live || info.Opaque && pageLive(html) {
+			// a live page has no parts to fetch: those asked for fail
+			parts.Stop()
+			_, parts = ui.WithParts(rq.ctx, a.partsOptions(r, false, want))
+		}
+		writeParts(w, parts)
+		return
+	}
 	if err == nil && (info.Live || info.Opaque && pageLive(html)) {
 		parts = nil // a live session renders the page again, its parts in place
 		s = live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
@@ -550,10 +582,26 @@ func (a *App) page(rq *request, n ui.Node) {
 	if live && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		token = a.signToken(r.URL.RequestURI())
 	}
+	deferred := err == nil && r.Method == http.MethodGet && !pending && parts.Pending()
+	var partsTok string
+	if deferred {
+		varyParts(w.Header())
+		if handoff {
+			partsTok = a.parkParts(rq, parts, cancelParts)
+			parked = true
+			w.Header().Set(partsTokenHeader, partsTok) // a navigation's: the runtime asks for the parts with it
+			if w.Header().Get("Cache-Control") == "" {
+				w.Header().Set("Cache-Control", "private") // the page names its visitor's parts
+			}
+		}
+	}
 	nav := navigation(r)
 	if nav && !a.navPage(w, r, html, token) {
 		if s != nil {
 			s.Close()
+		}
+		if partsTok != "" {
+			a.partsPark.drop(partsTok)
 		}
 		return
 	}
@@ -572,12 +620,14 @@ func (a *App) page(rq *request, n ui.Node) {
 	} else if s != nil {
 		s.Close()
 	}
-	streams := err == nil && r.Method == http.MethodGet && !pending && parts.Pending()
 	var script string
-	if streams || live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS ||
+	if deferred || live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS ||
 		bytes.Contains(html, []byte(" data-vk-link")) ||
 		bytes.Contains(html, []byte(" data-vk-check=")) { // a form's browser checks (ui.Config.BrowserChecks)
 		script = a.scriptTag(r, token)
+		if partsTok != "" {
+			script = strings.Replace(script, " defer></script>", ` data-vk-parts="`+partsTok+`" defer></script>`, 1)
+		}
 	}
 	html = withTitle(html, ui.PageTitle(rq.ctx))
 	head := a.headTags(r, html)
@@ -595,11 +645,7 @@ func (a *App) page(rq *request, n ui.Node) {
 		// the browser keeps a prefetched page as long as the runtime does
 		w.Header().Set("Cache-Control", "private, max-age="+strconv.Itoa(int(prefetchWindow/time.Second)))
 	}
-	if streams {
-		a.streamPage(rq, html, head, script, parts)
-		return
-	}
-	if nav && token == "" && etagged(w, r, html, []byte(head), []byte(script)) {
+	if nav && token == "" && partsTok == "" && etagged(w, r, html, []byte(head), []byte(script)) {
 		return
 	}
 	writePage(w, html, head, script)

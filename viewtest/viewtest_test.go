@@ -71,7 +71,7 @@ func TestParts(t *testing.T) {
 		want string
 	}{
 		{nil, "<p>7 open</p>"},
-		{[]web.Option{viewtest.Pending()}, "<p><!--vk-part:vk-p1-->…<!--/vk-part:vk-p1--></p>"},
+		{[]web.Option{viewtest.Pending()}, "<p><!--vk-part:vk-p1-cpv9-->…<!--/vk-part:vk-p1-cpv9--></p>"}, // cpv9: a tag of stats.Count
 	} {
 		app := web.New(append([]web.Option{web.Only("none"), web.NoDotEnv()}, c.opts...)...)
 		app.Get("/", func() *stats { return &stats{} })
