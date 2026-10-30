@@ -242,13 +242,15 @@ func (p *shopPage) Render(ctx context.Context, w io.Writer) error {
 	}).Render(ctx, w)
 }
 
-// The request for a page's parts runs the route as the page's did: its
-// guard, its path; the parts of components come from the props the page
-// gives them again, nothing of them taken from the browser.
+// A request for a page's parts without a parked token runs the route as
+// the page's did: its guard, its path; the parts of components come from
+// the props the page gives them again, nothing of them taken from the
+// browser.
 func TestPartsAuthorized(t *testing.T) {
 	log.SetOutput(io.Discard)
 	var asked atomic.Int32
-	app := New(Only("none"))
+	app := New(Only("none"), PartsWindow(0)) // the page's request runs no deferred method: each parts' request renders it again
+
 	app.Get("/shops/{shop}", func() *shopPage { return &shopPage{asked: &asked} }, Use(func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if c, err := r.Cookie("user"); err != nil || c.Value != "ann" {
