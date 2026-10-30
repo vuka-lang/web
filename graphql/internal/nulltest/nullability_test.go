@@ -141,7 +141,7 @@ func TestNullability(t *testing.T) {
 	for name, want := range map[string]string{
 		"items":             "(all: Boolean!): [Product!]",
 		"items_by_category": "(category_id: Int!): [Product]",
-		"echo":                 "(values: [Int]): [Int]!",
+		"echo":              "(values: [Int]): [Int]!",
 	} {
 		if sig[name] != want {
 			t.Errorf("%s%s, want %s", name, sig[name], want)
@@ -179,7 +179,6 @@ func TestNullability(t *testing.T) {
 		t.Errorf("a nullable variable for a required argument: %s", js(out))
 	}
 }
-
 
 func newApp(t *testing.T, opts ...any) http.Handler {
 	t.Helper()
