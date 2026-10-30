@@ -683,14 +683,20 @@
   // ahead is an unkeyed node of n's kind past cur, when cur isn't the next
   // node's: the nodes before it are gone (a branch that changed element),
   // so the nodes after — a field with focus — stay the same elements.
-  function ahead(cur, n) {
+  function ahead(cur, n, kept) {
     if (keyOf(cur) || (n.nextSibling && same(cur, n.nextSibling))) return null;
-    for (let c = cur.nextSibling; c && !keyOf(c); c = c.nextSibling) if (!foreign.has(c) && same(c, n)) return c;
+    for (let c = cur.nextSibling; c && !keyOf(c); c = c.nextSibling) if (!kept(c) && same(c, n)) return c;
     return null;
   }
 
   function children(el, next) {
-    const skip = (c) => { while (c && foreign.has(c)) c = c.nextSibling; return c; };
+    // Elements a script added beside the server's (a popup's backdrop and
+    // focus guards) stay where it put them, the server's matched past
+    // them, so a script's references to either stay good; children a
+    // script replaced go once the server renders others.
+    const beside = Array.from(el.children).some((c) => placed.has(c) && !added.has(c));
+    const kept = (c) => foreign.has(c) || beside && added.has(c);
+    const skip = (c) => { while (c && kept(c)) c = c.nextSibling; return c; };
     const outs = awayFrom(el), used = new Set();
     let cur = skip(el.firstChild), last = null;
     for (const n of Array.from(next.childNodes)) {
@@ -712,11 +718,11 @@
       }
       if (k) match = Array.from(el.children).find((c) => !foreign.has(c) && keyOf(c) === k && c.tagName === n.tagName) || null;
       if (!match && cur && same(cur, n)) match = cur;
-      if (!match && cur && !k && (match = ahead(cur, n))) {
+      if (!match && cur && !k && (match = ahead(cur, n, kept))) {
         while (cur !== match) {
           const gone = cur;
           cur = cur.nextSibling;
-          if (!foreign.has(gone)) el.removeChild(gone);
+          if (!kept(gone)) el.removeChild(gone);
         }
       }
       if (match) {
@@ -740,7 +746,7 @@
     while (cur) {
       const gone = cur;
       cur = cur.nextSibling;
-      if (!foreign.has(gone)) el.removeChild(gone);
+      if (!kept(gone)) el.removeChild(gone);
     }
     for (const o of outs) if (!used.has(o)) { leave(o); o.remove(); } // no longer rendered here
   }
@@ -749,7 +755,9 @@
   // where the server's markup doesn't have them: the body's children they
   // add — a component's teleported content and its anchors, a date picker's
   // calendar — and elements of the page they moved, a dialog portalled to
-  // the body. A morph leaves them where they are; a moved element is
+  // the body. A morph leaves them where they are, and the elements they
+  // add beside the server's (a popup's backdrop, focus guards) where they
+  // put them, matching the server's past them; a moved element is
   // patched where it is, matched at the place the server renders it (its
   // home) and never put back, and goes when the server stops rendering it
   // there. An attribute a script changed (open, aria-expanded, data-open, a
@@ -760,6 +768,7 @@
   // (quiet) aren't the page's.
   const foreign = new WeakSet();
   const placed = new WeakSet(); // the elements a morph put or kept: the server's
+  const added = new WeakSet(); // the elements a script added to the server's
   const homes = new WeakMap(); // a moved element → { parent, prev }: its place in the server's markup
   const away = new WeakMap(); // an element → the Set of its children moved elsewhere
   const owned = new WeakMap(); // an element → Map: attribute → the server's value a script changed
@@ -848,6 +857,7 @@
       r.addedNodes.forEach((n) => {
         if (t === document.body) foreign.add(n);
         if (!homes.has(n)) script = true;
+        if (n.nodeType === 1 && !homes.has(n) && !placed.has(n)) added.add(n);
       });
       if (script && t !== document.body && placed.has(t) && !ownedKids.has(t)) {
         if (!kids.has(t)) kids.set(t, []);
