@@ -413,6 +413,9 @@ func (a *App) build() (http.Handler, error) {
 		for i := len(outer) - 1; i >= 0; i-- {
 			h = a.layer(outer[i], h)
 		}
+		if s.formPost {
+			h = a.formOnly(s, h)
+		}
 		h, err = a.wrapRoute(s, h)
 		if err != nil {
 			errs = append(errs, err)

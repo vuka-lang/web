@@ -596,6 +596,205 @@
   document.addEventListener("input", recheck, true);
   document.addEventListener("change", recheck, true);
 
+  // Forms over HTTP (data-vk-http): a struct form on a page that isn't
+  // live posts to its page with fetch. Its checks run as on a live page —
+  // a field left filled, typing in one showing an error, a choice made —
+  // sending the form with _vk_check (nothing saved), and its submit sends
+  // it as a plain POST would. The page answers JSON (Vk-Form): the form's
+  // errors, which go in place — each field's error, aria-invalid, the
+  // summary — without a field's value, focus or caret touched; or, the
+  // submit succeeded, where to go, a navigation as a link's. Any other
+  // reply is shown as the page it is.
+  const httpForm = (f) => f instanceof Element && f.tagName === "FORM" && f.hasAttribute("data-vk-http");
+  const fieldError = (form, ctl) => { const p = ctl && ctl.id && document.getElementById(ctl.id + "-error"); return p && form.contains(p) ? p : null; };
+  function markUsed(form, f) {
+    const used = form.querySelector('input[name="_vk_used"]');
+    if (!used || !f.name) return;
+    const names = used.value ? used.value.split(",") : [];
+    if (!names.includes(f.name)) used.value = names.concat(f.name).join(",");
+  }
+  function httpCheck(e) {
+    const f = e.target;
+    if (!(f instanceof Element) || !isField(f) || !f.name || f.type === "hidden" || !httpForm(f.form) || !f.form.hasAttribute("data-vk-checks")) return;
+    const form = f.form, shows = f.getAttribute("aria-invalid") === "true" || !!fieldError(form, f);
+    if (e.type === "input" && !(shows && !f.hasAttribute("data-vk-lazy"))) return;
+    if (e.type === "change" && !checkable(f) && f.tagName !== "SELECT") return; // focusout sends it
+    if (e.type === "focusout" && !filled(f) && !shows) return;
+    markUsed(form, f);
+    clearTimeout(form.vkCheckTimer);
+    const wait = e.type === "input" ? +(form.getAttribute("data-vk-debounce") || 250) : 0;
+    form.vkCheckTimer = setTimeout(() => postForm(form, "check"), wait);
+  }
+  document.addEventListener("focusout", httpCheck);
+  document.addEventListener("input", httpCheck);
+  document.addEventListener("change", httpCheck);
+  document.addEventListener("submit", (e) => {
+    const form = e.target;
+    if (!httpForm(form) || e.defaultPrevented || e.submitter && e.submitter.name === "_vk_intent" || typeof fetch !== "function") return;
+    e.preventDefault();
+    leaving = false; // the form posts in place: the page stays until its reply says where to go
+    if (form.vkBusy && (form.getAttribute("data-vk-submit") || "prevent") === "prevent") return;
+    postForm(form, "submit", e.submitter);
+  });
+  function postForm(form, mode, submitter) {
+    let fd;
+    try { fd = new FormData(form, submitter || undefined); } catch (_) { fd = new FormData(form); }
+    if (mode === "check") {
+      if (form.vkBusy) return; // the submit's reply decides
+      fd.set("_vk_check", form.hasAttribute("data-vk-submitted") ? "submitted" : "1");
+    }
+    const seq = form.vkSeq = (form.vkSeq || 0) + 1;
+    if (mode === "submit") {
+      clearTimeout(form.vkCheckTimer);
+      form.vkBusy = true;
+      form.setAttribute("aria-busy", "true");
+    }
+    const done = () => {
+      if (mode !== "submit") return;
+      form.vkBusy = false;
+      form.removeAttribute("aria-busy");
+    };
+    const action = httpURL(form.getAttribute("action") || location.href);
+    if (!action || action.origin !== location.origin) return done();
+    fetch(action.href, { method: "POST", body: fd, headers: { "Vk-Form": mode }, credentials: "same-origin" }).then((res) => {
+      const json = /^application\/json/i.test(res.headers.get("Content-Type") || "");
+      return (json ? res.json() : res.text()).then((body) => ({ res, json, body }));
+    }).then(({ res, json, body }) => {
+      done();
+      if (seq !== form.vkSeq && mode === "check") return; // a later check or the submit stands
+      if (!json) return showReply(res, body);
+      if (body.location) { if (mode === "submit") go(body.location).catch(() => {}); return; }
+      applyReport(form, body, mode === "submit");
+    }, (err) => {
+      done();
+      if (mode === "submit") fail("live: the form couldn't be sent: " + (err && err.message || "the fetch failed"));
+    });
+  }
+  // showReply shows a reply that isn't a form's answer (an error page) as the
+  // page it is.
+  function showReply(res, html) {
+    if (/^text\/html/i.test(res.headers.get("Content-Type") || "")) {
+      document.open();
+      document.write(html);
+      document.close();
+    } else fail("live: the form's reply is " + res.status + " " + (res.headers.get("Content-Type") || ""));
+  }
+  function applyReport(form, rep, submit) { return quiet(() => applyReportIn(form, rep, submit)); }
+  function applyReportIn(form, rep, submit) {
+    clientErrors(form);
+    const want = new Set((rep.errors || []).map((e) => e.id + "-error"));
+    for (const p of Array.from(form.querySelectorAll(".vk-field__error[id]"))) if (!want.has(p.id)) dropError(p);
+    for (const e of rep.errors || []) putError(form, e, rep.words || {});
+    const sid = rep.form + "-summary", old = document.getElementById(sid);
+    // the summary takes its place: where a <ui.Summary/> is (-slot), else
+    // the form's top (-at); going, it leaves the place behind
+    if (rep.summary) {
+      const sum = summaryOf(sid, rep.summary);
+      const at = old || document.getElementById(sid + "-slot") || document.getElementById(sid + "-at");
+      sum.setAttribute("data-vk-from", old ? old.getAttribute("data-vk-from") || sid + "-at" : at ? at.id : sid + "-at");
+      if (old && old.innerHTML === sum.innerHTML) { /* the same: kept as it is */ }
+      else if (at) at.replaceWith(sum);
+      else {
+        let first = form.firstChild;
+        while (first && (first.nodeType !== 1 || first.tagName === "INPUT" && first.type === "hidden")) first = first.nextSibling;
+        form.insertBefore(sum, first);
+      }
+    } else if (old) {
+      const slot = document.createElement("div");
+      slot.id = old.getAttribute("data-vk-from") || sid + "-at";
+      slot.hidden = true;
+      old.replaceWith(slot);
+    }
+    const idem = form.querySelector('input[name="_vk_idem"]');
+    if (idem && rep.idem) idem.value = rep.idem;
+    if (submit) {
+      form.setAttribute("data-vk-submitted", "");
+      submitted(form);
+    }
+    emit("vk:form", { form, errors: rep.errors || [], submit });
+  }
+  function summaryOf(id, s) {
+    const sum = document.createElement("div"), alert = document.createElement("div"), h = document.createElement("h2"), ul = document.createElement("ul");
+    sum.className = "vk-summary";
+    sum.id = id;
+    sum.tabIndex = -1;
+    sum.setAttribute("data-vk-summary", "");
+    alert.setAttribute("role", "alert");
+    h.className = "vk-summary__title";
+    h.textContent = s.title;
+    ul.className = "vk-summary__list";
+    for (const it of s.items || []) {
+      const li = document.createElement("li");
+      if (it.href) {
+        const a = document.createElement("a");
+        a.href = it.href;
+        a.textContent = it.text;
+        li.append(a);
+      } else li.textContent = it.text;
+      ul.append(li);
+    }
+    alert.append(h, ul);
+    sum.append(alert);
+    return sum;
+  }
+  // the elements a field's error marks: its control (a group's first), the
+  // group's fieldset, the field's wrapper
+  function errorSite(id) {
+    const ctl = document.getElementById(id);
+    if (!ctl) return null;
+    const set = ctl.closest("fieldset.vk-field");
+    return { ctl, set, group: ctl.closest(".vk-field"), described: set || ctl, before: set && set.querySelector(".vk-choices") || ctl.closest(".vk-check") || ctl };
+  }
+  const controlClasses = ["vk-input", "vk-select", "vk-textarea"];
+  function describe(el, id, on) {
+    const ids = (el.getAttribute("aria-describedby") || "").split(/\s+/).filter((x) => x && x !== id);
+    if (on) ids.push(id);
+    ids.length ? el.setAttribute("aria-describedby", ids.join(" ")) : el.removeAttribute("aria-describedby");
+  }
+  function markField(site, on) {
+    if (!site.set) {
+      on ? site.ctl.setAttribute("aria-invalid", "true") : site.ctl.removeAttribute("aria-invalid");
+      for (const c of controlClasses) if (site.ctl.classList.contains(c)) site.ctl.classList.toggle(c + "--invalid", on);
+    }
+    if (site.group) {
+      site.group.classList.toggle("vk-field--invalid", on);
+      on ? site.group.setAttribute("data-invalid", "") : site.group.removeAttribute("data-invalid");
+    }
+  }
+  function putError(form, e, words) {
+    const site = errorSite(e.id);
+    let p = document.getElementById(e.id + "-error");
+    if (p && form.contains(p)) {
+      if (p.getAttribute("data-vk-error") !== e.key) p.setAttribute("data-vk-error", e.key);
+      const text = " " + e.text;
+      if (p.lastChild && p.lastChild.nodeType === 3) { if (p.lastChild.nodeValue !== text) p.lastChild.nodeValue = text; }
+      else p.append(text);
+    } else {
+      if (!site || !site.before.parentNode) return;
+      p = document.createElement("p");
+      p.className = "vk-field__error";
+      p.id = e.id + "-error";
+      p.setAttribute("data-vk-error", e.key);
+      const sr = document.createElement("span");
+      sr.className = "vk-sr-only";
+      sr.textContent = words.error || "Error:";
+      p.append(sr, " " + e.text);
+      site.before.parentNode.insertBefore(p, site.before);
+    }
+    if (site) {
+      describe(site.described, p.id, true);
+      markField(site, true);
+    }
+  }
+  function dropError(p) {
+    const site = errorSite(p.id.replace(/-error$/, ""));
+    p.remove();
+    if (site) {
+      describe(site.described, p.id, false);
+      markField(site, false);
+    }
+  }
+
   function flush() {
     pending.forEach((p) => { clearTimeout(p.timer); send(p.msg); });
     pending.clear();

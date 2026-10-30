@@ -50,6 +50,8 @@ type request struct {
 	ctx   context.Context
 	app   *App
 	route *routeSpec // the route serving it
+
+	formReports map[string]ui.FormReport // what its render's struct forms showed of their errors, by identity
 }
 
 func (a *App) newRequest(w http.ResponseWriter, r *http.Request, s *routeSpec) *request {
@@ -134,7 +136,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 	fail := func(format string, args ...any) error {
 		return failf("E0405", what, s.where, format, args...)
 	}
-	if s.page && s.recv == nil && s.method == http.MethodGet {
+	if s.page && s.recv == nil && (s.method == http.MethodGet || s.formPost) {
 		if t := nodePage(s.fn); t != nil {
 			return a.compileNodePage(s, t)
 		}
