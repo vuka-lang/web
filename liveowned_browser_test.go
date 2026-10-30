@@ -224,3 +224,71 @@ func TestBrowserScriptAddedSiblings(t *testing.T) {
 		t.Fatalf("closed, the popup isn't the one the script holds: %s", h)
 	}
 }
+
+// teleportPage is a live page whose component, mounted before the live
+// runtime ran (an island loaded first), put content in the body between
+// two empty text nodes, as Vue's Teleport does with its anchors.
+type teleportPage struct {
+	ui.Live
+	name string
+}
+
+func (c *teleportPage) Render() ui.Node {
+	at := func(name string, v any) ui.Attr { return ui.Attr{Name: name, Value: v} }
+	other := map[string]string{"a": "b", "b": "a"}[c.name]
+	nodes := ui.Group{ui.El("main", nil,
+		ui.El("p", []ui.Attr{at("id", "page")}, ui.Text(c.name)),
+		ui.Link(ui.LinkProps{Href: "/tp/" + other, ID: "to-" + other, Children: ui.Text(other)}))}
+	if c.name == "a" {
+		nodes = append(nodes, ui.Safe(`<script type="module">
+		if (!window.__tp) {
+			const start = document.createTextNode(""), el = document.createElement("i"), end = document.createTextNode("");
+			el.className = "tp";
+			document.body.append(start, el, end);
+			window.__tp = [start, el, end];
+		}
+	</script>`))
+	}
+	return nodes
+}
+
+// What a script put in the body before the live runtime ran — text nodes
+// too, a teleport's anchors — stays through the join and a navigation, so
+// the script can take it out again (vuka-lang/vuka#239).
+func TestBrowserTeleportedBeforeJoin(t *testing.T) {
+	app := New(Only("none"))
+	app.Live("/tp/a", &teleportPage{name: "a"})
+	app.Live("/tp/b", &teleportPage{name: "b"})
+	srv := httptest.NewServer(app.Handler())
+	t.Cleanup(srv.Close)
+
+	b := chrome.Launch(t)
+	p := b.Open(srv.URL + "/tp/a")
+	p.Wait(`document.documentElement.getAttribute("data-vk-state") === "connected"`)
+	kept := `window.__tp.every((n) => n.parentNode === document.body) &&
+		window.__tp[0].nextSibling === window.__tp[1] && window.__tp[1].nextSibling === window.__tp[2]`
+	check := func(when string) {
+		t.Helper()
+		var ok bool
+		p.Eval(kept, &ok)
+		if !ok {
+			var h string
+			p.Eval(`document.body.innerHTML + " | connected: " + window.__tp.map((n) => n.isConnected)`, &h)
+			t.Fatalf("%s the teleported nodes aren't where the script put them: %s", when, h)
+		}
+	}
+	check("joined,")
+	p.Click("#to-b")
+	p.WaitText("#page", "b")
+	check("navigated,")
+	// the owner takes its nodes out walking from one anchor to the other
+	var gone bool
+	p.Eval(`(() => {
+		let n = window.__tp[0];
+		for (;;) { const next = n.nextSibling; n.remove(); if (n === window.__tp[2]) break; n = next; }
+		return document.querySelectorAll("body > i.tp").length === 0;
+	})()`, &gone)
+	if !gone {
+		t.Errorf("the teleported element stays in the body")
+	}
+}

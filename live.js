@@ -2358,8 +2358,9 @@
 
   window.vuka = { connect, tree, register, push, emit: emitIsland, states, navigate, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   if (watch) {
-    // what follows this script in the body, scripts put there before it ran
-    for (let n = script.parentNode === document.body ? script.nextElementSibling : null; n; n = n.nextElementSibling) foreign.add(n);
+    // what follows this script in the body, scripts put there before it
+    // ran: the text nodes too, a teleport's anchors its owner removes by
+    for (let n = script.parentNode === document.body ? script.nextSibling : null; n; n = n.nextSibling) foreign.add(n);
     watch.observe(document.body, { childList: true, subtree: true, attributes: true, attributeOldValue: true });
   }
   const partsToken = script && script.getAttribute ? script.getAttribute("data-vk-parts") : null;
