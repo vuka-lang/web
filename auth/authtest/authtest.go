@@ -19,8 +19,11 @@ import (
 //
 //	app := web.New(auth.Module(cfg), authtest.As(&auth.Identity{ID: "7", Perms: []string{"orders.*"}}))
 //
-// A nil id makes every request anonymous. Outside a test binary it panics:
-// an app shipped with it would let everyone in.
+// A nil id makes every request anonymous. A handler that signs in
+// (auth.Login, auth.SignIn — a sign-in form's Save) works as it does
+// without As: the session cookie is set on the response, the request
+// staying signed in as id. Outside a test binary it panics: an app shipped
+// with it would let everyone in.
 func As(id *auth.Identity) web.Option {
 	if !testing.Testing() {
 		panic("authtest: As outside a test binary")

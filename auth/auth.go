@@ -498,15 +498,21 @@ func Current(ctx context.Context) *Identity {
 // WithIdentity is ctx signed in as id, for tests and work outside a
 // request (a job acting for a user): Current returns id, and gates check
 // it. A request whose context carries an identity this way keeps it.
+//
+// Within a request it keeps the request's response, so SignIn and SignOut
+// work as they do for the request itself: a handler that signs in can be
+// tested with authtest.As.
 func WithIdentity(ctx context.Context, id *Identity) context.Context {
 	var a *Auth
+	var w http.ResponseWriter
+	var r *http.Request
 	if st := stateOf(ctx); st != nil {
-		a = st.auth
+		a, w, r = st.auth, st.w, st.r
 	}
 	if a != nil && id != nil {
 		id = a.expand(id)
 	}
-	return context.WithValue(ctx, stateKey{}, &state{auth: a, id: id, via: viaContext})
+	return context.WithValue(ctx, stateKey{}, &state{auth: a, id: id, via: viaContext, w: w, r: r})
 }
 
 // Can reports whether ctx's identity has perm.
