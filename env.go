@@ -22,9 +22,11 @@ import (
 
 // envLoad is one reading of a list of env files from one directory.
 type envLoad struct {
+	key      string
 	dir      string
 	searched []string // every candidate, highest precedence first
 	loaded   []string // those found
+	set      map[string]string
 	err      error
 }
 
@@ -32,6 +34,19 @@ var envState struct {
 	sync.Mutex
 	loads map[string]*envLoad // by working directory and file list
 	errs  []error             // Env conversion errors not yet reported by a Build
+	boot  *envLoad            // the start's load, until a load of other files undoes it
+}
+
+// The default env files are read when the program starts, before any
+// package that imports web is initialised and before main builds New's
+// options, so an option built from the environment (a key, a DSN) sees
+// them. Loading other files (DotEnv, NoDotEnv, LoadEnv with a list, or
+// another working directory) first takes back what this load set.
+func init() {
+	l := loadEnv(nil)
+	envState.Lock()
+	envState.boot = l
+	envState.Unlock()
 }
 
 // envName is the environment that picks the env files: $VUKA_ENV, else
@@ -105,12 +120,13 @@ func IsDev() bool {
 	return os.Getenv("VUKA_ENV") == "development" || os.Getenv("VUKA_DEV") == "1" || os.Getenv(DevDirEnv) != ""
 }
 
-// LoadEnv reads env files into the process environment, as New does: for
-// code that needs their values before New, such as options built from
-// them. No files means the default list (see the README); a key is set only
-// when the environment doesn't have it yet, and the first file listed wins
-// over the later ones. Loading the same files again is a no-op, so New
-// reading them afterwards changes nothing.
+// LoadEnv reads env files into the process environment, as New does. The
+// default list is already read when the program starts, before main runs,
+// so options built from the environment see it without a call; LoadEnv is
+// for another list, read before New. No files means the default list (see
+// the README); a key is set only when the environment doesn't have it yet,
+// and the first file listed wins over the later ones. Loading the same
+// files again is a no-op, so New reading them afterwards changes nothing.
 func LoadEnv(files ...string) error { return loadEnv(files).err }
 
 func loadEnv(files []string) *envLoad {
@@ -121,10 +137,13 @@ func loadEnv(files []string) *envLoad {
 	envState.Lock()
 	defer envState.Unlock()
 	key := cwd + "\x00" + strings.Join(files, "\x00")
+	if b := envState.boot; b != nil && b.key != key {
+		undoEnv(b)
+	}
 	if l, ok := envState.loads[key]; ok {
 		return l
 	}
-	l := &envLoad{dir: envDir(cwd, files)}
+	l := &envLoad{key: key, dir: envDir(cwd, files)}
 	if envState.loads == nil {
 		envState.loads = map[string]*envLoad{}
 	}
@@ -166,6 +185,10 @@ func loadEnv(files []string) *envLoad {
 	for k, v := range vars {
 		if _, set := os.LookupEnv(k); !set {
 			os.Setenv(k, v)
+			if l.set == nil {
+				l.set = map[string]string{}
+			}
+			l.set[k] = v
 		}
 	}
 	l.err = errors.Join(errs...)
@@ -173,6 +196,18 @@ func loadEnv(files []string) *envLoad {
 		log.Printf("web: environment from %s", strings.Join(l.loaded, ", "))
 	}
 	return l
+}
+
+// undoEnv takes back the start's load: the variables it set, unless set
+// to something else since. envState is locked.
+func undoEnv(l *envLoad) {
+	for k, v := range l.set {
+		if cur, ok := os.LookupEnv(k); ok && cur == v {
+			os.Unsetenv(k)
+		}
+	}
+	delete(envState.loads, l.key)
+	envState.boot = nil
 }
 
 // DotEnv replaces the env files New reads (see LoadEnv); the first listed

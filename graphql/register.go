@@ -366,6 +366,10 @@ func (a *assembly) params(ps []Param, attrs []any, what string) ([]*ArgDef, func
 	renames := map[string]string{}
 	for _, x := range attrs {
 		if r, ok := x.(ArgName); ok {
+			if r.Param == "" {
+				a.fail("E0805", "write it before the parameter: func f(@graphql.Arg(\""+r.Name+"\") p T)", "%s: @graphql.Arg(%q) names no parameter", what, r.Name)
+				continue
+			}
 			renames[r.Param] = r.Name
 		}
 	}
@@ -402,6 +406,12 @@ func (a *assembly) params(ps []Param, attrs []any, what string) ([]*ArgDef, func
 			if r, ok := renames[p.Name]; ok {
 				name = r
 				delete(renames, p.Name)
+				if p.Arg != "" {
+					a.fail("E0805", "write the name once, before the parameter", "%s: the parameter %s is named twice, by @graphql.Arg(%q) before it and @graphql.Arg(%q, %q) above", what, p.Name, p.Arg, p.Name, r)
+				}
+			}
+			if p.Arg != "" {
+				name = p.Arg
 			}
 			if strings.HasPrefix(name, "__") {
 				a.fail("E0804", "rename it with @graphql.Arg", "%s: the argument name %q starts with __, which the specification reserves", what, name)
