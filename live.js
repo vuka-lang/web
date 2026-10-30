@@ -89,11 +89,14 @@
         document.documentElement.setAttribute("data-vk-protocol", m.trees ? "2" : "1");
         if (m.trees) {
           trees = tree();
-          try { page(trees.apply(m.trees, true).c0); } catch (err) { fail("live: " + err.message); }
+          seeding = !joinedOnce;
+          try { page(trees.apply(m.trees, true).c0); } catch (err) { fail("live: " + err.message); } finally { seeding = false; }
         } else {
           trees = null;
-          page(m.html);
+          seeding = !joinedOnce;
+          try { page(m.html); } finally { seeding = false; }
         }
+        joinedOnce = true;
         markActive();
         emit("vk:patched", { ids: ["c0"], join: true });
         pushed(m.js);
@@ -163,6 +166,10 @@
   // page puts the page's HTML (a whole document, or the body's content) into
   // the body.
   function page(html) {
+    quiet(() => pageIn(html));
+  }
+
+  function pageIn(html) {
     let next;
     if (/<(html|body)[\s>]/i.test(html)) {
       const doc = new DOMParser().parseFromString(html, "text/html");
@@ -198,6 +205,10 @@
   // apply morphs an instance into its new HTML and returns its element.
   function apply(u) {
     if (u.id === "c0") return page(u.html), document.body;
+    return quiet(() => applyIn(u));
+  }
+
+  function applyIn(u) {
     const el = byID(u.id);
     const next = fragment(u.html).firstElementChild;
     listenIn(u.html);
@@ -472,7 +483,8 @@
   function clientErrors(form) {
     form.querySelectorAll("[data-vk-client]").forEach((p) => dropClient(p));
   }
-  function dropClient(p) {
+  function dropClient(p) { return quiet(() => dropClientIn(p)); }
+  function dropClientIn(p) {
     const at = p.vkAt || {};
     if (at.described) {
       const ids = (at.described.getAttribute("aria-describedby") || "").split(/\s+/).filter((id) => id && id !== p.id);
@@ -483,7 +495,8 @@
     if (at.server) p.replaceWith(at.server);
     else p.remove();
   }
-  function showClient(form, el, rule) {
+  function showClient(form, el, rule) { return quiet(() => showClientIn(form, el, rule)); }
+  function showClientIn(form, el, rule) {
     const site = checkSite(el);
     if (!site.ctl || !site.before.parentNode) return null;
     const id = site.ctl.id || "";
@@ -512,7 +525,8 @@
     if (g && !g.classList.contains("vk-field--invalid")) { g.classList.add("vk-field--invalid"); at.group = g; }
     return { id, text: rule[2] };
   }
-  function precheck(form) {
+  function precheck(form) { return quiet(() => precheckIn(form)); }
+  function precheckIn(form) {
     clientErrors(form);
     const shown = [];
     for (const el of form.querySelectorAll("[data-vk-check]")) {
@@ -623,7 +637,8 @@
   // sent an event (a form cleared once sent), else it keeps what the user
   // is typing.
   function morph(el, next) {
-    if (el.tagName !== next.tagName) return el.replaceWith(document.importNode(next, true));
+    placed.add(el);
+    if (el.tagName !== next.tagName) return el.replaceWith(place(document.importNode(next, true)));
     if (el.hasAttribute("data-vk-ignore") && el.id && el.id === next.id) return;
     // An island host owns its children (the client-mounted component). Update
     // its attributes — a changed data-vk-props drives the island's update() —
@@ -636,11 +651,11 @@
         regen = el;
         try {
           attrs(el, next);
-          return keptText(el, next) || children(el, next);
+          return keptText(el, next) || keptKids(el, next) || children(el, next);
         } finally { regen = was; }
       }
       attrs(el, next);
-      return keptText(el, next) || children(el, next);
+      return keptText(el, next) || keptKids(el, next) || children(el, next);
     }
     const seen = fieldState(el), before = serverValue(el), fresh = regen && regen.contains(el);
     const typing = !fresh && el === document.activeElement && !(sentField && sentField.el === el && sentField.shows === fieldShows(el));
@@ -675,13 +690,26 @@
   }
 
   function children(el, next) {
-    const body = el === document.body;
-    if (body) adoptForeign();
     const skip = (c) => { while (c && foreign.has(c)) c = c.nextSibling; return c; };
-    let cur = skip(el.firstChild);
+    const outs = awayFrom(el), used = new Set();
+    let cur = skip(el.firstChild), last = null;
     for (const n of Array.from(next.childNodes)) {
       let match = null;
       const k = keyOf(n);
+      if (outs.length && n.nodeType === 1) {
+        // an element of this place a script moved elsewhere: patched there
+        const m = outs.find((o) => {
+          const h = homes.get(o);
+          return !used.has(o) && same(o, n) && (k ? keyOf(o) === k :
+            h.prev === last || !(h.prev && h.prev.parentNode === el) && !(cur && same(cur, n)));
+        });
+        if (m) {
+          used.add(m);
+          homes.get(m).prev = last;
+          morph(m, n);
+          continue;
+        }
+      }
       if (k) match = Array.from(el.children).find((c) => !foreign.has(c) && keyOf(c) === k && c.tagName === n.tagName) || null;
       if (!match && cur && same(cur, n)) match = cur;
       if (!match && cur && !k && (match = ahead(cur, n))) {
@@ -696,36 +724,185 @@
         if (n.nodeType === 1) morph(match, n);
         else if (match.nodeValue !== n.nodeValue) match.nodeValue = n.nodeValue;
         cur = skip(match.nextSibling);
-      } else {
-        el.insertBefore(document.importNode(n, true), cur);
+        last = match;
+        continue;
       }
+      const moved = elsewhere(n);
+      if (moved) {
+        home(moved, el, last);
+        used.add(moved);
+        morph(moved, n);
+        continue;
+      }
+      last = place(document.importNode(n, true));
+      el.insertBefore(last, cur);
     }
     while (cur) {
       const gone = cur;
       cur = cur.nextSibling;
       if (!foreign.has(gone)) el.removeChild(gone);
     }
-    if (body && bodyWatch) bodyWatch.takeRecords();
+    for (const o of outs) if (!used.has(o)) { leave(o); o.remove(); } // no longer rendered here
   }
 
-  // foreign holds the body's children the page's scripts put there — a
-  // component's teleported content and its anchors, a date picker's
-  // calendar: a morph of the body leaves them where they are, so the
-  // component that owns them can still take them out.
+  // Browser-owned state. foreign holds the nodes the page's scripts put
+  // where the server's markup doesn't have them: the body's children they
+  // add — a component's teleported content and its anchors, a date picker's
+  // calendar — and elements of the page they moved, a dialog portalled to
+  // the body. A morph leaves them where they are; a moved element is
+  // patched where it is, matched at the place the server renders it (its
+  // home) and never put back, and goes when the server stops rendering it
+  // there. An attribute a script changed (open, aria-expanded, data-open, a
+  // position) keeps the script's value, and an element whose children a
+  // script changed (a select's shown value) keeps them, while the server
+  // renders what it rendered before; once the server renders something
+  // else it wins, as a form field's value does. The runtime's own changes
+  // (quiet) aren't the page's.
   const foreign = new WeakSet();
-  const markForeign = (ms) => ms.forEach((r) => r.addedNodes.forEach((n) => foreign.add(n)));
-  const bodyWatch = typeof MutationObserver === "function" ? new MutationObserver(markForeign) : null;
-  const adoptForeign = () => bodyWatch && markForeign(bodyWatch.takeRecords());
+  const placed = new WeakSet(); // the elements a morph put or kept: the server's
+  const homes = new WeakMap(); // a moved element → { parent, prev }: its place in the server's markup
+  const away = new WeakMap(); // an element → the Set of its children moved elsewhere
+  const owned = new WeakMap(); // an element → Map: attribute → the server's value a script changed
+  const ownedKids = new WeakMap(); // an element → the server's children, as HTML, a script changed
+  const runtimeAttr = /^data-vk-|^aria-busy$/;
+  const watch = typeof MutationObserver === "function" ? new MutationObserver(note) : null;
+  let quieted = 0, seeding = false, joinedOnce = false;
+  const adoptForeign = () => watch && note(watch.takeRecords());
+
+  // quiet runs fn, a change of the runtime's own: what the page's scripts
+  // did before it is noted first, and what it does isn't theirs.
+  function quiet(fn) {
+    if (!watch || quieted) return fn();
+    adoptForeign();
+    quieted++;
+    try { return fn(); } finally { quieted--; watch.takeRecords(); }
+  }
+
+  function place(n) {
+    if (n.nodeType !== 1) return n;
+    placed.add(n);
+    for (const c of n.querySelectorAll("*")) placed.add(c);
+    return n;
+  }
+
+  function home(n, parent, prev) {
+    homes.set(n, { parent, prev });
+    let s = away.get(parent);
+    if (!s) away.set(parent, (s = new Set()));
+    s.add(n);
+    foreign.add(n);
+  }
+
+  function leave(n) {
+    const h = homes.get(n);
+    if (h && away.has(h.parent)) away.get(h.parent).delete(n);
+    homes.delete(n);
+    foreign.delete(n);
+  }
+
+  // awayFrom is el's children a script moved elsewhere, still there.
+  function awayFrom(el) {
+    const s = away.get(el);
+    if (!s) return [];
+    const out = [];
+    for (const o of Array.from(s)) {
+      if (!o.isConnected || o.parentNode === el) leave(o);
+      else out.push(o);
+    }
+    return out;
+  }
+
+  // elsewhere is the element a script moved n to before the runtime saw it
+  // (a dialog open as the page loads): the foreign element where n's first
+  // element with an id is.
+  function elsewhere(n) {
+    if (n.nodeType !== 1) return null;
+    const inner = n.id ? n : n.querySelector("[id]");
+    const d = inner && document.getElementById(inner.id);
+    if (!d) return null;
+    let m = d;
+    for (let x = inner; x !== n && m; x = x.parentNode) m = m.parentElement;
+    return m && m.tagName === n.tagName && foreign.has(m) && !homes.has(m) ? m : null;
+  }
+
+  // note reads what the page's scripts changed: the elements they moved,
+  // the body's children they added, the attributes and children of the
+  // server's elements they changed.
+  function note(records) {
+    const kids = new Map();
+    for (const r of records) {
+      const t = r.target;
+      if (r.type === "attributes") {
+        if (!placed.has(t) || runtimeAttr.test(r.attributeName)) continue;
+        let m = owned.get(t);
+        if (!m) owned.set(t, (m = new Map()));
+        if (!m.has(r.attributeName)) m.set(r.attributeName, r.oldValue);
+        continue;
+      }
+      let script = false;
+      r.removedNodes.forEach((n) => {
+        if (n.nodeType === 1 && placed.has(n) && n.isConnected && n.parentNode !== t) {
+          if (!homes.has(n)) home(n, t, r.previousSibling);
+        } else script = true;
+      });
+      r.addedNodes.forEach((n) => {
+        if (t === document.body) foreign.add(n);
+        if (!homes.has(n)) script = true;
+      });
+      if (script && t !== document.body && placed.has(t) && !ownedKids.has(t)) {
+        if (!kids.has(t)) kids.set(t, []);
+        kids.get(t).push(r);
+      }
+    }
+    kids.forEach((rs, t) => ownedKids.set(t, before(t, rs)));
+  }
+
+  // before is t's children, as HTML, before records rs changed them.
+  function before(t, rs) {
+    const nodes = Array.from(t.childNodes);
+    for (const r of rs.reverse()) {
+      r.addedNodes.forEach((n) => { const i = nodes.indexOf(n); if (i >= 0) nodes.splice(i, 1); });
+      let at = r.previousSibling ? nodes.indexOf(r.previousSibling) + 1 : 0;
+      if (r.previousSibling && !at) at = r.nextSibling && nodes.includes(r.nextSibling) ? nodes.indexOf(r.nextSibling) : nodes.length;
+      nodes.splice(at, 0, ...r.removedNodes);
+    }
+    const tpl = document.createElement("template");
+    nodes.forEach((n) => tpl.content.appendChild(n.cloneNode(true)));
+    return tpl.innerHTML;
+  }
+
+  // keptKids keeps the children a script changed while the server renders
+  // what it rendered before.
+  function keptKids(el, next) {
+    const was = ownedKids.get(el);
+    if (was === undefined) return false;
+    if (next.innerHTML === was) return true;
+    ownedKids.delete(el);
+    return false;
+  }
 
   function attrs(el, next) {
     let waiting = false;
     busy.forEach((b) => { waiting = waiting || b.el === el; });
+    let own = owned.get(el);
+    if (own) own.forEach((server, name) => { if (next.getAttribute(name) !== server) own.delete(name); });
+    // the page's first join: what differs from the server's render, the
+    // same as the page's HTTP one, is the scripts' that ran before this one
+    const seed = (name) => {
+      if (!seeding || runtimeAttr.test(name)) return false;
+      if (!own) owned.set(el, (own = new Map()));
+      own.set(name, next.getAttribute(name));
+      return true;
+    };
     for (const a of Array.from(el.attributes)) {
-      if (!next.hasAttribute(a.name) && !(waiting && a.name === "aria-busy") && !/^data-vk-(pending|failed)$/.test(a.name)) el.removeAttribute(a.name);
+      if (next.hasAttribute(a.name) || own && own.has(a.name) || waiting && a.name === "aria-busy" || /^data-vk-(pending|failed)$/.test(a.name) || seed(a.name)) continue;
+      el.removeAttribute(a.name);
     }
     for (const a of Array.from(next.attributes)) {
-      if (el.getAttribute(a.name) !== a.value) el.setAttribute(a.name, a.value);
+      if (own && own.has(a.name) || el.getAttribute(a.name) === a.value || seed(a.name)) continue;
+      el.setAttribute(a.name, a.value);
     }
+    if (own && !own.size) owned.delete(el);
     keep(el, next);
     if (checkable(el)) el.indeterminate = el.hasAttribute("data-vk-mixed");
   }
@@ -1052,7 +1229,8 @@
   // undo puts back what a prediction changed where the server's value is
   // still the one recorded and the element still shows what it set.
   const fieldValue = (el) => checkable(el) ? el.checked : el.value;
-  function undo(r) {
+  function undo(r) { return quiet(() => undoIn(r)); }
+  function undoIn(r) {
     const el = r.el, t = running.get(el);
     if (t) t.finish();
     if (r.field) {
@@ -1237,7 +1415,7 @@
     const recs = !rec ? [] : cls ? cls.map((c) => ({ el, cls: c, before: has(c), server }))
       : [rec.find((r) => r.el === el && r.name === name) || { el, name, before: val(el, name), server }];
     recs.forEach((r) => { if (!rec.includes(r)) rec.push(r); });
-    change();
+    quiet(change);
     m.get(name).value = val(el, name);
     recs.forEach((r) => { r.after = r.cls ? has(r.cls) : val(el, name); });
   }
@@ -1422,7 +1600,8 @@
   }
   // put shows a binding's value; again (after a morph or at first) puts
   // it back whatever the element shows, and a <vk-show> without a transition.
-  function put(b, again) {
+  function put(b, again) { return quiet(() => putIn(b, again)); }
+  function putIn(b, again) {
     const v = ev(b.x), el = b.el;
     if (!again && equal(v, b.last)) return;
     b.last = v;
@@ -1825,7 +2004,8 @@
     partsIn = null;
   }
   // placePart moves a part into the place its comments hold for it.
-  function placePart(id, html) {
+  function placePart(id, html) { return quiet(() => placePartIn(id, html)); }
+  function placePartIn(id, html) {
     const w = document.createTreeWalker(document.body, 128); // comments
     let s = null, n, x;
     while ((n = w.nextNode())) if (n.data === "vk-part:" + id) { s = n; break; }
@@ -2160,7 +2340,11 @@
   document.addEventListener("vk:patched", watchViewport);
 
   window.vuka = { connect, tree, register, push, emit: emitIsland, states, navigate, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
-  if (bodyWatch) bodyWatch.observe(document.body, { childList: true });
+  if (watch) {
+    // what follows this script in the body, scripts put there before it ran
+    for (let n = script.parentNode === document.body ? script.nextElementSibling : null; n; n = n.nextElementSibling) foreign.add(n);
+    watch.observe(document.body, { childList: true, subtree: true, attributes: true, attributeOldValue: true });
+  }
   leftoverParts();
   const page0 = document.documentElement.outerHTML;
   listenIn(page0);
