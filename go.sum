@@ -28,6 +28,8 @@ github.com/vuka-lang/ui/v2 v2.11.0 h1:uGYhC3F6envQ1BWWbAygwoO5fps49uQvDXHvb28KHe
 github.com/vuka-lang/ui/v2 v2.11.0/go.mod h1:dBwzwDNUpfEA4jzZCI3j9lHfKAYrVpDXh/m69SAW+6c=
 github.com/vuka-lang/ui/v2 v2.12.0 h1:m55EUsoIRYd2FLlZMdlWufSrjp0i1RNYeQ8xvMKPzLU=
 github.com/vuka-lang/ui/v2 v2.12.0/go.mod h1:CtJEtDyw9stkKa43XIyJE/z5d39YqYJFkMAwWvOy9vk=
+github.com/vuka-lang/ui/v2 v2.12.1-0.20261030125627-0404e2ff65f4 h1:UmVo5TUvqnu3SPRgWutZVFckb3P5zDmk0IlzsvaP6JQ=
+github.com/vuka-lang/ui/v2 v2.12.1-0.20261030125627-0404e2ff65f4/go.mod h1:CtJEtDyw9stkKa43XIyJE/z5d39YqYJFkMAwWvOy9vk=
 github.com/vuka-lang/vuka/v2 v2.5.0 h1:Dxf/AMLEfxCEfAcbaOhkAq3zlSu+4IekNu8b69JvMag=
 github.com/vuka-lang/vuka/v2 v2.5.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/vuka-lang/vuka/v2 v2.6.0 h1:1RGQWHFDt5DvXdDzsQ0ZQ5FHYiVYcyOcmDvAHtdiSWU=
