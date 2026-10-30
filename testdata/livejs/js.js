@@ -536,6 +536,37 @@ test("a branch that changes element keeps the field after it, focus and all", ()
   eq([p.$("input") === input, p.$("span").textContent, p.$("p").textContent], [true, "new", "who?"], "an inserted node keeps the ones after it");
 });
 
+test("an error summary appearing or going keeps every field's value in its field", () => {
+  const field = (n, t) => `<div class="vk-field"><label for="f-${n}">${n}</label><input id="f-${n}" name="${n}" type="${t}"></div>`;
+  const fields = field("email", "email") + field("password", "password") + field("confirm", "password");
+  const summary = `<div id="f-summary" class="vk-summary"><ul><li>Passwords differ</li></ul></div>`;
+  const html = (s) => `<form data-vk-id="c1">${s}${fields}<button>Join</button></form>`;
+  const p = joined(html(""));
+  const typed = { email: "ann@shop.test", password: "secret-1", confirm: "secret-2" };
+  for (const n in typed) p.$(`input[name="${n}"]`).value = typed[n];
+  const values = () => Object.keys(typed).map((n) => p.$(`input[name="${n}"]`).value);
+  const inputs = Object.keys(typed).map((n) => p.$(`input[name="${n}"]`));
+  p.server({ type: "patch", updates: [{ id: "c1", html: html(summary) }] });
+  eq([values(), p.doc.querySelectorAll(".vk-field").length, p.$(".vk-summary") !== null], [Object.values(typed), 3, true], "summary in");
+  eq(Object.keys(typed).map((n, i) => p.$(`input[name="${n}"]`) === inputs[i]), [true, true, true], "the same inputs");
+  p.server({ type: "patch", updates: [{ id: "c1", html: html("") }] });
+  eq([values(), p.doc.querySelectorAll(".vk-field").length, p.$(".vk-summary")], [Object.values(typed), 3, null], "summary out");
+});
+
+test("a summary placed by hand among the fields keeps their values in their fields", () => {
+  const field = (n) => `<div class="vk-field"><input id="f-${n}" name="${n}" type="password"></div>`;
+  const summary = `<div id="f-summary" class="vk-summary"><ul><li>Passwords differ</li></ul></div>`;
+  const html = (s) => `<form data-vk-id="c1">${field("current")}${s}${field("password")}${field("confirm")}</form>`;
+  const p = joined(html(""));
+  const names = ["current", "password", "confirm"];
+  names.forEach((n, i) => (p.$(`input[name="${n}"]`).value = "typed-" + i));
+  const values = () => names.map((n) => p.$(`input[name="${n}"]`).value);
+  p.server({ type: "patch", updates: [{ id: "c1", html: html(summary) }] });
+  eq(values(), ["typed-0", "typed-1", "typed-2"], "summary in");
+  p.server({ type: "patch", updates: [{ id: "c1", html: html("") }] });
+  eq(values(), ["typed-0", "typed-1", "typed-2"], "summary out");
+});
+
 test("a focused field keeps what the user types, and takes a value the server changed since what it sent", () => {
   const html = (v, n) => `<form data-vk-id="c1" data-vk-on-submit="c1:0"><input name="text" value="${v}" data-vk-on-input="c1:1"><p>${n}</p></form>`;
   const p = joined(html("", 0));

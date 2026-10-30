@@ -689,6 +689,8 @@
     return null;
   }
 
+  const keysOf = (next) => new Set(Array.from(next.childNodes, keyOf).filter(Boolean));
+
   function children(el, next) {
     // Elements a script added beside the server's (a popup's backdrop and
     // focus guards) stay where it put them, the server's matched past
@@ -698,7 +700,7 @@
     const kept = (c) => foreign.has(c) || beside && added.has(c);
     const skip = (c) => { while (c && kept(c)) c = c.nextSibling; return c; };
     const outs = awayFrom(el), used = new Set();
-    let cur = skip(el.firstChild), last = null;
+    let cur = skip(el.firstChild), last = null, nextKeys = null;
     for (const n of Array.from(next.childNodes)) {
       let match = null;
       const k = keyOf(n);
@@ -716,13 +718,25 @@
           continue;
         }
       }
-      if (k) match = Array.from(el.children).find((c) => !foreign.has(c) && keyOf(c) === k && c.tagName === n.tagName) || null;
-      if (!match && cur && same(cur, n)) match = cur;
-      if (!match && cur && !k && (match = ahead(cur, n, kept))) {
-        while (cur !== match) {
-          const gone = cur;
-          cur = cur.nextSibling;
-          if (!kept(gone)) el.removeChild(gone);
+      // A keyed node matches its key, else a keyed element whose key the
+      // server no longer renders here (its id changed); an unkeyed one an
+      // unkeyed element only. An element appearing or going with an id (a
+      // form's error summary) never pairs with its unkeyed neighbour,
+      // shifting the elements after it — fields keeping what was typed — by one.
+      if (k) {
+        match = Array.from(el.children).find((c) => !foreign.has(c) && keyOf(c) === k && c.tagName === n.tagName) || null;
+        if (!match && cur && same(cur, n) && keyOf(cur) && !(nextKeys || (nextKeys = keysOf(next))).has(keyOf(cur))) match = cur;
+      } else if (cur) {
+        let at = cur; // past the keyed elements here: matched by their keys, or gone
+        while (at && (kept(at) || keyOf(at))) at = at.nextSibling;
+        if (at && same(at, n)) match = at;
+        else if (at && (match = ahead(at, n, kept))) {
+          for (let c = at; c !== match;) {
+            const gone = c;
+            c = c.nextSibling;
+            if (!kept(gone)) el.removeChild(gone);
+          }
+          if (!cur.parentNode) cur = skip(match);
         }
       }
       if (match) {
@@ -2358,8 +2372,9 @@
 
   window.vuka = { connect, tree, register, push, emit: emitIsland, states, navigate, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   if (watch) {
-    // what follows this script in the body, scripts put there before it ran
-    for (let n = script.parentNode === document.body ? script.nextElementSibling : null; n; n = n.nextElementSibling) foreign.add(n);
+    // what follows this script in the body, scripts put there before it
+    // ran: the text nodes too, a teleport's anchors its owner removes by
+    for (let n = script.parentNode === document.body ? script.nextSibling : null; n; n = n.nextSibling) foreign.add(n);
     watch.observe(document.body, { childList: true, subtree: true, attributes: true, attributeOldValue: true });
   }
   const partsToken = script && script.getAttribute ? script.getAttribute("data-vk-parts") : null;
