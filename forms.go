@@ -103,6 +103,12 @@ func formTwins(specs []*routeSpec) []*routeSpec {
 	return out
 }
 
+// optionsRoute reports whether s is a page's GET, whose Options commands
+// call it (optionsCalls): the routes forms post to (formTwins).
+func optionsRoute(s *routeSpec) bool {
+	return s.method == http.MethodGet && !(s.live != nil && s.live.island) && s.island == nil && (s.page || s.live != nil || returnsNode(s.fn))
+}
+
 var (
 	errNoForm       = &Error{Status: http.StatusMethodNotAllowed, Message: "method not allowed"}
 	errStaleForm    = &Error{Status: http.StatusBadRequest, Message: "the form was sent from a page that has changed: reload it and send the form again"}

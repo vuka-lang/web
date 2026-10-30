@@ -705,6 +705,11 @@
       slot.hidden = true;
       old.replaceWith(slot);
     }
+    // the choices of the fields depending on what changed (depends:)
+    for (const [name, list] of Object.entries(rep.choices || {})) {
+      const sel = form.elements.namedItem(name);
+      if (sel instanceof Element && sel.tagName === "SELECT" && Array.isArray(list)) setOptions(sel, list, false);
+    }
     const idem = form.querySelector('input[name="_vk_idem"]');
     if (idem && rep.idem) idem.value = rep.idem;
     if (submit) {
@@ -861,8 +866,8 @@
     attrs(el, next);
     if (el.tagName === "TEXTAREA") {
       if (el.textContent !== next.textContent) el.textContent = next.textContent;
-    } else {
-      children(el, next);
+    } else if (!(el.tagName === "SELECT" && keptKids(el, next))) {
+      children(el, next); // a select keeps the options a script (an Options command) put in it while the server renders the ones it did
     }
     if (typing) restore(el, seen);
     else if (fresh || serverValue(el) !== before) takeServer(el);
@@ -2049,16 +2054,23 @@
     copy_text: (el, a) => copy(String(a.text), el),
     scroll_to: (el, a) => { const t = targets(el, a.to)[0]; if (t) t.scrollIntoView({ block: "nearest", behavior: "smooth" }); },
     set_text: each((t, a) => touch(t, TEXT, () => { t.textContent = a.text == null ? "" : String(a.text); })),
-    set_value: each((t, a) => {
-      if (!isField(t)) return;
-      const r = rec && { el: t, field: true, before: fieldValue(t), server: serverValue(t) };
-      if (r) rec.push(r);
-      if (t.type === "checkbox" || t.type === "radio") t.checked = a.value === "true";
-      else t.value = a.value;
-      if (r) r.after = fieldValue(t);
-      t.dispatchEvent(new Event("input", { bubbles: true }));
-      t.dispatchEvent(new Event("change", { bubbles: true }));
-    }),
+    set_value: (el, a) => {
+      // a read is made once, before any target changes: copying a field into
+      // itself, or into several, reads what it held
+      const v = arg(el, a.value);
+      targets(el, a.to).forEach((t) => {
+        if (!isField(t)) return;
+        const r = rec && { el: t, field: true, before: fieldValue(t), server: serverValue(t) };
+        if (r) rec.push(r);
+        if (t.type === "checkbox" || t.type === "radio") t.checked = v === true || v === "true" || v != null && v !== false && v !== "" && String(v) === t.value;
+        else if (t.tagName === "SELECT" && t.multiple) for (const o of t.options) o.selected = (Array.isArray(v) ? v.map(String) : [String(v == null ? "" : v)]).includes(o.value);
+        else t.value = v == null ? "" : String(v);
+        if (r) r.after = fieldValue(t);
+        t.dispatchEvent(new Event("input", { bubbles: true }));
+        t.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+    },
+    options: (el, a) => loadOptions(el, a),
     state_set: (el, a, e) => { if (!redismiss(a, e)) swrite(a, a.v); },
     state_toggle: (el, a, e) => { if (!redismiss(a, e)) swrite(a, !sread(a)); },
     state_inc: (el, a) => swrite(a, (+sread(a) || 0) + (a.by || 0)),
@@ -2101,6 +2113,84 @@
   let nav = null, here = location.pathname + location.search, saving = 0;
   const newPage = () => Math.random().toString(36).slice(2);
   let pageID = newPage();
+  // Options (ui.JS.Options): a select's options from a method of the page,
+  // asked of the page's own URL with fetch — a GET carrying Vk-Options, the
+  // method's reference the page rendered, and the arguments, read now, in
+  // _vk_args. The page answers {"options": […]}, {"redirect"} (a guard
+  // sending the visitor elsewhere) or {"error"}. A later load of the same
+  // select wins over an earlier one still on its way.
+  function loadOptions(el, a) {
+    const sels = targets(el, a.to).filter((t) => t.tagName === "SELECT");
+    if (!sels.length) return warn("Options targets no select");
+    if (!a.m) return;
+    const root = el && el.closest("[data-vk-id]");
+    const after = (ops) => ops && run(el && el.isConnected ? el : root && root.isConnected ? root : document.body, ops, null, []);
+    const failed = (msg) => {
+      if (a.on_error) return after(a.on_error);
+      console.error("vuka: Options: " + msg);
+      (el && el.isConnected ? el : document).dispatchEvent(new CustomEvent("vk:error", { bubbles: true, detail: { error: msg, fn: "options" } }));
+    };
+    const u = httpURL(location.href);
+    if (!u) return;
+    u.hash = "";
+    u.searchParams.set("_vk_args", JSON.stringify((a.args || []).map((v) => arg(el, v))));
+    const seq = ++optionLoads;
+    for (const t of sels) t.vkOptions = seq;
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const timer = setTimeout(() => ctl && ctl.abort(), a.timeout || 10000);
+    for (const t of sels) t.setAttribute("aria-busy", "true");
+    fetch(u.href, { headers: { "Vk-Options": a.m }, credentials: "same-origin", signal: ctl ? ctl.signal : undefined }).then((res) =>
+      res.json().catch(() => ({})).then((body) => ({ res, body }))).then(({ res, body }) => {
+      clearTimeout(timer);
+      const mine = sels.filter((t) => t.vkOptions === seq);
+      mine.forEach((t) => t.removeAttribute("aria-busy"));
+      if (!mine.length) return;
+      if (body.redirect) return go(String(body.redirect)).catch(() => {});
+      if (!res.ok || !Array.isArray(body.options)) return failed(body.error && body.error.message || "the page answered " + res.status);
+      mine.forEach((t) => setOptions(t, body.options, true));
+      after(a.on_ok);
+    }, (err) => {
+      clearTimeout(timer);
+      const mine = sels.filter((t) => t.vkOptions === seq);
+      mine.forEach((t) => t.removeAttribute("aria-busy"));
+      if (mine.length) failed(err && err.name === "AbortError" ? "no reply in time" : String(err && err.message || err));
+    });
+  }
+  let optionLoads = 0;
+
+  // setOptions puts list — {value, label}, or {group, options} for an
+  // <optgroup> — in sel: a leading option whose value is "" (a placeholder)
+  // stays, the value stays when it is still offered, else it is cleared,
+  // and sel fires change. Unless always, a list sel already shows changes
+  // nothing.
+  function setOptions(sel, list, always) {
+    const lead = sel.firstElementChild;
+    const keep = lead && lead.tagName === "OPTION" && lead.value === "" ? lead : null;
+    const shown = (nodes) => JSON.stringify(nodes.map((n) => n.tagName === "OPTGROUP" ? [n.label, Array.from(n.children, (o) => [o.value, o.text])] : [n.value, n.text]));
+    const want = JSON.stringify(list.map((o) => o.group !== undefined ? [String(o.group), (o.options || []).map((x) => [String(x.value || ""), String(x.label || "")])] : [String(o.value || ""), String(o.label || "")]));
+    if (!always && shown(Array.from(sel.children).filter((n) => n !== keep)) === want) return false;
+    const before = Array.from(sel.selectedOptions, (o) => o.value);
+    const option = (o) => {
+      const opt = document.createElement("option");
+      opt.value = String(o.value || "");
+      opt.textContent = String(o.label || "");
+      return opt;
+    };
+    for (const n of Array.from(sel.children)) if (n !== keep) n.remove();
+    for (const o of list) {
+      if (o.group === undefined) { sel.append(option(o)); continue; }
+      const g = document.createElement("optgroup");
+      g.label = String(o.group);
+      for (const x of o.options || []) g.append(option(x));
+      sel.append(g);
+    }
+    let any = false;
+    for (const o of sel.options) if ((o.selected = before.includes(o.value) && (o.value !== "" || o === keep))) any = true;
+    if (!any && !sel.multiple) sel.selectedIndex = keep ? 0 : -1;
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  }
+
   // httpURL is href resolved against the page, when it is http or https.
   function httpURL(href) {
     let u;

@@ -59,6 +59,9 @@ func (a *App) newRequest(w http.ResponseWriter, r *http.Request, s *routeSpec) *
 	rq.ctx = ui.WithInjector(context.WithValue(r.Context(), ctxKey{}, rq), injector{a})
 	rq.ctx = ui.WithPageURL(rq.ctx, r.URL, a.pathParam(r))
 	rq.ctx = ui.WithFormHost(rq.ctx, formHost{a})
+	if s != nil {
+		rq.ctx = ui.WithOptionsScope(rq.ctx, s.path) // its Options commands are signed for the route
+	}
 	if len(forms.Locales(rq.ctx)) == 0 {
 		if h := r.Header.Get("Accept-Language"); h != "" {
 			rq.ctx = forms.WithLocale(rq.ctx, forms.ParseAcceptLanguage(h)...)
