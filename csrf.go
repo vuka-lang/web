@@ -17,8 +17,10 @@ import (
 // ("https://admin.example.com"). A request carrying an Authorization:
 // Bearer header is let through: a browser never adds one by itself, so it
 // can't be forged by another site. Requests that say nothing of where they
-// come from (curl, servers) are let through too. Live connections check
-// their origin themselves (LiveOrigins).
+// come from (curl, servers) are let through too, and so are those of a
+// TokenOnly route, whose cookies are taken off, and those from an origin a
+// CORS rule with Credentials lists. Live connections check their origin
+// themselves (LiveOrigins).
 func CSRF(trusted ...string) Option {
 	return OptionFunc(func(a *App) {
 		a.mutable("CSRF")
@@ -42,7 +44,7 @@ func (a *App) csrfProtect(next http.Handler) http.Handler {
 	}))
 	guarded := cop.Handler(next)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if bearer(r) {
+		if bearer(r) || crossOriginExempt(r) {
 			next.ServeHTTP(w, r)
 			return
 		}

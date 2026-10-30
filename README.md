@@ -102,6 +102,7 @@ the same function still wrap it — `@audited` below runs on every call.
 | `web.NoToolbar()` | no development toolbar (below) |
 | `web.NoCrons()`, `web.CronClock(c)` | don't schedule the crons; run them by another clock (below) |
 | `web.CSRF(trusted…)` | refuse cross-origin form posts and the like (below) |
+| `web.CORS(prefix, cfg)`, `web.TokenOnly(prefix)` | let other origins call an API; make it bearer-token only, cookies ignored and the cross-origin check off (below) |
 | `web.WrapRoutes`, `ParamFrom`, `LiveCheck`, `GuardLiveEvents` | hooks for libraries guarding routes and live events (below) |
 | `web.Frontend(fsys, root, opts…)` | a single-page app built by Vite (or anything else) served from the binary (below) |
 | `web.ExactPaths()` | no trailing-slash redirect (above) |
@@ -152,9 +153,11 @@ a dependency, for tests and `main`.
 
 ## .env files
 
-`web.New()` first reads env files into the process environment, so every
-constructor, `Start` method and option sees their values through `os.Getenv`
-or `web.Env`. By `VUKA_ENV`, the first file listed winning:
+Env files are read into the process environment when the program starts, as
+the web package is initialised and before `main` runs, so every option
+passed to `web.New`, constructor and `Start` method sees their values
+through `os.Getenv` or `web.Env`. By `VUKA_ENV`, the first file listed
+winning:
 
 | `VUKA_ENV` | files |
 |---|---|
@@ -177,8 +180,12 @@ the nearest parent up to the module root (the directory with `go.mod`), so
 working directory or above it — a deployed binary — only the working
 directory is read. Missing files are fine.
 `web.DotEnv("a.env", "b.env")` replaces the list (first wins), `web.NoDotEnv()`
-reads none, and `web.LoadEnv(files…)` loads them earlier — for options built
-from the environment; New reading the same files afterwards changes nothing.
+reads none, and `web.LoadEnv(files…)` loads them before New; each takes
+back what the start's reading of the defaults set before reading its own
+files. Reading the same files again changes nothing, so an app calling
+`web.LoadEnv()` first is unaffected. A package reading the environment at
+its own initialisation without importing web may run before the files are
+read: read it in a function.
 With `VUKA_ENV=development` the app logs which files it read.
 
 Syntax:
@@ -1348,6 +1355,22 @@ PUT, PATCH or DELETE a browser sends from another site's page, read from
 `Sec-Fetch-Site` and `Origin` by net/http's `CrossOriginProtection`: no
 token in forms. Requests with `Authorization: Bearer` pass, as browsers
 never add one. Live connections check their origin themselves.
+
+**CORS and token APIs.** `web.CORS("/api/", web.CORSConfig{Origins:
+[]string{"https://shop.example"}})` answers preflights under the prefix
+(204, before routing, middleware and the cross-origin check) and sets
+`Access-Control-Allow-Origin` (exact origins, or `web.AnyOrigin`) and
+`Vary: Origin` on its answers; `Methods` (GET, HEAD, POST), `Headers`
+(Content-Type, plus Authorization under `TokenOnly`; `web.AnyHeader` echoes
+what a preflight asks, as a literal `*` doesn't cover Authorization),
+`ExposeHeaders`, `MaxAge` (5m) and `Credentials` (the origins may send
+cookies, and pass the cross-origin check under the prefix). Credentials
+with `AnyOrigin`, an origin with a path, a wildcard or `null` fail Build.
+`web.TokenOnly("/api/")` takes the `Cookie` header off every request under
+the prefix before any middleware and drops `Set-Cookie` from its answers,
+and with that turns the cross-origin check off there: a bearer token (or
+none, for a sign-in) is all that signs a request in. The check is never
+off for a request that keeps its cookies.
 
 **Hooks for libraries.** What `auth` builds on, open to any library:
 

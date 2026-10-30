@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/vuka-lang/vuka/v2"
 	"github.com/vuka-lang/web/v2/graphql/language"
 )
 
@@ -44,6 +45,9 @@ type Operation struct {
 // its type), or a dependency the app provides (Dep its type).
 type Param struct {
 	Name string // the Go parameter's name: the argument's default name
+	// Arg is the argument's name as @graphql.Arg before the parameter
+	// writes it, which Naming doesn't change; "" for the default.
+	Arg  string
 	Type TypeDef
 	Dep  reflect.Type
 }
@@ -310,6 +314,66 @@ func ListOf[E any](of TypeDef) *List {
 			xs := make([]E, len(items))
 			for i, x := range items {
 				xs[i] = As[E](x)
+			}
+			return xs, nil
+		},
+	}
+}
+
+// ListOfPtr is a list of nullable E, a Go slice []*E: a nil element is a
+// null item, and a null item given is a nil element.
+func ListOfPtr[E any](of TypeDef) *List {
+	return &List{
+		Of: of,
+		Items: func(v any) (int, func(int) any, bool) {
+			xs, ok := v.([]*E)
+			return len(xs), func(i int) any { return Deref(xs[i]) }, ok
+		},
+		Build: func(items []any) (any, error) {
+			xs := make([]*E, len(items))
+			for i, x := range items {
+				xs[i] = Ptr[E](x)
+			}
+			return xs, nil
+		},
+	}
+}
+
+// OptionValue is o's value, nil for None: a field or a result of type
+// vuka.Option[T].
+func OptionValue[T any](o vuka.Option[T]) any {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return nil
+}
+
+// GetOption is parameter i of c, an argument of type vuka.Option[T]: None
+// when the request gave none or null.
+func GetOption[T any](c *Call, i int) vuka.Option[T] { return AsOption[T](c.args[i]) }
+
+// AsOption is v, a coerced input value, as a vuka.Option[T]: None for nil,
+// Some of v as a T otherwise.
+func AsOption[T any](v any) vuka.Option[T] {
+	if v == nil {
+		return vuka.None[T]()
+	}
+	return vuka.Some(As[T](v))
+}
+
+// ListOfOption is a list of nullable E, a Go slice []vuka.Option[E]: a
+// None element is a null item, and a null item given is None.
+func ListOfOption[E any](of TypeDef) *List {
+	return &List{
+		Of: of,
+		Items: func(v any) (int, func(int) any, bool) {
+			xs, ok := v.([]vuka.Option[E])
+			return len(xs), func(i int) any { return OptionValue(xs[i]) }, ok
+		},
+		Build: func(items []any) (any, error) {
+			xs := make([]vuka.Option[E], len(items))
+			for i, x := range items {
+				xs[i] = AsOption[E](x)
 			}
 			return xs, nil
 		},

@@ -55,6 +55,9 @@ type App struct {
 	csrfBypass     []string     // CSRFBypass's patterns
 	formStore      ui.FormStore // FormStore's; nil: ui's, in memory
 	sessionCookies []string     // SessionCookies'
+	cors           []*corsRule  // CORS's
+	tokenOnly      []string     // TokenOnly's prefixes
+	tokenBases     []string     // and compiled
 
 	envFiles []string // nil: the defaults
 	env      *envLoad
@@ -452,6 +455,7 @@ func (a *App) build() (http.Handler, error) {
 			errs = append(errs, err)
 		}
 	}
+	errs = append(errs, a.compileCrossOrigin()...)
 	errs = append(errs, a.compileCrons()...)
 	errs = append(errs, a.compileVars()...)
 	for _, f := range a.checks {
@@ -518,7 +522,7 @@ func (a *App) build() (http.Handler, error) {
 		h = a.tb.wrap(h)
 	}
 	h = a.compress(h) // outside the toolbar, which reads pages as written
-	return a.recoverHTTP(a.edge(h)), nil
+	return a.recoverHTTP(a.edge(a.crossOrigin(h))), nil
 }
 
 // wrapRoute wraps a compiled route in the middleware WrapRoutes functions

@@ -333,6 +333,17 @@
   }
   const states = () => window.vuka && window.vuka.states;
   function stateRef(v) { return v.x !== undefined ? v.x : v; }
+  // stateValue is a state prop's value: the runtime's, or before the live
+  // runtime runs (an island's module can load first) the state's initial
+  // value at its path, what the server rendered — a derived state's is
+  // undefined until then. statesReady reads them again when it starts.
+  function stateValue(v) {
+    if (states()) return clone(states().read(stateRef(v)));
+    if (v.x !== undefined) return undefined;
+    let x = v.i;
+    for (const k of v.p || []) x = x == null ? undefined : x[k];
+    return clone(x);
+  }
 
   // islandCall is a function prop: it pushes the host's handler for it
   // (data-vk-on-<e>) with its first argument, or runs its commands
@@ -362,7 +373,7 @@
       const v = json[k];
       switch (tag(v)) {
         case "fn": props[k] = islandCall(inst, v.e); break;
-        case "state": refs[k] = v; props[k] = states() ? clone(states().read(stateRef(v))) : v.i; break;
+        case "state": refs[k] = v; props[k] = stateValue(v); break;
         default: props[k] = revive(v);
       }
     }
@@ -397,6 +408,26 @@
         inst.pending = true;
         Promise.resolve().then(() => { inst.pending = false; pushProps(inst); });
       }, inst.el));
+    }
+  }
+
+  // statesReady runs as the live runtime starts: what the islands mounted
+  // before it set goes to the states first, then each island reads its
+  // state props again and follows them.
+  function statesReady() {
+    const insts = [...islandInsts.values()].filter((inst) => inst.state === "mounted");
+    for (const inst of insts) {
+      for (const k in inst.early || {}) if (inst.refs[k]) states().write(inst.refs[k], inst.early[k]);
+      inst.early = null;
+    }
+    for (const inst of insts) {
+      let changed = false;
+      for (const k in inst.refs) {
+        const v = stateValue(inst.refs[k]);
+        if (JSON.stringify(v) !== JSON.stringify(inst.props[k])) { inst.props[k] = v; changed = true; }
+      }
+      watchStates(inst);
+      if (changed) pushProps(inst);
     }
   }
 
@@ -667,9 +698,10 @@
       // set writes a state prop back: the state, and what reads it.
       ctx.set = (name, v) => {
         const r = inst.refs[name];
-        if (!r || r.x !== undefined || !states()) return;
+        if (!r || r.x !== undefined) return;
         inst.props[name] = clone(v);
-        states().write(r, clone(v));
+        if (states()) states().write(r, clone(v));
+        else (inst.early || (inst.early = {}))[name] = clone(v);
       };
       ctx.bound = Object.keys(refs).filter((k) => refs[k].x === undefined);
       ctx.vuka = viewer(inst.el);
@@ -761,7 +793,7 @@
   if (m.e && typeof EventSource === "function") {
     new EventSource(m.e).onmessage = (e) => { try { update(JSON.parse(e.data)); } catch (_) {} };
   }
-  window.vukaComponents = { update, method, instances: () => [...insts.values()] };
+  window.vukaComponents = { update, method, statesReady, instances: () => [...insts.values()] };
 
   const start = () => {
     if (m.g) {
