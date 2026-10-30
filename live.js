@@ -2385,6 +2385,8 @@
   bindIn(document.body, page0);
   markActive();
   watchViewport();
+  // the islands mounted before this ran read their states now
+  if (window.vukaComponents && window.vukaComponents.statesReady) window.vukaComponents.statesReady();
   // A link moves over the connection, or in place over HTTP on a page that
   // isn't live; data-vk-replace (VukaLink's replace) also takes the place of
   // the current history entry when it loads. data-vk-reload leaves the
