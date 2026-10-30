@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"os/exec"
 	"slices"
 	"strings"
@@ -29,7 +28,6 @@ func TestLiveJSCommands(t *testing.T) {
 		testenv.Needs(t, "no node")
 	}
 	cmd := exec.Command(node, "testdata/livejs/js.js", "live.js")
-	cmd.Env = append(os.Environ(), "VK_PARTS_SCRIPT="+ui.PartsScript) // what moves a page's streamed parts into place
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s", out)

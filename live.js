@@ -1946,63 +1946,80 @@
     return p;
   }
 
-  // Parts (ui.Part): a page's deferred parts follow it in its response,
-  // after the parts script (<script data-vk-parts>): each a <template
-  // data-vk-part="id"> and the call moving it into place, between the
-  // comments <!--vk-part:id--> and <!--/vk-part:id--> that stand for it
-  // until then. A navigation's reply is cut at that script: the page is
-  // patched in as soon as it has arrived, each part as it follows.
-  const partsMark = "<script data-vk-parts>";
-  let partsIn = null; // the parts of the page navigated to, still arriving
-  function reply(res) {
-    const cut = (text) => {
-      const i = text.indexOf(partsMark);
-      return i < 0 ? { res, html: text } : { res, html: text.slice(0, i), parts: partReader(null, null, text.slice(i)) };
-    };
-    if (!res.body || !res.body.getReader || typeof TextDecoder !== "function") return res.text().then(cut);
-    const rd = res.body.getReader(), dec = new TextDecoder();
-    let buf = "";
-    const step = () => rd.read().then(({ done, value }) => {
-      if (value) buf += dec.decode(value, { stream: true });
-      const i = buf.indexOf(partsMark);
-      if (i >= 0) return { res, html: buf.slice(0, i), parts: partReader(rd, dec, buf.slice(i)) };
-      if (done) return { res, html: buf + dec.decode() };
-      return step();
-    });
-    return step();
+  function reply(res) { return res.text().then((html) => ({ res, html })); }
+
+  // Parts (ui.Part, ui.Suspense): a page that isn't live is sent whole,
+  // each deferred part's fallback between the comments <!--vk-part:id-->
+  // and <!--/vk-part:id-->. Once it has loaded (its load event), or been
+  // navigated to over HTTP, the runtime asks for its parts — a GET of its URL with Vk-Parts
+  // naming them, the route running again — and moves each in as it
+  // arrives: a <template data-vk-part="id"> ended by <!--vk-parts:id-->.
+  // The page's token (the script's data-vk-parts, a navigation reply's
+  // Vk-Parts-Token) names the parts its own request started, parked on
+  // the server; without it, or once the server has dropped them, the
+  // server renders the page again for them.
+  // A reply that isn't the parts (an error page, a redirect to sign in), a
+  // network failure or a part the reply lacks shows the part failed.
+  // Leaving the page stops them.
+  let partsIn = null; // the page's parts, still arriving
+  const partFailed = '<span role="alert">This part couldn&#39;t load.</span>';
+  function partIDs() {
+    const ids = [];
+    if (!document.body) return ids;
+    const w = document.createTreeWalker(document.body, 128); // comments
+    let n;
+    while ((n = w.nextNode())) if (n.data.startsWith("vk-part:")) ids.push(n.data.slice(8));
+    return ids;
   }
-  // partReader reads a reply's parts as they arrive: to(fn) has each, those
-  // read already first, go to fn(id, html); stop ends the reading.
-  function partReader(rd, dec, buf) {
-    const r = { q: [], fn: null, stopped: false };
+  function loadParts(tok) {
+    stopParts();
+    const ids = partIDs();
+    if (!ids.length || typeof fetch !== "function") return;
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    const r = partsIn = { ctl, rd: null, left: new Set(ids) };
+    const place = (id, html) => { if (partsIn !== r) return; r.left.delete(id); placePart(id, html); };
+    const failRest = () => {
+      if (partsIn !== r) return;
+      for (const id of Array.from(r.left)) place(id, partFailed);
+      partsIn = null;
+    };
     const open = '<template data-vk-part="';
+    let buf = "";
     const drain = () => {
       for (;;) {
         const i = buf.indexOf(open), j = i < 0 ? -1 : buf.indexOf('">', i);
-        if (j < 0) break;
-        const id = buf.slice(i + open.length, j), end = '</template><script>__vkP("' + id + '")</script>', k = buf.indexOf(end, j);
-        if (k < 0) break;
-        r.q.push([id, buf.slice(j + 2, k)]);
+        if (j < 0) return;
+        const id = buf.slice(i + open.length, j), end = "</template><!--vk-parts:" + id + "-->", k = buf.indexOf(end, j);
+        if (k < 0) return;
+        const html = buf.slice(j + 2, k);
         buf = buf.slice(k + end.length);
+        place(id, html);
       }
-      while (r.fn && r.q.length && !r.stopped) r.fn(...r.q.shift());
     };
-    const step = () => rd.read().then(({ done, value }) => {
-      if (r.stopped) return;
-      if (value) buf += dec.decode(value, { stream: true });
-      drain();
-      if (!done) step();
-    }, () => {});
-    drain();
-    if (rd) step();
-    r.to = (fn) => { r.fn = fn; drain(); };
-    r.stop = () => { r.stopped = true; if (rd) rd.cancel().catch(() => {}); };
-    return r;
+    fetch(location.pathname + location.search, { headers: tok ? { "Vk-Parts": ids.join(" "), "Vk-Parts-Token": tok } : { "Vk-Parts": ids.join(" ") }, credentials: "same-origin", cache: "no-store", signal: ctl ? ctl.signal : undefined }).then((res) => {
+      if (partsIn !== r) return;
+      if (res.status !== 200 || !res.headers.get("Vk-Parts")) return failRest();
+      if (!res.body || !res.body.getReader || typeof TextDecoder !== "function") return res.text().then((t) => { buf = t; drain(); failRest(); });
+      const rd = r.rd = res.body.getReader(), dec = new TextDecoder();
+      const step = () => rd.read().then(({ done, value }) => {
+        if (partsIn !== r) return;
+        if (value) buf += dec.decode(value, { stream: true });
+        if (done) buf += dec.decode();
+        drain();
+        return done ? failRest() : step();
+      });
+      return step();
+    }).catch((err) => { if (!(err && err.name === "AbortError")) failRest(); });
   }
   function stopParts() {
-    if (partsIn) partsIn.stop();
+    const r = partsIn;
     partsIn = null;
+    if (!r) return;
+    if (r.ctl) r.ctl.abort();
+    if (r.rd) r.rd.cancel().catch(() => {});
   }
+  window.addEventListener("pagehide", stopParts);
+  window.addEventListener("pageshow", (e) => { if (e.persisted) loadParts(null); }); // the token was spent, or has expired
   // placePart moves a part into the place its comments hold for it.
   function placePart(id, html) { return quiet(() => placePartIn(id, html)); }
   function placePartIn(id, html) {
@@ -2019,16 +2036,6 @@
     bindIn(p, html);
     emit("vk:part", { id });
   }
-  // leftoverParts places the parts a page loaded with but didn't place
-  // itself: a Content-Security-Policy refusing its inline scripts.
-  function leftoverParts() {
-    for (const t of Array.from(document.querySelectorAll("template[data-vk-part]"))) {
-      const id = t.getAttribute("data-vk-part"), html = t.innerHTML;
-      t.remove();
-      placePart(id, html);
-    }
-  }
-
   function fetchGo(u, at, patch, pop, replace) {
     const again = !!(pop || replace);
     if (!pop) save();
@@ -2067,7 +2074,7 @@
     toolbar = h("X-Vuka-Toolbar") || toolbar;
     try { page(r.html); } catch (err) { console.error("vuka: live: " + err.message); return fail(n.href, "patch", err.message); }
     arrived(n, {});
-    if (r.parts) (partsIn = r.parts).to(placePart);
+    loadParts(h("Vk-Parts-Token"));
     emit("vk:patched", { ids: ["c0"] });
     const tok = h("Vk-Live");
     if (tok) { // a live page: its session waits, parked, for this join
@@ -2345,7 +2352,9 @@
     for (let n = script.parentNode === document.body ? script.nextElementSibling : null; n; n = n.nextElementSibling) foreign.add(n);
     watch.observe(document.body, { childList: true, subtree: true, attributes: true, attributeOldValue: true });
   }
-  leftoverParts();
+  const partsToken = script && script.getAttribute ? script.getAttribute("data-vk-parts") : null;
+  if (document.readyState === "complete") loadParts(partsToken);
+  else window.addEventListener("load", () => { if (!partsIn) loadParts(partsToken); }, { once: true });
   const page0 = document.documentElement.outerHTML;
   listenIn(page0);
   bindIn(document.body, page0);

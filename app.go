@@ -70,7 +70,9 @@ type App struct {
 	hub         *hub
 	adoptWindow time.Duration                  // LiveAdopt: 0 or less mounts fresh on every join
 	liveIDs     []func(context.Context) string // LiveIdentity
-	parked      parkStore                      // live sessions between a render and its join
+	parked      parkStore[*parkedPage]         // live sessions between a render and its join
+	partsPark   parkStore[*parkedParts]        // pages' deferred parts between the page and the runtime's request for them
+	partsWindow time.Duration                  // PartsWindow
 
 	cronSpecs []*cronSpec
 	cronClock cron.Clock
@@ -121,7 +123,7 @@ type App struct {
 // the env files into the process environment (see LoadEnv), so constructors
 // and Start methods see their values through os.Getenv.
 func New(opts ...Option) *App {
-	a := &App{c: newContainer(), reg: snapshot(), liveTTL: 12 * time.Hour, liveMax: 2, hub: newHub(), adoptWindow: defaultLiveAdoptWindow, csrf: http.NewCrossOriginProtection()}
+	a := &App{c: newContainer(), reg: snapshot(), liveTTL: 12 * time.Hour, liveMax: 2, hub: newHub(), adoptWindow: defaultLiveAdoptWindow, partsWindow: defaultPartsWindow, csrf: http.NewCrossOriginProtection()}
 	for _, o := range opts {
 		o.apply(a)
 	}
@@ -503,6 +505,7 @@ func (a *App) build() (http.Handler, error) {
 		}
 		h = newSlashes(h, served, targets)
 	}
+	h = a.pickParts(h) // inside the app's middleware, which says who the visitor is
 	h = a.csrfProtect(h)
 	for i := len(a.mw) - 1; i >= 0; i-- {
 		h = a.layer(a.mw[i], h)
@@ -629,6 +632,7 @@ func (a *App) Stop(ctx context.Context) error {
 	}
 	a.hub.closeAll()
 	a.parked.closeAll()
+	a.partsPark.closeAll()
 	a.css.close()
 	a.assets.close()
 	if a.tb != nil {
@@ -658,6 +662,7 @@ func (a *App) Run(addr string) error {
 	srv := &http.Server{Handler: a.handler, ReadHeaderTimeout: 10 * time.Second}
 	srv.RegisterOnShutdown(a.hub.closeAll)
 	srv.RegisterOnShutdown(a.parked.closeAll)
+	srv.RegisterOnShutdown(a.partsPark.closeAll)
 	log.Printf("web: listening on %s", browseURL(ln.Addr()))
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()

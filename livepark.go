@@ -67,30 +67,37 @@ func (a *App) liveWho(ctx context.Context) string {
 // parkedPage is a live page's session between its GET and its join: the
 // mounted instances, and what must match for a join to adopt them.
 type parkedPage struct {
-	s     *live.Session
-	uri   string // the page the render served, as its token names it
-	who   string // the identity that rendered it (liveWho)
-	timer *time.Timer
+	s   *live.Session
+	uri string // the page the render served, as its token names it
+	who string // the identity that rendered it (liveWho)
 }
 
-func (p *parkedPage) close() {
-	if p.timer != nil {
-		p.timer.Stop()
-	}
-	p.s.Close()
-}
+func (p *parkedPage) close() { p.s.Close() }
 
-// parkStore holds each parked session under its page's join token until the
-// join takes it (at most once), the window runs out, or the app stops.
-type parkStore struct {
+// parkStore holds each parked value (a live page's session, a page's
+// parts) under its token until a request takes it (at most once), the
+// window runs out, or the app stops.
+type parkStore[V interface{ close() }] struct {
 	mu     sync.Mutex
-	m      map[string]*parkedPage
+	m      map[string]*parkEntry[V]
 	order  []string // tokens oldest first, for the cap
+	max    int      // the cap: maxParkedPages when 0
 	closed bool
 }
 
+type parkEntry[V any] struct {
+	v     V
+	timer *time.Timer
+}
+
+func (e *parkEntry[V]) stop() {
+	if e.timer != nil {
+		e.timer.Stop()
+	}
+}
+
 // park keeps p for window under tok, evicting the oldest page beyond the cap.
-func (ps *parkStore) park(tok string, p *parkedPage, window time.Duration) {
+func (ps *parkStore[V]) park(tok string, p V, window time.Duration) {
 	ps.mu.Lock()
 	if ps.closed {
 		ps.mu.Unlock()
@@ -98,10 +105,14 @@ func (ps *parkStore) park(tok string, p *parkedPage, window time.Duration) {
 		return
 	}
 	if ps.m == nil {
-		ps.m = map[string]*parkedPage{}
+		ps.m = map[string]*parkEntry[V]{}
 	}
-	var evicted []*parkedPage
-	for len(ps.order) >= maxParkedPages {
+	limit := ps.max
+	if limit <= 0 {
+		limit = maxParkedPages
+	}
+	var evicted []*parkEntry[V]
+	for len(ps.order) >= limit {
 		old := ps.order[0]
 		ps.order = ps.order[1:]
 		if e := ps.m[old]; e != nil {
@@ -113,33 +124,33 @@ func (ps *parkStore) park(tok string, p *parkedPage, window time.Duration) {
 		evicted = append(evicted, e)
 		ps.remove(tok)
 	}
-	ps.m[tok] = p
+	e := &parkEntry[V]{v: p}
+	ps.m[tok] = e
 	ps.order = append(ps.order, tok)
-	p.timer = time.AfterFunc(window, func() { ps.drop(tok) })
+	e.timer = time.AfterFunc(window, func() { ps.drop(tok) })
 	ps.mu.Unlock()
 	for _, e := range evicted {
-		e.close()
+		e.stop()
+		e.v.close()
 	}
 }
 
 // take removes and returns the page parked under tok, nil when none is: a
 // token adopts at most once.
-func (ps *parkStore) take(tok string) *parkedPage {
+func (ps *parkStore[V]) take(tok string) (v V) {
 	ps.mu.Lock()
 	defer ps.mu.Unlock()
-	p := ps.m[tok]
-	if p == nil {
-		return nil
+	e := ps.m[tok]
+	if e == nil {
+		return v
 	}
 	ps.remove(tok)
-	if p.timer != nil {
-		p.timer.Stop()
-	}
-	return p
+	e.stop()
+	return e.v
 }
 
 // remove drops tok from the map and the order; the caller holds the mutex.
-func (ps *parkStore) remove(tok string) {
+func (ps *parkStore[V]) remove(tok string) {
 	delete(ps.m, tok)
 	for i, t := range ps.order {
 		if t == tok {
@@ -150,23 +161,30 @@ func (ps *parkStore) remove(tok string) {
 }
 
 // drop closes the page parked under tok: its window ran out unadopted.
-func (ps *parkStore) drop(tok string) {
-	if p := ps.take(tok); p != nil {
-		p.close()
+func (ps *parkStore[V]) drop(tok string) {
+	ps.mu.Lock()
+	e := ps.m[tok]
+	if e != nil {
+		ps.remove(tok)
+	}
+	ps.mu.Unlock()
+	if e != nil {
+		e.v.close()
 	}
 }
 
 // closeAll closes every parked session and parks no more: the app stops.
-func (ps *parkStore) closeAll() {
+func (ps *parkStore[V]) closeAll() {
 	ps.mu.Lock()
 	ps.closed = true
-	pages := make([]*parkedPage, 0, len(ps.m))
+	pages := make([]*parkEntry[V], 0, len(ps.m))
 	for _, p := range ps.m {
 		pages = append(pages, p)
 	}
 	ps.m, ps.order = nil, nil
 	ps.mu.Unlock()
 	for _, p := range pages {
-		p.close()
+		p.stop()
+		p.v.close()
 	}
 }
