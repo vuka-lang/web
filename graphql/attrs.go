@@ -54,12 +54,21 @@ type Value string
 // @graphql.Deprecated("use displayName").
 type Deprecated string
 
-// ArgName names an argument: the attribute Arg gives.
+// ArgName names an argument: the attribute Arg gives on a function or a
+// method.
 type ArgName struct{ Param, Name string }
 
-// Arg names the argument a function's or method's parameter is, in place of
-// the parameter's name: @graphql.Arg("after", "cursor").
-func Arg(param, name string) vuka.Bundle { return vuka.Compose(ArgName{param, name}) }
+// Arg names the argument a parameter is, in place of the parameter's name
+// (which Naming would apply to): written before the parameter, it takes the
+// name, func Users(ctx context.Context, @graphql.Arg("cursor") after *string).
+// Above a function or method, the older form, it takes the parameter's name
+// first: @graphql.Arg("after", "cursor").
+func Arg(name string, more ...string) vuka.Bundle {
+	if len(more) == 0 {
+		return vuka.Compose(ArgName{Name: name})
+	}
+	return vuka.Compose(ArgName{name, more[0]})
+}
 
 // IDParams makes parameters IDs: the attribute AsID gives.
 type IDParams []string
@@ -67,24 +76,30 @@ type IDParams []string
 // IntParams makes parameters Ints: the attribute AsInt gives.
 type IntParams []string
 
-// AsID makes the named parameters of a function or method arguments of type
-// ID — strings or integers a client sends back as it received them, "7" (or
-// 7). A parameter of an integer or a string type named id, or ending in ID
-// or Id (ownerID), is one already; AsID is for others: @graphql.AsID("owner").
-// An input struct's field takes a graphql:",id" tag instead.
+// AsID makes a parameter an argument of type ID — a string or an integer a
+// client sends back as it received it, "7" (or 7) — written before it:
+// func Owned(@graphql.AsID owner int64). A parameter of an integer or a
+// string type named id, or ending in ID or Id (ownerID), is one already.
+// Above a function or method, the older form, it names the parameters:
+// @graphql.AsID("owner"). An input struct's field takes a graphql:",id" tag
+// instead.
 func AsID(params ...string) vuka.Bundle { return vuka.Compose(IDParams(params)) }
 
-// AsInt keeps the named integer parameters Int though their names end in ID
-// or Id: @graphql.AsInt("lastSeenID"). An input struct's or an object's
-// field takes a graphql:",int" tag instead.
+// AsInt keeps an integer parameter an Int though its name ends in ID or Id,
+// written before it: func Visits(@graphql.AsInt lastSeenID int). Above a
+// function or method, the older form, it names the parameters:
+// @graphql.AsInt("lastSeenID"). An input struct's or an object's field takes
+// a graphql:",int" tag instead.
 func AsInt(params ...string) vuka.Bundle { return vuka.Compose(IntParams(params)) }
 
 // StringParams keeps parameters Strings: the attribute AsString gives.
 type StringParams []string
 
-// AsString keeps the named string parameters String though their names
-// end in ID or Id: @graphql.AsString("trackingID"). A field takes a
-// graphql:",string" tag instead.
+// AsString keeps a string parameter a String though its name ends in ID or
+// Id, written before it: func Track(@graphql.AsString trackingID string).
+// Above a function or method, the older form, it names the parameters:
+// @graphql.AsString("trackingID"). A field takes a graphql:",string" tag
+// instead.
 func AsString(params ...string) vuka.Bundle { return vuka.Compose(StringParams(params)) }
 
 // Where each attribute goes (@vuka.Targets): anywhere else is a compile
