@@ -44,6 +44,9 @@ type Operation struct {
 // its type), or a dependency the app provides (Dep its type).
 type Param struct {
 	Name string // the Go parameter's name: the argument's default name
+	// Arg is the argument's name as @graphql.Arg before the parameter
+	// writes it, which Naming doesn't change; "" for the default.
+	Arg  string
 	Type TypeDef
 	Dep  reflect.Type
 }
@@ -310,6 +313,25 @@ func ListOf[E any](of TypeDef) *List {
 			xs := make([]E, len(items))
 			for i, x := range items {
 				xs[i] = As[E](x)
+			}
+			return xs, nil
+		},
+	}
+}
+
+// ListOfPtr is a list of nullable E, a Go slice []*E: a nil element is a
+// null item, and a null item given is a nil element.
+func ListOfPtr[E any](of TypeDef) *List {
+	return &List{
+		Of: of,
+		Items: func(v any) (int, func(int) any, bool) {
+			xs, ok := v.([]*E)
+			return len(xs), func(i int) any { return Deref(xs[i]) }, ok
+		},
+		Build: func(items []any) (any, error) {
+			xs := make([]*E, len(items))
+			for i, x := range items {
+				xs[i] = Ptr[E](x)
 			}
 			return xs, nil
 		},
