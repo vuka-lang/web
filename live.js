@@ -140,7 +140,7 @@
       busy.delete(m.ref);
       release(b.el);
     }
-    if (m.ref && m.type !== "redirect") settle(m.ref, m.type === "error" || !!m.error);
+    if (m.ref && m.type !== "redirect") settle(m.ref, m.type === "error" || !!m.error, m.result, m.error);
     const w = m.ref && replies.get(m.ref);
     if (w) {
       replies.delete(m.ref);
@@ -1366,7 +1366,7 @@
       } else if (name === "confirm") {
         if (!window.confirm(a.msg)) return false;
       } else if (name === "busy") {
-        busyOn(el, a, ops.slice(i + 1).some((o) => o[0] === "push" && (o[1] || {}).h));
+        busyOn(el, a, ops.slice(i + 1).some((o) => o[0] === "push" && ((o[1] || {}).h || (o[1] || {}).m)));
       } else if (name !== "end") {
         if (jsOps[name]) jsOps[name](el, a, e);
         else warn("unknown JS command " + name);
@@ -1410,6 +1410,7 @@
   function arg(el, v) {
     if (!v || typeof v !== "object" || Object.keys(v).length !== 1 || !v.$read) return v;
     const c = v.$read;
+    if ("error" in c) return loadError == null ? "" : loadError;
     if (c.and || c.or || c.not) return holds(el, c);
     const t = targets(el, c.to)[0];
     if ("exists" in c) return !!t === !!c.exists;
@@ -1444,7 +1445,12 @@
     if (sent) p.timer = setTimeout(() => { fail("live: no reply to event " + id, id); settle(id, true); }, a.timeout || 10000);
     return id;
   }
-  function settle(id, error) {
+  // settle ends a push: error says it failed (msg its message, what
+  // ui.LoadError reads in its on_error), else result is what its handler
+  // returned, put into the push's targets. A target a later push claimed
+  // is that push's: when every target is, neither the result nor the
+  // hooks run.
+  function settle(id, error, result, msg) {
     const p = preds.get(id);
     if (!p) return;
     preds.delete(id);
@@ -1456,8 +1462,121 @@
       if (el) el.setAttribute("data-vk-failed", "");
     }
     p.marks.forEach(unbusy); // usable again before its hooks run
+    const into = p.into || [];
+    const mine = into.filter((t) => t.vkPush === p.seq);
+    mine.forEach((t) => { if (t.vkPush === p.seq) delete t.vkPush; t.removeAttribute("aria-busy"); });
+    if (into.length && !mine.length) return; // a later push into them wins
+    const at = el && el.isConnected ? el : p.root && byID(p.root) || document.body;
+    if (!error && result && typeof result === "object") {
+      try { applyResult(at, result, mine.filter((t) => t.isConnected), p.a.mode); } catch (err) { fail("vuka: a push's result: " + err.message); }
+    }
     const hooks = error ? p.a.on_error : p.a.on_ok;
-    if (hooks) run(el && el.isConnected ? el : p.root && byID(p.root) || document.body, hooks, null, []);
+    if (error && !hooks && msg) {
+      console.error("vuka: push: " + msg);
+      (el && el.isConnected ? el : document).dispatchEvent(new CustomEvent("vk:error", { bubbles: true, detail: { error: String(msg), fn: "push" } }));
+    }
+    if (!hooks) return;
+    const was = loadError;
+    loadError = error ? String(msg || "the push failed") : null;
+    try { run(at, hooks, null, []); } finally { loadError = was; }
+  }
+  let loadError = null; // the failed push's message, while its on_error runs (ui.LoadError)
+
+  // claim makes a push the one whose result its targets take — a later
+  // push into a target wins over an earlier one still on its way — and
+  // marks them busy until it settles.
+  let pushSeq = 0;
+  function claim(id, el, a) {
+    const p = preds.get(id);
+    if (!p || !a.result) return; // an event's push: no result, nothing to claim
+    p.seq = ++pushSeq;
+    p.into = a.into ? targets(el, a.into) : el ? [el] : [];
+    for (const t of p.into) {
+      t.vkPush = p.seq;
+      if (a.into) t.setAttribute("aria-busy", "true");
+    }
+  }
+
+  // applyResult puts a push's result into its targets: options into a
+  // select, markup into an element (morphed, keeping focus and typing, or
+  // added with mode append/prepend), a value into a field or text into
+  // any other element, a struct's fields into the controls of their
+  // names, commands run. These changes are the browser's, as a script's
+  // are: on a live page they stay until the server renders the place
+  // differently.
+  function applyResult(el, res, ts, mode) {
+    if (Array.isArray(res.js)) return run(el, res.js, null, []);
+    for (const t of ts) {
+      if (Array.isArray(res.options)) {
+        if (t.tagName === "SELECT") setOptions(t, res.options, true);
+        else warn("a push's options target no select");
+      } else if (typeof res.html === "string") intoHTML(t, res.html, mode);
+      else if ("value" in res) intoValue(t, res.value);
+      else if (res.fields && typeof res.fields === "object") fill(t, res.fields);
+    }
+  }
+  function intoHTML(t, html, mode) {
+    adoptForeign();
+    listenIn(html);
+    if (mode === "append" || mode === "prepend") {
+      const was = t.innerHTML;
+      t.insertAdjacentHTML(mode === "append" ? "beforeend" : "afterbegin", html);
+      if (!ownedKids.has(t) && placed.has(t)) ownedKids.set(t, was);
+    } else {
+      const was = t.innerHTML, next = t.cloneNode(false);
+      next.innerHTML = html;
+      children(t, next);
+      if (!ownedKids.has(t) && placed.has(t)) ownedKids.set(t, was);
+    }
+    if (watch) watch.takeRecords(); // the server's children were noted: these changes are the push's
+    bindIn(t, html);
+  }
+  function intoValue(t, v) {
+    if (isField(t)) return setField(t, timeValue(t, v));
+    touch(t, TEXT, () => { t.textContent = v == null ? "" : String(v); });
+  }
+  // timeValue fits a time result ("2006-01-02" or "2006-01-02T15:04") to
+  // a date, time or datetime-local input.
+  function timeValue(t, v) {
+    if (typeof v !== "string" || !/^\d{4}-\d\d-\d\d(T\d\d:\d\d)?$/.test(v)) return v;
+    if (t.type === "date") return v.slice(0, 10);
+    if (t.type === "time") return v.length > 10 ? v.slice(11) : "";
+    if (t.type === "datetime-local" && v.length === 10) return v + "T00:00";
+    return v;
+  }
+  // fill puts each of fields into the controls of its name inside t: a
+  // list into a multiple select or a group of checkboxes, a bool into a
+  // checkbox, a radio group checks the one of its value. A field with no
+  // control is left out.
+  function fill(t, fields) {
+    const all = t.tagName === "FORM" ? Array.from(t.elements) : Array.from(t.querySelectorAll("[name]"));
+    for (const [name, v] of Object.entries(fields)) {
+      let ctl = all.filter((c) => c.name === name && isField(c));
+      if (ctl.some((c) => c.type !== "hidden")) ctl = ctl.filter((c) => c.type !== "hidden"); // a checkbox's fallback
+      if (!ctl.length) continue;
+      if (ctl.length > 1 && ctl.every(checkable)) {
+        const vs = (Array.isArray(v) ? v : [v]).map(String);
+        for (const c of ctl) {
+          const on = vs.includes(c.value) || ctl.length === 1 && v === true;
+          if (c.checked !== on) { c.checked = on; c.dispatchEvent(new Event("input", { bubbles: true })); c.dispatchEvent(new Event("change", { bubbles: true })); }
+        }
+        continue;
+      }
+      for (const c of ctl) setField(c, Array.isArray(v) && !(c.tagName === "SELECT" && c.multiple) ? v.join(", ") : timeValue(c, v));
+    }
+  }
+  // setField sets a field's value — a checkbox or radio checked when v is
+  // true or its value, a multiple select's options from a list — and
+  // fires input and change on it.
+  function setField(t, v) {
+    const r = rec && { el: t, field: true, before: fieldValue(t), server: serverValue(t) };
+    if (r) rec.push(r);
+    if (t.type === "checkbox" || t.type === "radio") t.checked = v === true || v === "true" || v != null && v !== false && v !== "" && String(v) === t.value;
+    else if (t.tagName === "SELECT" && t.multiple) for (const o of t.options) o.selected = (Array.isArray(v) ? v.map(String) : [String(v == null ? "" : v)]).includes(o.value);
+    else t.value = v == null ? "" : String(v);
+    if (r) r.after = fieldValue(t);
+    t.dispatchEvent(new Event("input", { bubbles: true }));
+    t.dispatchEvent(new Event("change", { bubbles: true }));
   }
   // undo puts back what a prediction changed where the server's value is
   // still the one recorded and the element still shows what it set.
@@ -2058,24 +2177,16 @@
     },
     copy_text: (el, a) => copy(String(a.text), el),
     scroll_to: (el, a) => { const t = targets(el, a.to)[0]; if (t) t.scrollIntoView({ block: "nearest", behavior: "smooth" }); },
-    set_text: each((t, a) => touch(t, TEXT, () => { t.textContent = a.text == null ? "" : String(a.text); })),
+    set_text: (el, a) => {
+      const v = arg(el, a.text); // a read (ui.LoadError) is made once
+      targets(el, a.to).forEach((t) => touch(t, TEXT, () => { t.textContent = v == null ? "" : String(v); }));
+    },
     set_value: (el, a) => {
       // a read is made once, before any target changes: copying a field into
       // itself, or into several, reads what it held
       const v = arg(el, a.value);
-      targets(el, a.to).forEach((t) => {
-        if (!isField(t)) return;
-        const r = rec && { el: t, field: true, before: fieldValue(t), server: serverValue(t) };
-        if (r) rec.push(r);
-        if (t.type === "checkbox" || t.type === "radio") t.checked = v === true || v === "true" || v != null && v !== false && v !== "" && String(v) === t.value;
-        else if (t.tagName === "SELECT" && t.multiple) for (const o of t.options) o.selected = (Array.isArray(v) ? v.map(String) : [String(v == null ? "" : v)]).includes(o.value);
-        else t.value = v == null ? "" : String(v);
-        if (r) r.after = fieldValue(t);
-        t.dispatchEvent(new Event("input", { bubbles: true }));
-        t.dispatchEvent(new Event("change", { bubbles: true }));
-      });
+      targets(el, a.to).forEach((t) => { if (isField(t)) setField(t, v); });
     },
-    options: (el, a) => loadOptions(el, a),
     state_set: (el, a, e) => { if (!redismiss(a, e)) swrite(a, a.v); },
     state_toggle: (el, a, e) => { if (!redismiss(a, e)) swrite(a, !sread(a)); },
     state_inc: (el, a) => swrite(a, (+sread(a) || 0) + (a.by || 0)),
@@ -2083,23 +2194,32 @@
     navigate: (el, a) => { move(String(a.href), false); },
     // push sends an event to a handler as data-vk-on-<event> would.
     // Its predictions are what the chain changed since its last push.
+    // push calls a handler: on the live instance over the page's socket
+    // ("h"), or a method on a fresh copy of the page over HTTP ("m": a
+    // page that isn't live, or a read). Its arguments are read now; its
+    // result goes into its targets when the reply comes (settle).
     push: (el, a, e) => {
       const recs = rec ? rec.splice(0) : [];
-      if (!a.h) return; // rendered without a session
+      if (a.m) return pushHTTP(el, a, e, recs, rec && rec.busy ? rec.busy.splice(0) : []);
+      if (!a.h) return; // rendered without a session, and no method to call over HTTP
       if (!live) return warn("a push command needs a live page");
-      if (!joined) return settle(track(el, a, recs, 0, rec && rec.busy && rec.busy.splice(0)), true); // not sent: it fails at once
+      if (!joined) return settle(track(el, a, recs, 0, rec && rec.busy && rec.busy.splice(0)), true, null, "not connected"); // not sent: it fails at once
       const type = a.event || (e ? e.type : "push");
       const msg = { type: "event", target: a.h, event: type };
       if (e && typeof e.key === "string") msg.key = e.key;
-      const v = "value" in a ? a.value : el && valueOf(el);
-      if (v !== undefined && v !== null) msg.value = typeof v === "string" ? v : JSON.stringify(v);
-      const form = type === "submit" ? (e && e.target.closest("form")) || (el && el.closest("form")) : null;
-      if (form) msg.form = formOf(form, e && e.submitter);
+      if (a.args) msg.args = a.args.map((v) => arg(el, v));
+      else {
+        const v = "value" in a ? a.value : el && valueOf(el);
+        if (v !== undefined && v !== null) msg.value = typeof v === "string" ? v : JSON.stringify(v);
+      }
+      const form = type === "submit" || a.form ? (e && e.target && e.target.closest && e.target.closest("form")) || (el && el.closest("form")) : null;
+      if (form) msg.form = formOf(form, type === "submit" && e && e.submitter);
       flush();
       const marks = rec && rec.busy ? rec.busy.splice(0) : [];
-      const id = send(msg, el, form);
+      const id = send(msg, el, type === "submit" ? form : null);
       if (id) {
         track(el, a, recs, id, marks);
+        claim(id, el, a);
         if (rec) rec.sent = id;
       } else marks.forEach(unbusy);
     },
@@ -2118,50 +2238,47 @@
   let nav = null, here = location.pathname + location.search, saving = 0;
   const newPage = () => Math.random().toString(36).slice(2);
   let pageID = newPage();
-  // Options (ui.JS.Options): a select's options from a method of the page,
-  // asked of the page's own URL with fetch — a GET carrying Vk-Options, the
-  // method's reference the page rendered, and the arguments, read now, in
-  // _vk_args. The page answers {"options": […]}, {"redirect"} (a guard
-  // sending the visitor elsewhere) or {"error"}. A later load of the same
-  // select wins over an earlier one still on its way.
-  function loadOptions(el, a) {
-    const sels = targets(el, a.to).filter((t) => t.tagName === "SELECT");
-    if (!sels.length) return warn("Options targets no select");
-    if (!a.m) return;
-    const root = el && el.closest("[data-vk-id]");
-    const after = (ops) => ops && run(el && el.isConnected ? el : root && root.isConnected ? root : document.body, ops, null, []);
-    const failed = (msg) => {
-      if (a.on_error) return after(a.on_error);
-      console.error("vuka: Options: " + msg);
-      (el && el.isConnected ? el : document).dispatchEvent(new CustomEvent("vk:error", { bubbles: true, detail: { error: msg, fn: "options" } }));
-    };
+  // pushHTTP calls a push's method over HTTP, on the page's own URL: a
+  // GET for a read (a.read), else a POST carrying the CSRF token, with
+  // Vk-Push, the method's reference the page rendered, and the arguments,
+  // read now, in _vk_args (the enclosing form's fields in _vk_form when a
+  // struct takes them). The page answers the result ({"options"},
+  // {"html"}, {"value"}, {"fields"}, {"js"}, or {}), {"redirect"} (a guard
+  // sending the visitor elsewhere) or {"error"}.
+  function pushHTTP(el, a, e, recs, marks) {
     const u = httpURL(location.href);
-    if (!u) return;
+    if (!u) return marks.forEach(unbusy);
     u.hash = "";
-    u.searchParams.set("_vk_args", JSON.stringify((a.args || []).map((v) => arg(el, v))));
-    const seq = ++optionLoads;
-    for (const t of sels) t.vkOptions = seq;
+    const args = JSON.stringify((a.args || []).map((v) => arg(el, v)));
+    const f = a.form ? (e && e.target && e.target.closest && e.target.closest("form")) || (el && el.closest("form")) : null;
+    const form = f ? JSON.stringify(formOf(f)) : "";
+    const id = track(el, a, recs, 0, marks);
+    claim(id, el, a);
+    if (rec) rec.sent = id;
     const ctl = typeof AbortController === "function" ? new AbortController() : null;
-    const timer = setTimeout(() => ctl && ctl.abort(), a.timeout || 10000);
-    for (const t of sels) t.setAttribute("aria-busy", "true");
-    fetch(u.href, { headers: { "Vk-Options": a.m }, credentials: "same-origin", signal: ctl ? ctl.signal : undefined }).then((res) =>
-      res.json().catch(() => ({})).then((body) => ({ res, body }))).then(({ res, body }) => {
-      clearTimeout(timer);
-      const mine = sels.filter((t) => t.vkOptions === seq);
-      mine.forEach((t) => t.removeAttribute("aria-busy"));
-      if (!mine.length) return;
-      if (body.redirect) return go(String(body.redirect)).catch(() => {});
-      if (!res.ok || !Array.isArray(body.options)) return failed(body.error && body.error.message || "the page answered " + res.status);
-      mine.forEach((t) => setOptions(t, body.options, true));
-      after(a.on_ok);
-    }, (err) => {
-      clearTimeout(timer);
-      const mine = sels.filter((t) => t.vkOptions === seq);
-      mine.forEach((t) => t.removeAttribute("aria-busy"));
-      if (mine.length) failed(err && err.name === "AbortError" ? "no reply in time" : String(err && err.message || err));
-    });
+    const p = preds.get(id);
+    if (p) p.timer = setTimeout(() => { if (ctl) ctl.abort(); settle(id, true, null, "no reply in time"); }, a.timeout || 10000);
+    const init = { credentials: "same-origin", signal: ctl ? ctl.signal : undefined, headers: { "Vk-Push": a.m } };
+    if (a.read) {
+      u.searchParams.set("_vk_args", args);
+      if (form) u.searchParams.set("_vk_form", form);
+    } else {
+      const body = new URLSearchParams();
+      body.set("_vk_args", args);
+      if (form) body.set("_vk_form", form);
+      init.method = "POST";
+      init.body = body;
+      if (a.csrf) init.headers["X-CSRF-Token"] = a.csrf;
+    }
+    fetch(u.href, init).then((res) => res.json().catch(() => ({})).then((body) => ({ res, body }))).then(({ res, body }) => {
+      if (body.redirect) {
+        settle(id, false);
+        return go(String(body.redirect)).catch(() => {});
+      }
+      if (!res.ok || body.error) return settle(id, true, null, body.error && body.error.message || "the page answered " + res.status);
+      settle(id, false, body);
+    }, (err) => settle(id, true, null, err && err.name === "AbortError" ? "no reply in time" : String(err && err.message || err)));
   }
-  let optionLoads = 0;
 
   // setOptions puts list — {value, label}, or {group, options} for an
   // <optgroup> — in sel: a leading option whose value is "" (a placeholder)
