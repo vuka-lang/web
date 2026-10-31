@@ -54,6 +54,8 @@ github.com/vuka-lang/ui/v2 v2.14.1-0.20261031031203-0c8ea8d3c9d4 h1:Fqn3WgaS1uk9
 github.com/vuka-lang/ui/v2 v2.14.1-0.20261031031203-0c8ea8d3c9d4/go.mod h1:MFG6vLYCNkNTJ1IkTawQhj3PDmKhNZ8m1QqzLB+luYI=
 github.com/vuka-lang/ui/v2 v2.14.1-0.20261031031535-7e6a9ab01914 h1:ykOspzQSQ4cMqyeHDymmb4dH5FBbPDE9ANG4pVEswWw=
 github.com/vuka-lang/ui/v2 v2.14.1-0.20261031031535-7e6a9ab01914/go.mod h1:MFG6vLYCNkNTJ1IkTawQhj3PDmKhNZ8m1QqzLB+luYI=
+github.com/vuka-lang/ui/v2 v2.14.1-0.20261031051518-8f21427677b4 h1:fnvQB5RNIHfi7YRc/pbNNSp+JcJmTxy8VUIxPIqmLkE=
+github.com/vuka-lang/ui/v2 v2.14.1-0.20261031051518-8f21427677b4/go.mod h1:MFG6vLYCNkNTJ1IkTawQhj3PDmKhNZ8m1QqzLB+luYI=
 github.com/vuka-lang/vuka/v2 v2.5.0 h1:Dxf/AMLEfxCEfAcbaOhkAq3zlSu+4IekNu8b69JvMag=
 github.com/vuka-lang/vuka/v2 v2.5.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/vuka-lang/vuka/v2 v2.6.0 h1:1RGQWHFDt5DvXdDzsQ0ZQ5FHYiVYcyOcmDvAHtdiSWU=
