@@ -580,6 +580,11 @@
     if (precheck(form)) return;
     e.preventDefault();
     e.stopImmediatePropagation();
+    // the browser's checks answer this submit: a field's check waiting or
+    // on its way (sent as the field was left for the button) would put
+    // back what they replaced
+    clearTimeout(form.vkCheckTimer);
+    form.vkSeq = (form.vkSeq || 0) + 1;
   }, true);
   // a field showing a check's error drops it once it passes
   const recheck = (e) => {
