@@ -459,9 +459,9 @@ function navTo(p, html) {
 
 test("vuka run: a host whose island wasn't built, then another island by a navigation, then a new build: one app on it", async () => {
   const streams = [], log = [];
-  class EventSource { constructor() { streams.push(this); } }
-  const info = { m: {}, i: { A: ["/a.js", ""] }, e: "/_vuka/events", d: true };
-  const p = page(file, isl("B", "c1"), { live: true, url: "http://test/b", scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/a.js": strict("A", log), "/b.js": strict("B", log) }, globals: { EventSource } });
+  const __vukaDev = { on(channel, f) { streams.push({ channel, onmessage: f }); } };
+  const info = { m: {}, i: { A: ["/a.js", ""] }, e: true, d: true };
+  const p = page(file, isl("B", "c1"), { live: true, url: "http://test/b", scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/a.js": strict("A", log), "/b.js": strict("B", log) }, globals: { __vukaDev } });
   p.ws().onopen();
   p.server({ type: "render", ref: 1, html: isl("B", "c1") });
   await settle();
@@ -469,7 +469,7 @@ test("vuka run: a host whose island wasn't built, then another island by a navig
   navTo(p, isl("A", "c2"));
   await settle();
   eq([log, !!p.$("vk-island [data-vk-missing]"), p.$("vk-island").getAttribute("data-vk-error")], [["mount A"], false, null], "A mounts, B's box gone");
-  streams[0].onmessage({ data: JSON.stringify({ ...info, i: { A: ["/a.js", ""], B: ["/b.js", ""] } }) });
+  streams[0].onmessage(JSON.stringify({ ...info, i: { A: ["/a.js", ""], B: ["/b.js", ""] } }));
   await settle();
   eq(log, ["mount A"], "a new build doesn't mount A again");
 });
@@ -513,10 +513,10 @@ test("moving between two pages' islands in one host, while their modules load, a
 
 test("an island whose module fails to load: the error on the host (a box under vuka run), no second mount; a build with another module mounts it", async () => {
   const streams = [], log = [];
-  class EventSource { constructor() { streams.push(this); } }
-  const info = { m: {}, i: { A: ["/a.js", ""] }, e: "/_vuka/events", d: true };
+  const __vukaDev = { on(channel, f) { streams.push({ channel, onmessage: f }); } };
+  const info = { m: {}, i: { A: ["/a.js", ""] }, e: true, d: true };
   const errs = [];
-  const p = page(file, isl("A", "c1"), { live: true, scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/a2.js": strict("A", log) }, globals: { EventSource, console: { ...console, error: (...a) => errs.push(a.join(" ")) } } });
+  const p = page(file, isl("A", "c1"), { live: true, scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/a2.js": strict("A", log) }, globals: { __vukaDev, console: { ...console, error: (...a) => errs.push(a.join(" ")) } } });
   p.ws().onopen();
   p.server({ type: "render", ref: 1, html: isl("A", "c1") });
   await settle();
@@ -524,7 +524,7 @@ test("an island whose module fails to load: the error on the host (a box under v
   p.server({ type: "patch", ref: 0, updates: [{ id: "c0", html: isl("A", "c1", { t: "x" }) }] });
   await settle();
   eq(log, [], "a patch doesn't retry it");
-  streams[0].onmessage({ data: JSON.stringify({ ...info, i: { A: ["/a2.js", ""] } }) });
+  streams[0].onmessage(JSON.stringify({ ...info, i: { A: ["/a2.js", ""] } }));
   await settle();
   eq([log, !!p.$("vk-island [data-vk-missing]")], [["mount A"], false], "the next build's module mounts");
 });
@@ -535,10 +535,10 @@ process.on("beforeExit", () => { if (current) { console.log("FAIL " + current + 
 // loader's stream (development) is captured to send it a later manifest.
 function unbuilt(info) {
   const streams = [];
-  class EventSource { constructor(url) { this.url = url; streams.push(this); } }
+  const __vukaDev = { on(channel, f) { streams.push({ channel, onmessage: f }); } };
   const body = `<main><vk-island data-vk-s="p#2" data-vk-island="Levels" data-vk-client="load" data-vk-props='{}'></vk-island></main>`;
   const log = [], { mod } = island(log);
-  const p = page(file, body, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/levels.js": mod }, globals: { EventSource } });
+  const p = page(file, body, { scripts: [loaderSrc.replace("/*MANIFEST*/null", JSON.stringify(info))], modules: { "/levels.js": mod }, globals: { __vukaDev } });
   return { p, log, streams, box: () => p.$("vk-island [data-vk-missing]") };
 }
 
@@ -627,19 +627,19 @@ test("deferred fields, stateless: a refused load is each pending field's error",
 });
 
 test("vuka run: an island the build doesn't have says its build failed", async () => {
-  const { p, box } = unbuilt({ m: {}, i: { Pick: ["/pick.js", ""] }, e: "/_vuka/events", d: true, x: true });
+  const { p, box } = unbuilt({ m: {}, i: { Pick: ["/pick.js", ""] }, e: true, d: true, x: true });
   await settle();
   eq(p.$("vk-island").getAttribute("data-vk-error"), "unknown island", "flagged");
   eq(box() && box().textContent, "Island Levels isn't built: the island build failed — see the toolbar or the terminal", "the box");
 });
 
 test("vuka run: not built yet, then a build has it: the box goes and it mounts", async () => {
-  const { p, log, streams, box } = unbuilt({ m: {}, i: {}, e: "/_vuka/events", d: true });
+  const { p, log, streams, box } = unbuilt({ m: {}, i: {}, e: true, d: true });
   await settle();
   eq(box() && box().textContent, "Island Levels isn't built yet", "the box");
-  streams[0].onmessage({ data: JSON.stringify({ m: {}, i: {}, e: "/_vuka/events", d: true, x: true }) });
+  streams[0].onmessage(JSON.stringify({ m: {}, i: {}, e: true, d: true, x: true }));
   eq(box().textContent.includes("the island build failed"), true, "the build failed since");
-  streams[0].onmessage({ data: JSON.stringify({ m: {}, i: { Levels: ["/levels.js", ""] }, e: "/_vuka/events", d: true }) });
+  streams[0].onmessage(JSON.stringify({ m: {}, i: { Levels: ["/levels.js", ""] }, e: true, d: true }));
   await settle();
   eq([box(), p.$("vk-island").getAttribute("data-vk-error")], [null, null], "the box and the flag gone");
   eq(log, [["mount", []]], "mounted");

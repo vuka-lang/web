@@ -167,57 +167,8 @@ func TestCSSDevFile(t *testing.T) {
 			t.Errorf("the page inlines %q, want %q", got, css)
 		}
 	}
-	if code, body, _ := do(t, h, "GET", "/_vuka/app-css.js", ""); code != 200 || !strings.Contains(body, "/_vuka/app-css") {
+	if code, body, _ := do(t, h, "GET", "/_vuka/app-css.js", ""); code != 200 || !strings.Contains(body, `__vukaDev.on("css"`) {
 		t.Errorf("app-css.js: %d", code)
-	}
-}
-
-// A development page hears of each new stylesheet over one event stream,
-// which a shutdown ends.
-func TestDevCSSEvents(t *testing.T) {
-	file := filepath.Join(t.TempDir(), "app.css")
-	os.WriteFile(file, []byte(".one{}"), 0o644)
-	t.Setenv(CSSEnv, file)
-	app := cssApp()
-	srv := httptest.NewServer(app.Handler())
-	defer srv.Close()
-	res, err := http.Get(srv.URL + "/_vuka/app-css")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer res.Body.Close()
-	if ct := res.Header.Get("Content-Type"); ct != "text/event-stream" {
-		t.Fatalf("Content-Type %q", ct)
-	}
-	lines := make(chan string)
-	go func() {
-		sc := bufio.NewScanner(res.Body)
-		for sc.Scan() {
-			if l, ok := strings.CutPrefix(sc.Text(), "data: "); ok {
-				lines <- l
-			}
-		}
-		close(lines)
-	}()
-	next := func() (string, bool) {
-		select {
-		case l, ok := <-lines:
-			return l, ok
-		case <-time.After(2 * time.Second):
-			t.Fatal("no event")
-			return "", false
-		}
-	}
-	if got, _ := next(); got != cssTag([]byte(".one{}")) {
-		t.Errorf("first event %q", got)
-	}
-	os.WriteFile(file, []byte(".two{}"), 0o644)
-	if got, _ := next(); got != cssTag([]byte(".two{}")) {
-		t.Errorf("after a rebuild %q", got)
-	}
-	app.Stop(context.Background())
-	if _, ok := next(); ok {
-		t.Error("the stream outlived Stop")
 	}
 }
 

@@ -73,6 +73,7 @@ var toolbarSource, toolbarTag = func() ([]byte, string) {
 	logo := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(toolbarLogo)
 	css, _ := json.Marshal(strings.Replace(toolbarCSS, "__LOGO__", logo, 1))
 	src := bytes.Replace(toolbarScript, []byte(`"__CSS__"`), css, 1)
+	src = append([]byte(devSocketJS), src...)
 	return src, cssTag(src)
 }()
 
@@ -93,7 +94,7 @@ func (a *App) newToolbar() *toolbar {
 	if a.noToolbar || !a.dev && dir == "" || testing.Testing() && dir == "" && !toolbarInTests {
 		return nil
 	}
-	return &toolbar{byID: map[string]*tbEntry{}, dir: dir, streams: newStreams()}
+	return &toolbar{byID: map[string]*tbEntry{}, dir: dir}
 }
 
 // toolbar is an app's ring of request records.
@@ -105,8 +106,6 @@ type toolbar struct {
 	dir  string
 
 	crons []*tbEntry // the latest cron runs (toolbar_crons.go)
-
-	streams *streams // pages hearing of vuka run -watch's build state
 
 	gqlCheck func(body []byte) []byte // web.GraphQL's check, for the GraphiQL panel (toolbar_graphql.go)
 }
@@ -852,16 +851,6 @@ func (a *App) routeToolbar() {
 		writeJSON(w, http.StatusOK, out)
 	}))
 	a.router.Handle(http.MethodGet, toolbarBuild, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-			// The page's stream: the state when it connects, then each change.
-			tb.streams.serve(w, r, func() (string, bool) {
-				st := readBuildState(tb.dir, a.assets)
-				st.Elapsed = 0 // the page counts from Since
-				b, _ := json.Marshal(st)
-				return string(b), true
-			})
-			return
-		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, readBuildState(tb.dir, a.assets))
 	}))
