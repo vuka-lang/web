@@ -407,6 +407,12 @@ func (a *App) build() (http.Handler, error) {
 		if err != nil || mwErr != nil {
 			continue
 		}
+		if optionsRoute(s) {
+			if h, err = a.optionsCalls(s, h); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+		}
 		for i := len(s.mw) - 1; i >= 0; i-- {
 			h = a.layer(s.mw[i], h)
 		}
