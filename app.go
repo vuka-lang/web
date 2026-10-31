@@ -387,6 +387,12 @@ func (a *App) build() (http.Handler, error) {
 	rec := &recordingRouter{Router: a.router}
 	a.router = rec
 	defer func() { a.router = rec.Router }()
+	pages := map[string]*routeSpec{} // the page GETs push calls go to, by path
+	for _, s := range specs {
+		if pushRoute(s) {
+			pages[s.path] = s
+		}
+	}
 	seen := map[string]string{}
 	for _, s := range specs {
 		key := s.method + " " + s.path
@@ -407,8 +413,8 @@ func (a *App) build() (http.Handler, error) {
 		if err != nil || mwErr != nil {
 			continue
 		}
-		if optionsRoute(s) {
-			if h, err = a.optionsCalls(s, h); err != nil {
+		if page := pushPageOf(s, pages); page != nil {
+			if h, err = a.pushCalls(s, page, h); err != nil {
 				errs = append(errs, err)
 				continue
 			}

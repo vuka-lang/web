@@ -2,6 +2,7 @@ package livetree
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/vuka-lang/ui/v2/live"
 	"github.com/vuka-lang/web/v2/internal/liveproto"
@@ -33,7 +34,9 @@ type Message struct {
 	Trees []Entry       `json:"trees,omitempty"`
 	JS    []live.JSPush `json:"js,omitempty"`
 	Error string        `json:"error,omitempty"`
-	URL   string        `json:"url,omitempty"`
+	// Result is an event's Push result (live.Patch.Result).
+	Result json.RawMessage `json:"result,omitempty"`
+	URL    string          `json:"url,omitempty"`
 }
 
 func (x *session) Join(ref int) any {
@@ -81,7 +84,7 @@ func (x *session) patch(ref int, p live.Patch) Message {
 	for i, u := range p.Updates {
 		ups[i] = Update{u.ID, u.HTML}
 	}
-	return Message{Type: live.PatchMsg, Ref: ref, Trees: x.enc.Patch(ups), JS: p.JS, Error: p.Error}
+	return Message{Type: live.PatchMsg, Ref: ref, Trees: x.enc.Patch(ups), JS: p.JS, Error: p.Error, Result: p.Result}
 }
 
 // SetErrorText sets the text the browser gets for an error

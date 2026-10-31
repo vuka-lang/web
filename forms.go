@@ -103,10 +103,24 @@ func formTwins(specs []*routeSpec) []*routeSpec {
 	return out
 }
 
-// optionsRoute reports whether s is a page's GET, whose Options commands
-// call it (optionsCalls): the routes forms post to (formTwins).
-func optionsRoute(s *routeSpec) bool {
+// pushRoute reports whether s is a page's GET, whose Push steps call it
+// (pushCalls): the routes forms post to (formTwins).
+func pushRoute(s *routeSpec) bool {
 	return s.method == http.MethodGet && !(s.live != nil && s.live.island) && s.island == nil && (s.page || s.live != nil || returnsNode(s.fn))
+}
+
+// pushPageOf is the page route whose push calls s answers: s itself, a
+// page's GET; or that GET when s is a POST at its path — its form twin,
+// or the app's own POST there, which a write's call is sent to. Nil for
+// any other route.
+func pushPageOf(s *routeSpec, pages map[string]*routeSpec) *routeSpec {
+	switch {
+	case pushRoute(s):
+		return s
+	case s.method == http.MethodPost:
+		return pages[s.path]
+	}
+	return nil
 }
 
 var (
@@ -135,6 +149,10 @@ func returnsNode(fn reflect.Value) bool {
 func (a *App) formOnly(s *routeSpec, h http.Handler) http.Handler {
 	limit := a.bodyLimit(s.attrs)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(PushHeader) != "" || r.Header.Get(OptionsHeader) != "" {
+			h.ServeHTTP(w, r) // a push call: pushCalls answers it
+			return
+		}
 		if limit > 0 && r.Body != nil && r.Body != http.NoBody {
 			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}

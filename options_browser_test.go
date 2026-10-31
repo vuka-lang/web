@@ -242,7 +242,7 @@ func TestOptionsCall(t *testing.T) {
 	if code, body := optionsCallRef(t, srv, "/regions/south", ref, `["3"]`); code != 200 || !strings.Contains(body, "south town 3") {
 		t.Errorf("another path of the route: %d %s", code, body)
 	}
-	if code, body := optionsCallRef(t, srv, "/shop", ref, `["3"]`); code != 400 || !strings.Contains(body, "names no method this page loads options from") {
+	if code, body := optionsCallRef(t, srv, "/shop", ref, `["3"]`); code != 400 || !strings.Contains(body, "names no method this page calls") {
 		t.Errorf("another route's reference: %d %s", code, body)
 	}
 	l.take()
