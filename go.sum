@@ -42,8 +42,10 @@ github.com/vuka-lang/ui/v2 v2.13.1-0.20261030201607-0fd3548562f8 h1:pV2yR00fMhk6
 github.com/vuka-lang/ui/v2 v2.13.1-0.20261030201607-0fd3548562f8/go.mod h1:Kesa6NtjyiDBRSboxy55c90cotkJij/KLqhMErd4iQM=
 github.com/vuka-lang/ui/v2 v2.13.1-0.20261030213120-9d28fe77ae04 h1:nVL3Tm+fUis3zhfdhCt2ZUsik4rt8Tsc2z+hNfhrtxE=
 github.com/vuka-lang/ui/v2 v2.13.1-0.20261030213120-9d28fe77ae04/go.mod h1:Kesa6NtjyiDBRSboxy55c90cotkJij/KLqhMErd4iQM=
-github.com/vuka-lang/ui/v2 v2.13.1-0.20261030215924-a608e78c6523 h1:sfOA/5dJg2SYPsoIKBFciPC0fPH+GWjwJmCyDgHmK4A=
-github.com/vuka-lang/ui/v2 v2.13.1-0.20261030215924-a608e78c6523/go.mod h1:Kesa6NtjyiDBRSboxy55c90cotkJij/KLqhMErd4iQM=
+github.com/vuka-lang/ui/v2 v2.14.0 h1:bq/k9jTrvavFnlqNSyOICGbZu/p5T44/hCFqj/Y28P0=
+github.com/vuka-lang/ui/v2 v2.14.0/go.mod h1:MFG6vLYCNkNTJ1IkTawQhj3PDmKhNZ8m1QqzLB+luYI=
+github.com/vuka-lang/ui/v2 v2.14.1-0.20261031014757-47b53987af13 h1:YTCZ7BkO80jKHNbZIeaLge+r3dXmEzDBMUr8gJFRTK0=
+github.com/vuka-lang/ui/v2 v2.14.1-0.20261031014757-47b53987af13/go.mod h1:MFG6vLYCNkNTJ1IkTawQhj3PDmKhNZ8m1QqzLB+luYI=
 github.com/vuka-lang/vuka/v2 v2.5.0 h1:Dxf/AMLEfxCEfAcbaOhkAq3zlSu+4IekNu8b69JvMag=
 github.com/vuka-lang/vuka/v2 v2.5.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/vuka-lang/vuka/v2 v2.6.0 h1:1RGQWHFDt5DvXdDzsQ0ZQ5FHYiVYcyOcmDvAHtdiSWU=
@@ -62,6 +64,8 @@ github.com/vuka-lang/vuka/v2 v2.13.0 h1:sxM7OOVKqJyNwRn96fplHmSXDKlGecXcXivOb6VS
 github.com/vuka-lang/vuka/v2 v2.13.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/vuka-lang/vuka/v2 v2.13.1-0.20261030172223-f7faf5a33120 h1:VIZhJ3HVrQrkxECOSaRlYB3M1eY2QSLZc8V/jMXPV9c=
 github.com/vuka-lang/vuka/v2 v2.13.1-0.20261030172223-f7faf5a33120/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
+github.com/vuka-lang/vuka/v2 v2.14.0 h1:4hZuZL6t3VShMJmJSoWZbtxFGOZNOuSEqIblC5YQPCw=
+github.com/vuka-lang/vuka/v2 v2.14.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
 github.com/xyproto/randomstring v1.0.5/go.mod h1:rgmS5DeNXLivK7YprL0pY+lTuhNQW3iGxZ18UQApw/E=
 golang.org/x/crypto v0.55.0 h1:+KWHjbgOaAQ66dh/YlkZKHlz9ZUlq61AFirAR9ntP8M=
