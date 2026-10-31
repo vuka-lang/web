@@ -18,12 +18,12 @@ function eq(got, want, what) {
 // build state as the server's stream would.
 function open(o = {}) {
   const streams = [], gets = [];
-  class EventSource { constructor(url) { this.url = url; streams.push(this); } }
+  const __vukaDev = { on(channel, f, down) { streams.push({ channel, onmessage: f, down }); } };
   class XMLHttpRequest { open() {} addEventListener() {} }
   const p = page(file, o.body || "<main></main>", {
     build: o.build, url: o.url,
     globals: {
-      EventSource, XMLHttpRequest, Request: class {},
+      __vukaDev, XMLHttpRequest, Request: class {},
       MutationObserver: class { observe() {} takeRecords() { return []; } },
       CSS: { escape: (s) => s },
       setInterval: () => 0,
@@ -42,7 +42,7 @@ function open(o = {}) {
   });
   vm.runInContext(toolbarSrc, w);
   const $ = (s) => p.doc.querySelector("vuka-toolbar vk-shadow " + s);
-  const send = async (st) => { streams[0].onmessage({ data: JSON.stringify(st) }); await settle(); };
+  const send = async (st) => { streams[0].onmessage(JSON.stringify(st)); await settle(); };
   return { $, send, streams, gets, p };
 }
 

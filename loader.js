@@ -22,8 +22,18 @@
   const hosted = new WeakMap(); // host element → the mounted island's handle
   let global = null;
 
+  // importing retries a module that didn't arrive (the server restarting, the
+  // network): under another URL, as a browser keeps a failed import's answer.
+  // A module that arrived and threw isn't one.
+  const importing = (url, tries = 0) => import(tries ? url + (url.includes("?") ? "&" : "?") + "vk-retry=" + tries : url).catch((err) => {
+    if (tries >= 5 || !err || err.name !== "TypeError" || !/import/i.test(err.message)) throw err;
+    return new Promise((r) => setTimeout(r, 250 << tries)).then(() => importing(url, tries + 1));
+  });
   const load = (url) => {
-    if (!mods.has(url)) mods.set(url, import(url).then((x) => [].concat(x.default || [])));
+    if (!mods.has(url)) {
+      mods.set(url, importing(url).then((x) => [].concat(x.default || [])));
+      mods.get(url).catch(() => mods.delete(url)); // the next mount tries again
+    }
     return mods.get(url);
   };
   const scopeOf = (el) => el.getAttribute("data-vk-s");
@@ -708,7 +718,7 @@
       if (["data-vk-methods", "data-vk-fields", "data-vk-call"].some((a) => inst.el.hasAttribute(a))) ctx.live = inst.live = liveHandle(inst);
       return props;
     };
-    const want = adapterURL ? [import(moduleURL), import(adapterURL)] : [import(moduleURL)];
+    const want = adapterURL ? [importing(moduleURL), importing(adapterURL)] : [importing(moduleURL)];
     Promise.all(want).then((mods) => {
       if (!inst.el.isConnected || islandInsts.get(inst.el) !== inst) return;
       const props = go();
@@ -790,9 +800,7 @@
     const isl = islandInsts.get(e.target);
     if (isl && isl.ons) deliver(isl, d);
   }, true);
-  if (m.e && typeof EventSource === "function") {
-    new EventSource(m.e).onmessage = (e) => { try { update(JSON.parse(e.data)); } catch (_) {} };
-  }
+  if (m.e && window.__vukaDev) window.__vukaDev.on("assets", (info) => update(JSON.parse(info)));
   window.vukaComponents = { update, method, statesReady, instances: () => [...insts.values()] };
 
   const start = () => {

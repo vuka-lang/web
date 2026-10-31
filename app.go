@@ -86,7 +86,8 @@ type App struct {
 	devTools bool      // Dev: development, with Tailwind and Vite, where the process runs in it
 	tools    *devTools // nil: none to run
 
-	tb        *toolbar // nil: no development toolbar
+	tb        *toolbar   // nil: no development toolbar
+	devSock   *devSocket // nil: nothing to tell a development page
 	noToolbar bool
 	// graphqlPath is web.GraphQL's path, for the toolbar's GraphiQL panel.
 	graphqlPath string
@@ -148,6 +149,7 @@ func New(opts ...Option) *App {
 	a.css = a.appCSS()
 	a.assets = a.appAssets()
 	a.tb = a.newToolbar()
+	a.devSock = a.newDevSocket()
 	return a
 }
 
@@ -507,6 +509,9 @@ func (a *App) build() (http.Handler, error) {
 		a.routeToolbar()
 		a.tb.install()
 	}
+	if a.devSock != nil {
+		a.router.Handle(http.MethodGet, devSocketPath, http.HandlerFunc(a.devSock.serve))
+	}
 	served := rec.patterns
 	for _, f := range a.frontends {
 		for _, p := range f.routes() {
@@ -652,11 +657,7 @@ func (a *App) Stop(ctx context.Context) error {
 	a.hub.closeAll()
 	a.parked.closeAll()
 	a.partsPark.closeAll()
-	a.css.close()
-	a.assets.close()
-	if a.tb != nil {
-		a.tb.streams.close()
-	}
+	a.devSock.close()
 	return a.c.stop(ctx)
 }
 
