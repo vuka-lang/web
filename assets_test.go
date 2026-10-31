@@ -20,6 +20,19 @@ import (
 	"github.com/vuka-lang/web/v2/internal/testenv"
 )
 
+// The development socket's page side in node over a small DOM.
+func TestDevSocketJS(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		testenv.Needs(t, "no node")
+	}
+	out, err := exec.Command(node, "testdata/livejs/devsocket.js", "live.js", "devsocket.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	t.Logf("%s", out)
+}
+
 // The island runtime — function, state and live props — in node over a
 // small DOM.
 func TestLiveJSIslands(t *testing.T) {
@@ -197,7 +210,7 @@ func TestAssetsServe(t *testing.T) {
 		t.Errorf("every page of the app loads it (a live navigation may bring a component): %s", plain)
 	}
 	_, js, _ := get(tag[1])
-	if !strings.Contains(js, `{"m":{"k1":"/_vuka/c/k1.0a1b2c3d.js"},"f":{"k1":["bump"]},"e":"/_vuka/c/events","d":true}`) {
+	if !strings.Contains(js, `{"m":{"k1":"/_vuka/c/k1.0a1b2c3d.js"},"f":{"k1":["bump"]},"e":true,"d":true}`) {
 		t.Errorf("the loader's manifest: %s", js)
 	}
 	if code, mod, _ := get("/_vuka/c/k1.0a1b2c3d.js"); code != 200 || !strings.Contains(mod, "bump(el") {

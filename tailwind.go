@@ -19,8 +19,6 @@ const (
 	cssName  = "app.css"
 	cssPath  = livePrefix + cssName
 	cssWatch = livePrefix + "app-css.js"
-	// cssEvents streams the stylesheet's tag to development pages.
-	cssEvents = livePrefix + "app-css"
 	// CSSEnv names the stylesheet file vuka run keeps up to date.
 	CSSEnv = "VUKA_TAILWIND_CSS"
 	// cssInlineMark marks the development inline <style>, for the idempotency
@@ -65,8 +63,6 @@ type stylesheet struct {
 	size       int64
 	checked    time.Time
 	found, dev bool
-
-	streams *streams // development: the pages hearing of each new tag
 }
 
 func newStylesheet(css []byte) *stylesheet {
@@ -91,7 +87,7 @@ func (a *App) appCSS() *stylesheet {
 		f = a.tools.css
 	}
 	if f != "" {
-		return &stylesheet{file: f, dev: true, streams: newStreams()}
+		return &stylesheet{file: f, dev: true}
 	}
 	cssMu.Lock()
 	defer cssMu.Unlock()
@@ -126,22 +122,6 @@ func (s *stylesheet) current() ([]byte, string, bool) {
 		}
 	}
 	return s.css, s.tag, s.found
-}
-
-// events streams the stylesheet's tag: the current one when a page
-// connects, then each new one as the file changes.
-func (s *stylesheet) events(w http.ResponseWriter, r *http.Request) {
-	s.streams.serve(w, r, func() (string, bool) {
-		_, tag, ok := s.current()
-		return tag, ok
-	})
-}
-
-// close ends the event streams.
-func (s *stylesheet) close() {
-	if s != nil {
-		s.streams.close()
-	}
 }
 
 func (s *stylesheet) serve(w http.ResponseWriter, r *http.Request) {
@@ -265,22 +245,22 @@ func foldEq(b []byte, lower string) bool {
 
 // cssWatchJS swaps the stylesheet's link when the server says it changed,
 // the new one loaded before the old goes, so the page doesn't flash:
-// development only. EventSource reconnects by itself when the app restarts.
-const cssWatchJS = `(() => {
+// development only. The socket comes back by itself when the app restarts.
+var cssWatchJS = devSocketJS + `(() => {
 	const path = "` + cssPath + `";
-	new EventSource("` + cssEvents + `").onmessage = async (e) => {
+	window.__vukaDev.on("css", async (tag) => {
 		const style = document.querySelector('style[` + cssInlineMark + `]');
 		if (style) {
-			style.textContent = await fetch(path + "?v=" + e.data).then((r) => r.text());
+			style.textContent = await fetch(path + "?v=" + tag).then((r) => r.text());
 			return;
 		}
 		const old = document.querySelector('link[rel="stylesheet"][href^="' + path + '"]');
-		if (!old || new URL(old.href).searchParams.get("v") === e.data) return;
+		if (!old || new URL(old.href).searchParams.get("v") === tag) return;
 		const next = old.cloneNode();
-		next.href = path + "?v=" + e.data;
+		next.href = path + "?v=" + tag;
 		next.onload = () => old.remove();
 		old.after(next);
-	};
+	});
 })();
 `
 
@@ -297,7 +277,6 @@ func (a *App) routeCSS() {
 		a.router.Handle(http.MethodGet, cssPath, http.HandlerFunc(a.css.serve))
 		if a.css.dev {
 			a.router.Handle(http.MethodGet, cssWatch, http.HandlerFunc(serveCSSWatch))
-			a.router.Handle(http.MethodGet, cssEvents, http.HandlerFunc(a.css.events))
 		}
 	}
 	cssMu.Lock()

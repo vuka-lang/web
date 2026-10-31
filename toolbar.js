@@ -308,12 +308,11 @@
     if (follow && !drawer.hidden) load();
   });
 
-  // vuka run -watch's build: the server sends each change over one stream,
-  // which reconnects by itself while the app swaps builds.
+  // vuka run -watch's build: the server sends each change over the page's
+  // development socket, which comes back by itself while the app swaps builds.
   function watchBuild() {
-    const es = new EventSource(base + "build");
-    es.onmessage = (e) => {
-      const st = JSON.parse(e.data);
+    window.__vukaDev.on("build", (data) => {
+      const st = JSON.parse(data);
       st.elapsed = st.since ? Math.max(0, (Date.now() - Date.parse(st.since)) / 1000) : 0;
       const key = (b) => JSON.stringify([b.state, b.output, b.assets || null]);
       const changed = key(st) !== key(build);
@@ -321,8 +320,7 @@
       build = st;
       buildAt = Date.now();
       if (changed) { drawBuild(); drawHandle(); }
-    };
-    es.onerror = () => { if (build.state === "ok") { build = { state: "" }; drawHandle(); } }; // the app is swapping builds
+    }, () => { if (build.state === "ok") { build = { state: "" }; drawHandle(); } }); // the app is swapping builds
   }
   setInterval(() => { if (build.state === "building") drawHandle(); }, 100);
 

@@ -73,7 +73,6 @@ const (
 	assetsPrefix  = livePrefix + "c/"
 	islandsPrefix = livePrefix + "i/"
 	loaderPath    = assetsPrefix + "loader.js"
-	assetEvents   = assetsPrefix + "events"
 	// AssetsEnv names the directory vuka run keeps the compiled assets in:
 	// manifest.json, the modules (c/), and the island chunks (i/).
 	AssetsEnv = "VUKA_ASSETS"
@@ -169,18 +168,16 @@ type assetSet struct {
 	allowed []string       // the types whose pushes it allowed
 	fail    *assetsFailure // development: the last compile failed (vuka run's state.json)
 	failMod time.Time
-
-	streams *streams // development: the pages hearing of each new manifest
 }
 
 func (a *App) appAssets() *assetSet {
 	if d := os.Getenv(AssetsEnv); d != "" {
-		s := &assetSet{dir: d, streams: newStreams()}
+		s := &assetSet{dir: d}
 		s.current()
 		return s
 	}
 	if a.tools != nil && a.tools.islands != "" {
-		s := &assetSet{dir: a.tools.islands, always: true, streams: newStreams()}
+		s := &assetSet{dir: a.tools.islands, always: true}
 		if s.current(); s.loader == nil {
 			s.loader, s.tag = s.loaderJS() // until the first build: islands say they aren't built yet
 		}
@@ -332,12 +329,13 @@ func mapValues[K comparable, V any](m map[K]V) []V {
 var loaderSrc string
 
 // loaderInfo is what the loader knows of the manifest: each scope's module
-// and methods, the global module, and in development the event stream.
+// and methods, the global module, and in development that it hears of new
+// manifests.
 type loaderInfo struct {
 	Modules   map[string]string    `json:"m"`
 	Methods   map[string][]string  `json:"f,omitempty"`
 	Global    string               `json:"g,omitempty"`
-	Events    string               `json:"e,omitempty"`
+	Listen    bool                 `json:"e,omitempty"`
 	Islands   map[string][2]string `json:"i,omitempty"`  // name → [moduleURL, adapterURL]
 	IslandCSS []string             `json:"ic,omitempty"` // stylesheet URLs a page with an island links
 	Dev       bool                 `json:"d,omitempty"`  // vuka run: an island not built shows why
@@ -374,7 +372,7 @@ func (s *assetSet) info() loaderInfo {
 		li.IslandCSS = append(li.IslandCSS, islandsPrefix+css)
 	}
 	if s.dir != "" {
-		li.Events = assetEvents
+		li.Listen = true
 		li.Dev = true
 		li.Failed = s.fail != nil && s.fail.Islands
 	}
@@ -383,7 +381,11 @@ func (s *assetSet) info() loaderInfo {
 
 func (s *assetSet) loaderJS() ([]byte, string) {
 	info, _ := json.Marshal(s.info())
-	js := []byte(strings.Replace(loaderSrc, "/*MANIFEST*/null", string(info), 1))
+	src := loaderSrc
+	if s.dir != "" {
+		src = devSocketJS + src
+	}
+	js := []byte(strings.Replace(src, "/*MANIFEST*/null", string(info), 1))
 	return js, cssTag(js)
 }
 
@@ -464,22 +466,14 @@ func (s *assetSet) serveIsland(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// events streams the loader's view of the manifest to development pages,
-// so a component mounted after its script changed loads the new module.
-func (s *assetSet) events(w http.ResponseWriter, r *http.Request) {
-	s.streams.serve(w, r, func() (string, bool) {
-		s.current()
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		info, _ := json.Marshal(s.info())
-		return string(info), true
-	})
-}
-
-func (s *assetSet) close() {
-	if s != nil {
-		s.streams.close()
-	}
+// devManifest is the loader's view of the manifest for development pages, so
+// a component mounted after its script changed loads the new module.
+func (s *assetSet) devManifest() (string, bool) {
+	s.current()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info, _ := json.Marshal(s.info())
+	return string(info), true
 }
 
 func (a *App) routeAssets() {
@@ -490,12 +484,6 @@ func (a *App) routeAssets() {
 		switch r.URL.Path {
 		case loaderPath:
 			a.assets.serveLoader(w, r)
-		case assetEvents:
-			if a.assets.dir != "" {
-				a.assets.events(w, r)
-				return
-			}
-			http.NotFound(w, r)
 		default:
 			a.assets.serveModule(w, r)
 		}

@@ -193,6 +193,49 @@ test("loop refs belong to their own instance even when nested scopes match", asy
   eq(seen, { c1: ["own"], c2: ["nested"] });
 });
 
+// flaky makes the page's imports fail as a browser's do while a server is
+// away: each URL of a module failing until `times` are spent.
+function flaky(p, times, err = () => { const e = new Error("error loading dynamically imported module: x"); e.name = "TypeError"; return e; }) {
+  const urls = [], real = p.window.__import;
+  p.window.__import = (url) => {
+    urls.push(url);
+    if (times-- > 0) return Promise.reject(err());
+    return real(url.split("?")[0]);
+  };
+  return urls;
+}
+const spin = async () => { for (let i = 0; i < 6; i++) await settle(); };
+
+test("a module that didn't arrive is tried again under another URL, and mounts", async () => {
+  const log = [];
+  const p = open("<main></main>", { m: { k1: "/k1.js" } }, { "/k1.js": [hooks("k", log)] });
+  const urls = flaky(p, 2);
+  p.doc.querySelector("main").innerHTML = counter("c1", 0);
+  p.window.vukaComponents.update({ m: { k1: "/k1.js" } });
+  p.window.document.dispatchEvent(new p.window.CustomEvent("vk:patched", { detail: null }));
+  await spin();
+  eq(log, [], "not yet");
+  p.tick(250);
+  await spin();
+  p.tick(500);
+  await spin();
+  eq(urls, ["/k1.js", "/k1.js?vk-retry=1", "/k1.js?vk-retry=2"], "each URL its own");
+  eq(log, ["k mounted c1"], "mounted");
+});
+
+test("a module that arrived and threw isn't tried again", async () => {
+  const log = [];
+  const p = open("<main></main>", { m: { k1: "/k1.js" } }, { "/k1.js": [hooks("k", log)] });
+  const urls = flaky(p, 9, () => { const e = new Error("x is not a function"); e.name = "TypeError"; return e; });
+  p.doc.querySelector("main").innerHTML = counter("c1", 0);
+  p.window.document.dispatchEvent(new p.window.CustomEvent("vk:patched", { detail: null }));
+  await spin();
+  p.tick(10000);
+  await spin();
+  eq(urls, ["/k1.js"], "once");
+  eq(p.logs.filter((l) => l.startsWith("error vuka: loading /k1.js")).length, 1, "logged");
+});
+
 (async () => {
   let failed = 0;
   for (const t of tests) {
