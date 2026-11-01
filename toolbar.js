@@ -56,6 +56,7 @@
     ? (build.assets.islands ? "island build failed" : "asset build failed") : "";
 
   // The handle: the build when it isn't ok, else the page's time and queries.
+  // A build's state stays out on the edge, where it can be read without a hover.
   function drawHandle() {
     handle.className = "handle";
     if (going) {
@@ -65,17 +66,17 @@
     }
     if (build.state === "building") {
       const s = build.elapsed + (Date.now() - buildAt) / 1000;
-      handle.classList.add("building");
+      handle.classList.add("building", "stay");
       stateEl.innerHTML = `<span class="spin"></span> <span class="build-text">building… ${s.toFixed(1)}s</span>`;
       return;
     }
     if (build.state === "failed") {
-      handle.classList.add("err");
+      handle.classList.add("err", "stay");
       stateEl.innerHTML = `<span class="build-text">build failed</span>`;
       return;
     }
     if (assetsFailed()) {
-      handle.classList.add("err");
+      handle.classList.add("err", "stay");
       stateEl.innerHTML = `<span class="build-text">${assetsFailed()}</span>`;
       return;
     }

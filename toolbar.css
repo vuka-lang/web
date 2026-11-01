@@ -65,6 +65,7 @@
  .dock { width: 44px; }
  .handle { transform: translateX(calc(100% - 44px)); }
 }
+.handle.stay { transform: translateX(0); }
 @media (prefers-reduced-motion: reduce) { .handle { transition: none; } }
 .handle:hover { background: var(--bg2); }
 .handle.warn { border-left-color: var(--warn); }

@@ -616,3 +616,40 @@ func TestBrowserToolbarNavigate(t *testing.T) {
 		t.Errorf("%d entries in the list", options)
 	}
 }
+
+// TestBrowserToolbarBuildStaysOut: while a build runs, and when one fails, the
+// handle stays whole on the screen; once the build is ok it slides back.
+func TestBrowserToolbarBuildStaysOut(t *testing.T) {
+	withToolbar(t)
+	dir := t.TempDir()
+	t.Setenv(DevDirEnv, dir)
+	write := func(s string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, "build.json"), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(`{"state":"ok","at":"2026-11-01T10:00:00Z"}`)
+	a := New(Only("none"), Dev())
+	a.Get("/", func() ui.Node {
+		return fullPage(ui.El("main", nil, ui.Component("home#1", nil, &counter{Label: "n="})))
+	})
+	srv := httptest.NewServer(a.Handler())
+	t.Cleanup(srv.Close)
+
+	p := chrome.Launch(t).Open(srv.URL + "/")
+	p.Viewport(1400, 800, false)
+	handle := `document.querySelector("vuka-toolbar").shadowRoot.querySelector(".handle")`
+	out := handle + `.getBoundingClientRect().right <= innerWidth`
+	in := handle + `.getBoundingClientRect().left >= innerWidth - 8`
+	p.Wait(handle + `.querySelector(".num") && ` + in)
+
+	write(fmt.Sprintf(`{"state":"building","since":%q}`, time.Now().Format(time.RFC3339Nano)))
+	p.Wait(handle + `.textContent.includes("building") && ` + out)
+
+	write(`{"state":"failed","output":"main.go:1: nope"}`)
+	p.Wait(handle + `.textContent.includes("build failed") && ` + out)
+
+	write(`{"state":"ok","at":"2026-11-01T10:01:00Z"}`)
+	p.Wait(handle + `.querySelector(".num") && ` + in)
+}
