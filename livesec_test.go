@@ -396,3 +396,25 @@ func waitFor(t *testing.T, ok func() bool) {
 	}
 	t.Fatal("timed out")
 }
+
+// A connection's first check comes within the period, at a random point of it.
+func TestLiveCheckJitter(t *testing.T) {
+	const every = 30 * time.Second
+	seen := map[time.Duration]bool{}
+	var low, high bool
+	for range 1000 {
+		f := firstCheck(every)
+		if f <= 0 || f > every {
+			t.Fatalf("first check after %v", f)
+		}
+		seen[f] = true
+		low = low || f < every/4
+		high = high || f > every*3/4
+	}
+	if len(seen) < 900 || !low || !high {
+		t.Fatalf("first checks aren't spread out: %d distinct, low %v, high %v", len(seen), low, high)
+	}
+	if f := firstCheck(1); f != 1 {
+		t.Fatalf("a period of 1ns: first %v", f)
+	}
+}

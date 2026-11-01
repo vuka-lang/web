@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -119,8 +120,10 @@ func LiveMaxConnsPerIP(n int) Option { return OptionFunc(func(a *App) { a.hub.ma
 // sets no cap.
 func LiveMaxConnsPerPage(n int) Option { return OptionFunc(func(a *App) { a.hub.maxPerTok = n }) }
 
-// LiveCheckEvery runs the app's LiveChecks on each joined page this often:
-// 30 seconds by default; 0 never runs them. A page some check fails closes
+// LiveCheckEvery runs the app's LiveChecks on each joined page this often: 30
+// seconds by default; 0 never runs them. A connection's first check comes at a
+// random point of the period, so pages opened together don't all check
+// together. A page some check fails closes
 // with code 4001 and reloads, so a session ended where the app doesn't
 // hear of it (another process, a store edited by hand) or a revoked
 // permission reaches pages that sit open; an ending the app hears of
@@ -428,10 +431,11 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	deadline := time.NewTimer(cmp.Or(a.hub.joinTimeout, defaultLiveJoinTimeout))
 	defer deadline.Stop()
 	var checks <-chan time.Time
+	var checkTimer *time.Timer
 	if d := a.hub.checkEvery; d > 0 && len(a.liveChecks) > 0 {
-		t := time.NewTicker(d)
-		defer t.Stop()
-		checks = t.C
+		checkTimer = time.NewTimer(firstCheck(d))
+		defer checkTimer.Stop()
+		checks = checkTimer.C
 	}
 	var trim <-chan time.Time
 	active := func() {}
@@ -481,6 +485,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 				ws.Close(closeReload, "live: the page must load again")
 				return
 			}
+			checkTimer.Reset(a.hub.checkEvery)
 		case <-c.wake:
 			active()
 			if c.ending.Load() {
@@ -500,6 +505,13 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			}()
 		}
 	}
+}
+
+// firstCheck is how long a new connection waits for its first LiveCheck: up to
+// a whole period, so sockets opened together (every page reconnecting after a
+// restart) don't all check together.
+func firstCheck(every time.Duration) time.Duration {
+	return time.Duration(rand.Int64N(int64(every))) + 1
 }
 
 func (c *conn) write(ctx context.Context, m any) {
