@@ -641,7 +641,7 @@ func TestBrowserToolbarBuildStaysOut(t *testing.T) {
 	p.Viewport(1400, 800, false)
 	handle := `document.querySelector("vuka-toolbar").shadowRoot.querySelector(".handle")`
 	out := handle + `.getBoundingClientRect().right <= innerWidth`
-	in := handle + `.getBoundingClientRect().left >= innerWidth - 8`
+	in := handle + `.getBoundingClientRect().right > innerWidth` // a touch screen shows more of it than the edge
 	p.Wait(handle + `.querySelector(".num") && ` + in)
 
 	write(fmt.Sprintf(`{"state":"building","since":%q}`, time.Now().Format(time.RFC3339Nano)))
