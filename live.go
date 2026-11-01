@@ -186,9 +186,9 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 	}
 	if ls.typ.Kind() != reflect.Struct || !reflect.PointerTo(ls.typ).Implements(statefulType) {
 		if ls.typ.Kind() == reflect.Struct && embedsLive(ls.typ) {
-			return nil, failf("E0329", what, s.where, "%s is not a stateful component: *%[1]s has no Render() ui.Node method", ls.name).WithHelp("add func (p *%s) Render() ui.Node", ls.typ.Name())
+			return nil, failf("E0329", what, s.where, "%s is not a live component: *%[1]s has no Render() ui.Node method", ls.name).WithHelp("add func (p *%s) Render() ui.Node", ls.typ.Name())
 		}
-		return nil, failf("E0329", what, s.where, "%s is not a stateful component", ls.name).WithHelp("embed ui.Live in a struct with a Render() ui.Node method")
+		return nil, failf("E0329", what, s.where, "%s is not a live component", ls.name).WithHelp("embed ui.Live in a struct with a Render() ui.Node method")
 	}
 	if err := a.checkCtor(ls.ctor, s.where); err != nil {
 		return nil, err
