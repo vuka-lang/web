@@ -46,6 +46,8 @@ const (
 	// frontendEnvGlobal is the global the page's public config values are
 	// set on; the Vite plugin points import.meta.env.KEY at it.
 	frontendEnvGlobal = "__VUKA_ENV__"
+	// islandsStub is the index.html vuka new --islands used to write.
+	islandsStub = `<!doctype html><div id=app></div>`
 )
 
 // Frontend serves a built single-page app from fsys, the files under root:
@@ -183,7 +185,7 @@ func (f *frontend) prepare(a *App) error {
 		return nil // read per request: the build, or the dev server, may come later
 	}
 	index, err := fs.ReadFile(f.files, "index.html")
-	if err != nil && f.islandsOnly() {
+	if err != nil && f.islandsOnly() || err == nil && stubIndex(index) {
 		return nil
 	}
 	if err != nil {
@@ -206,6 +208,13 @@ func (f *frontend) prepare(a *App) error {
 func (f *frontend) islandsOnly() bool {
 	_, err := fs.Stat(f.files, islandsDist+"/manifest.json")
 	return err == nil
+}
+
+// stubIndex reports whether index is what vuka new --islands wrote so that
+// go:embed has a file: no page. Serving it for every unknown path would answer
+// them 200 with a blank page.
+func stubIndex(index []byte) bool {
+	return string(bytes.TrimSpace(index)) == islandsStub
 }
 
 func hasFiles(fsys fs.FS) bool {
@@ -342,7 +351,7 @@ func (f *frontend) serveIndex(w http.ResponseWriter, r *http.Request) {
 	}
 	if page == nil {
 		page, _ = fs.ReadFile(f.files, "index.html")
-		if page == nil && f.islandsOnly() {
+		if page == nil && f.islandsOnly() || page != nil && stubIndex(page) {
 			http.NotFound(w, r)
 			return
 		}
