@@ -1,0 +1,26 @@
+<script lang="go">
+package components
+
+import "github.com/vuka-lang/ui/v2"
+
+// OrderRow is one row of the dashboard's table.
+type OrderRow struct {
+	ui.Live
+	ID       int64
+	Customer string
+	Status   string
+	Cents    int
+	Placed   string
+	picked   bool
+}
+
+func (r *OrderRow) Pick() { r.picked = !r.picked }
+</script>
+<tr class="row" data-picked={picked}>
+	<td>{ID}</td>
+	<td>{Customer}</td>
+	<td class="status">{Status}</td>
+	<td class="money">{Cents / 100}.{Cents % 100}</td>
+	<td>{Placed}</td>
+	<td><button type="button" onClick={Pick}>pick</button></td>
+</tr>
