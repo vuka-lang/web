@@ -79,6 +79,14 @@ func Native() bool {
 
 func (x native) Event(m live.ClientMessage) any { return x.s.Handle(m) }
 
+// Trim releases what the session can rebuild, when this Vuka's session can
+// (live.Session.Trim).
+func (x native) Trim() {
+	if t, ok := any(x.s).(interface{ Trim() }); ok {
+		t.Trim()
+	}
+}
+
 // Handler is the function an event's target names, when this Vuka's
 // session says (live.Session.Handler); nil otherwise.
 func (x native) Handler(target string) any {

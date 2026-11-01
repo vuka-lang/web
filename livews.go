@@ -129,6 +129,16 @@ func LiveCheckEvery(d time.Duration) Option {
 	return OptionFunc(func(a *App) { a.hub.checkEvery = d })
 }
 
+// LiveTrimAfter makes a joined page that sends and receives nothing for d
+// release what its session can rebuild (the hashes of what the browser holds),
+// to make them again on its next event or broadcast. It is off by default (0):
+// it saves about a tenth of an idle page's memory, and a mistake in it would
+// show as a wrong update rather than an error. Replies don't change, and the
+// page stays open; LiveIdleTimeout is what ends it.
+func LiveTrimAfter(d time.Duration) Option {
+	return OptionFunc(func(a *App) { a.hub.trimAfter = d })
+}
+
 // LiveCompressionMode is how live sockets compress their messages
 // (permessage-deflate, RFC 7692), set with LiveCompression.
 type LiveCompressionMode int
@@ -185,8 +195,8 @@ type hub struct {
 	perIP    map[string]int // of them, by client address
 	perToken map[string]int // by page token
 
-	joinTimeout, idleTimeout, checkEvery time.Duration
-	maxConns, maxPerIP, maxPerTok        int
+	joinTimeout, idleTimeout, checkEvery, trimAfter time.Duration
+	maxConns, maxPerIP, maxPerTok                   int
 }
 
 func newHub() *hub {
@@ -423,12 +433,24 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		defer t.Stop()
 		checks = t.C
 	}
+	var trim <-chan time.Time
+	active := func() {}
+	if d := a.hub.trimAfter; d > 0 {
+		t := time.NewTimer(d)
+		defer t.Stop()
+		trim, active = t.C, func() { t.Reset(d) }
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			ws.CloseNow()
 			return
+		case <-trim:
+			if s, ok := c.s.(interface{ Trim() }); ok {
+				s.Trim()
+			}
 		case data := <-msgs:
+			active()
 			if c.ending.Load() {
 				ws.Close(closeReload, "live: the page must load again")
 				return
@@ -460,6 +482,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-c.wake:
+			active()
 			if c.ending.Load() {
 				ws.Close(closeReload, "live: the page must load again")
 				return
