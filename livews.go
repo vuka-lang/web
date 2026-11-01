@@ -1057,18 +1057,26 @@ func (c *conn) recording(typ, subject string, ref int, client []byte) func() {
 	}
 }
 
-// instanceType names an instance's component for the toolbar, from its
-// first handler when the session says (Counter.Inc: Counter).
+// instanceType names an instance's component for the toolbar, when the
+// session says (*views.Counter: Counter).
 func (c *conn) instanceType(id string) string {
 	if id == "c0" {
 		return "page"
 	}
-	h, ok := c.s.(interface{ Handler(string) any })
+	h, ok := c.s.(interface{ Component(string) ui.Stateful })
 	if !ok {
 		return ""
 	}
-	t, _, _ := strings.Cut(handlerName(h.Handler(id+":0")), ".")
-	return t
+	comp := h.Component(id)
+	if comp == nil {
+		return ""
+	}
+	t := reflect.TypeOf(comp)
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	name, _, _ := strings.Cut(t.Name(), "[")
+	return name
 }
 
 // recorder is the response of a join's run of the route: only its status and
