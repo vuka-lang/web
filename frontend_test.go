@@ -194,6 +194,17 @@ func TestFrontendIslands(t *testing.T) {
 	expect(t, h, "GET", "/_vuka/i/chart.0a1b2c3d.js", "", 200, "mount")
 }
 
+// The index.html vuka new --islands wrote doesn't answer unknown paths, in
+// production or in development; a real page still does.
+func TestFrontendStubIndex(t *testing.T) {
+	stub := fstest.MapFS{"dist/index.html": {Data: []byte(islandsStub + "\n")}}
+	expect(t, spaApp(t, Frontend(stub, "dist")).Handler(), "GET", "/nope", "", 404, "")
+	expect(t, spaApp(t, Dev(), Frontend(stub, "dist")).Handler(), "GET", "/nope", "", 404, "")
+
+	page := fstest.MapFS{"dist/index.html": {Data: []byte("<p>hi</p>")}}
+	expect(t, spaApp(t, Frontend(page, "dist")).Handler(), "GET", "/nope", "", 200, "hi")
+}
+
 func TestFrontendDevReadsDisk(t *testing.T) {
 	dist := devDir(t, map[string]string{"index.html": "<html><head><title>v1</title></head><body></body></html>", "a.js": "1"})
 	h := spaApp(t, Dev(), Frontend(fstest.MapFS{"dist/index.html": {Data: []byte("embedded")}}, "dist")).Handler()
