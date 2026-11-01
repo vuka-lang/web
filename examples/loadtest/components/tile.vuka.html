@@ -1,0 +1,19 @@
+<script lang="go">
+package components
+
+import "github.com/vuka-lang/ui/v2"
+
+// Tile is one count on the dashboard.
+type Tile struct {
+	ui.Live
+	Label string
+	Value int
+	open  bool
+}
+
+func (t *Tile) Toggle() { t.open = !t.open }
+</script>
+<div class="tile" data-open={open}>
+	<button type="button" onClick={Toggle}>{Label}</button>
+	<strong>{Value}</strong>
+</div>

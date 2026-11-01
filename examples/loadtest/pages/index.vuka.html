@@ -1,0 +1,62 @@
+<script lang="go">
+package pages
+
+import (
+	"context"
+
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2/examples/loadtest/components"
+	"github.com/vuka-lang/web/v2/examples/loadtest/store"
+)
+
+// Index is one owner's dashboard: four tiles and twenty rows, 25 instances
+// with the page, every refresh querying Postgres again. ?u= picks the owner.
+type Index struct {
+	ui.Live
+	U       int
+	rows    []store.Order
+	summary store.Summary
+	tick    int
+}
+
+func (p *Index) Title() string { return "Orders" }
+
+@ui.Mount
+func (p *Index) mount(ctx context.Context) error { return p.load(ctx) }
+
+func (p *Index) load(ctx context.Context) error {
+	rows, s, err := store.Dashboard(ctx, p.U, 20)
+	if err != nil {
+		return err
+	}
+	p.rows, p.summary = rows, s
+	return nil
+}
+
+// Refresh is the event the load client sends.
+func (p *Index) Refresh(ctx context.Context) error {
+	p.tick = p.tick + 1
+	return p.load(ctx)
+}
+</script>
+<main>
+	<header>
+		<h1>Orders of owner {U}</h1>
+		<button id="refresh" type="button" onClick={Refresh}>Refresh</button>
+		<span class="tick">{tick}</span>
+	</header>
+	<section class="tiles">
+		<components.Tile label="New" value={summary.New}/>
+		<components.Tile label="Paid" value={summary.Paid}/>
+		<components.Tile label="Shipped" value={summary.Shipped}/>
+		<components.Tile label="Returned" value={summary.Returned}/>
+	</section>
+	<table>
+		<thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th><th>Placed</th><th></th></tr></thead>
+		<tbody>
+			for _, o := range rows {
+				<components.OrderRow key={o.ID} id={o.ID} customer={o.Customer} status={o.Status} cents={o.Cents} placed={o.Placed.Format("2006-01-02 15:04")}/>
+			}
+		</tbody>
+	</table>
+</main>

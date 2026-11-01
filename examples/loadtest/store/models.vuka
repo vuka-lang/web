@@ -1,0 +1,119 @@
+// Package store is the load test's database: orders of a thousand owners.
+package store
+
+import (
+	"context"
+	"fmt"
+	"sync/atomic"
+	"time"
+
+	"github.com/vuka-lang/orm/v2"
+	_ "github.com/vuka-lang/orm/v2/postgres"
+)
+
+var database *orm.DB
+
+// Order is a row of the dashboard.
+type Order struct {
+	orm.Base @orm.Meta{Table: "loadtest_orders"}
+	ID       int64
+	Owner    int       @orm.Index
+	Customer string    @orm.Char{Max: 60}
+	Status   string    @orm.Char{Max: 20}
+	Cents    int
+	Placed   time.Time
+}
+
+// Connect opens the database and fills it when it's empty.
+func Connect(ctx context.Context, url string, owners, perOwner int) error {
+	db := orm.ConnectURL(url)?
+	database = db
+	orm.AddDatabase("main", db, orm.AsDefault())
+	s := db.SQL()
+	_ = s.ExecContext(ctx, `create table if not exists loadtest_orders (
+		id bigserial primary key, owner bigint not null, customer varchar(60) not null,
+		status varchar(20) not null, cents bigint not null, placed timestamptz not null)`)?
+	_ = s.ExecContext(ctx, `create index if not exists loadtest_orders_owner on loadtest_orders (owner, id desc)`)?
+	var n int
+	s.QueryRowContext(ctx, `select count(*) from loadtest_orders`).Scan(&n)?
+	if n == 0 {
+		_ = s.ExecContext(ctx, fmt.Sprintf(`insert into loadtest_orders (owner, customer, status, cents, placed)
+			select o, 'customer ' || i, (array['new','paid','shipped','returned'])[1 + (i %% 4)], 100 + i * 7 %% 90000, now() - (i || ' minutes')::interval
+			from generate_series(1, %d) o, generate_series(1, %d) i`, owners, perOwner))?
+		_ = s.ExecContext(ctx, `analyze loadtest_orders`)?
+	}
+	return nil
+}
+
+// Summary is what the dashboard's tiles show.
+type Summary struct {
+	New, Paid, Shipped, Returned int
+}
+
+// Dashboard is one owner's latest orders and their counts: the two queries
+// each refresh runs, timed for the server's stats.
+func Dashboard(ctx context.Context, owner, n int) ([]Order, Summary, error) {
+	start := time.Now()
+	defer func() { DBTime.Observe(time.Since(start)) }()
+	rows := Order.Objects.Filter(Order.Owner.Eq(owner)).OrderBy(Order.ID.Desc()).Limit(n).All(ctx)?
+	var s Summary
+	for _, st := range []struct {
+		name string
+		to   *int
+	}{{"new", &s.New}, {"paid", &s.Paid}, {"shipped", &s.Shipped}, {"returned", &s.Returned}} {
+		c := Order.Objects.Filter(Order.Owner.Eq(owner), Order.Status.Eq(st.name)).Count(ctx)?
+		*st.to = int(c)
+	}
+	return rows, s, nil
+}
+
+// Check is what a LiveCheck runs: is the page's owner still allowed.
+func Check(ctx context.Context, owner int) error {
+	start := time.Now()
+	defer func() { CheckTime.Observe(time.Since(start)) }()
+	var one int
+	return database.SQL().QueryRowContext(ctx, `select 1 from loadtest_orders where owner = $1 limit 1`, owner).Scan(&one)
+}
+
+// Histogram counts durations in powers of two of microseconds.
+type Histogram struct {
+	buckets [32]atomic.Int64
+}
+
+// DBTime and CheckTime are the time spent in Dashboard and in Check.
+var DBTime, CheckTime Histogram
+
+func (h *Histogram) Observe(d time.Duration) {
+	us := d.Microseconds()
+	i := 0
+	for us > 0 && i < len(h.buckets)-1 {
+		us >>= 1
+		i++
+	}
+	h.buckets[i].Add(1)
+}
+
+// Snapshot is the histogram's count and its quantiles' upper bounds, in ms.
+func (h *Histogram) Snapshot() map[string]float64 {
+	var total int64
+	var counts [32]int64
+	for i := range counts {
+		counts[i] = h.buckets[i].Load()
+		total += counts[i]
+	}
+	out := map[string]float64{"count": float64(total)}
+	for _, q := range []struct {
+		name string
+		at   float64
+	}{{"p50", .5}, {"p99", .99}, {"p999", .999}, {"max", 1}} {
+		var seen int64
+		for i, c := range counts {
+			seen += c
+			if float64(seen) >= q.at*float64(total) {
+				out[q.name] = float64(int64(1)<<i) / 1000
+				break
+			}
+		}
+	}
+	return out
+}
