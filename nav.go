@@ -31,6 +31,10 @@ import (
 //	Vk-Reload-Detail  in development, why in words, for the browser's
 //	           console and the toolbar (the terminal says it too, once)
 //
+// The request may carry Vk-Styled: the document already holds the app's
+// stylesheet, which the build names too, so the reply leaves it out — in
+// development it is inlined, most of the reply.
+//
 // A response without Vk-Page (a redirect elsewhere, a file, JSON, a page
 // the app wrote itself) is the browser's to load too. Nothing in the
 // request is trusted for auth or rendering: the header only picks the
@@ -41,6 +45,7 @@ const (
 	navLiveHeader  = "Vk-Live"
 	navReload      = "Vk-Reload"
 	navReloadWhy   = "Vk-Reload-Detail"
+	navStyled      = "Vk-Styled"
 )
 
 // navigation reports whether r is the runtime fetching a page to patch in
@@ -184,12 +189,22 @@ func (a *App) warnFullLoad(r *http.Request, why, what, detail string) {
 	slog.Log(r.Context(), level, "web: navigation to "+r.URL.Path+" loads in full: "+detail)
 }
 
-// varyNav adds NavigateHeader to h's Vary, once.
+// varyNav adds NavigateHeader and navStyled to h's Vary, once.
 func varyNav(h http.Header) {
-	if !headerHasToken(h, "Vary", NavigateHeader) {
-		h.Add("Vary", NavigateHeader)
+	var missing []string
+	for _, name := range []string{NavigateHeader, navStyled} {
+		if !headerHasToken(h, "Vary", name) {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		h.Add("Vary", strings.Join(missing, ", "))
 	}
 }
+
+// styled reports whether r is a navigation from a document already
+// holding the app's stylesheet.
+func styled(r *http.Request) bool { return navigation(r) && r.Header.Get(navStyled) != "" }
 
 // navWriter makes a navigation's response private unless the route said
 // otherwise.
