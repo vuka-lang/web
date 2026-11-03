@@ -194,6 +194,7 @@ func (a *App) formPost(rq *request, n ui.Node) {
 		a.writeError(w, r, errNoForm, true)
 		return
 	}
+	formFiles(rq.ctx, r, r.PostForm)
 	end := a.span(rq.ctx, "render", "page")
 	s := live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
 	defer s.Close()
