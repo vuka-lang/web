@@ -2375,6 +2375,7 @@
   function fetched(href, ahead) {
     const ctl = typeof AbortController === "function" ? new AbortController() : null;
     const headers = { "Vk-Navigate": build };
+    if (document.querySelector('style[data-vk-app], link[rel="stylesheet"][href^="/_vuka/app.css"]')) headers["Vk-Styled"] = "1"; // the reply leaves the stylesheet out
     if (ahead) headers.Purpose = "prefetch"; // the server parks a live page's session as long as the runtime keeps the reply
     const p = fetch(href, { headers, credentials: "same-origin", signal: ctl ? ctl.signal : undefined }).then(reply);
     p.abort = () => { if (ctl) ctl.abort(); };

@@ -181,7 +181,7 @@ func (a *App) linkCSS(r *http.Request, html []byte) []byte {
 // headTags is what linkCSS adds to html.
 func (a *App) headTags(r *http.Request, html []byte) string {
 	var tags string
-	if a.css != nil && !a.css.present(html) {
+	if a.css != nil && !a.css.present(html) && !styled(r) {
 		tags = a.css.headTags()
 	}
 	if a.assets != nil && !bytes.Contains(html, []byte(loaderPath)) {

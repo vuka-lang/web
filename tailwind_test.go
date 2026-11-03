@@ -290,3 +290,74 @@ func TestCSSInlinedInDev(t *testing.T) {
 		t.Fatalf("present (inline): %s", tags)
 	}
 }
+
+// TestNavigationLeavesStylesheet: a navigation from a document holding the
+// stylesheet (Vk-Styled) gets the page without it — in development the
+// stylesheet is inlined, most of the reply; any other request still gets it.
+func TestNavigationLeavesStylesheet(t *testing.T) {
+	check := func(t *testing.T, app *App, has func(string) bool) {
+		t.Helper()
+		h := app.Handler()
+		nav := []string{NavigateHeader, app.buildID()}
+		if _, body, _ := do(t, h, "GET", "/doc", "", nav...); !has(body) {
+			t.Errorf("a navigation without Vk-Styled lacks the stylesheet: %s", body)
+		}
+		_, body, hdr := do(t, h, "GET", "/doc", "", append(nav, navStyled, "1")...)
+		if has(body) || strings.Contains(body, "app-css.js") || !strings.Contains(body, "hi") {
+			t.Errorf("a navigation from a styled document: %s", body)
+		}
+		if !headerHasToken(hdr, "Vary", navStyled) {
+			t.Errorf("the reply doesn't vary on %s: %v", navStyled, hdr.Values("Vary"))
+		}
+		if _, body, _ := do(t, h, "GET", "/doc", "", navStyled, "1"); !has(body) {
+			t.Errorf("a page load claiming Vk-Styled lacks the stylesheet: %s", body)
+		}
+	}
+	t.Run("built", func(t *testing.T) {
+		withCSS(t, ".text-red-500{color:red}")
+		check(t, cssApp(), func(body string) bool { return linkRE.MatchString(body) })
+	})
+	t.Run("development", func(t *testing.T) {
+		withCSS(t, ".built{}")
+		file := filepath.Join(t.TempDir(), "app.css")
+		t.Setenv(CSSEnv, file)
+		os.WriteFile(file, []byte(".dev{color:red}"), 0o644)
+		app := cssApp()
+		time.Sleep(150 * time.Millisecond)
+		check(t, app, func(body string) bool { return styleRE.MatchString(body) })
+	})
+}
+
+// TestBrowserNavigationKeepsStylesheet: in development a page moving in
+// place over HTTP is sent without the inline stylesheet, and stays styled
+// by the one its document holds.
+func TestBrowserNavigationKeepsStylesheet(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "app.css")
+	os.WriteFile(file, []byte(".red{color:rgb(255, 0, 0)}"+strings.Repeat(".unused{}", 1000)), 0o644)
+	t.Setenv(CSSEnv, file)
+	app := New(Only("none"))
+	page := func(name, to string) func() ui.Node {
+		return func() ui.Node {
+			return doc(`<p id="name" class="red">` + name + `</p><a data-vk-link href="` + to + `">next</a>`)
+		}
+	}
+	app.Get("/one", page("one", "/two"))
+	app.Get("/two", page("two", "/one"))
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	defer app.Stop(context.Background())
+	p := chrome.Launch(t).Visit(srv.URL + "/one")
+	p.Eval(`window.marker = 1`, nil)
+	p.Click("a")
+	p.WaitText("#name", "two")
+	var got any
+	p.Eval(`[window.marker, document.querySelectorAll('style[`+cssInlineMark+`]').length, getComputedStyle(document.getElementById("name")).color,
+		performance.getEntriesByType("resource").filter((e) => e.name.endsWith("/two")).map((e) => e.decodedBodySize)[0]]`, &got)
+	g, _ := got.([]any)
+	if len(g) != 4 || g[0] != float64(1) || g[1] != float64(1) || g[2] != "rgb(255, 0, 0)" {
+		t.Fatalf("after moving in place: %v", got)
+	}
+	if size, _ := g[3].(float64); size == 0 || size > 2000 {
+		t.Errorf("the navigation's reply is %v bytes: the stylesheet came with it?", g[3])
+	}
+}
