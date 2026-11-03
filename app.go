@@ -54,6 +54,7 @@ type App struct {
 	csrf           *http.CrossOriginProtection
 	csrfBypass     []string     // CSRFBypass's patterns
 	formStore      ui.FormStore // FormStore's; nil: ui's, in memory
+	fileStore      ui.FileStore // FileStore's; nil: ui's, a directory of this machine
 	sessionCookies []string     // SessionCookies'
 	cors           []*corsRule  // CORS's
 	tokenOnly      []string     // TokenOnly's prefixes
@@ -500,6 +501,7 @@ func (a *App) build() (http.Handler, error) {
 	lastApp.Store(a)
 	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(serveLiveJS))
 	a.router.Handle(http.MethodGet, liveSocket, http.HandlerFunc(a.serveLive))
+	a.router.Handle(http.MethodPost, uploadPath, http.HandlerFunc(a.serveUpload))
 	a.routeCSS()
 	if a.assets == nil {
 		a.assets = distAssets(a.frontends)

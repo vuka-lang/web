@@ -641,9 +641,86 @@
     if (form.vkBusy && (form.getAttribute("data-vk-submit") || "prevent") === "prevent") return;
     postForm(form, "submit", e.submitter);
   });
+  // File fields (ui.File, data-vk-file): a chosen file is sent at once to
+  // the app's upload route with its field's ticket, a progress bar showing
+  // how far it got. The reference the answer carries goes in the field's
+  // hidden input, which the form sends instead of the file, and the field
+  // shows the file's name; a refusal ("max", "accept", "failed") goes in
+  // its _vk_file_err input instead. Either way the server is told, as a
+  // field's change. A submit waits for its form's uploads.
+  const uploading = new Map(), held = new Map(); // form → uploads in flight, the submit waiting for them
+  document.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t && t.tagName === "INPUT" && t.type === "file" && (t.name || "").startsWith("_vk_file.") && t.files && t.files.length) uploadFile(t);
+  });
+  document.addEventListener("submit", (e) => {
+    const form = e.target;
+    if (!form || form.tagName !== "FORM" || !uploading.get(form)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    held.set(form, e.submitter || null);
+  }, true);
+  function uploadFile(input) {
+    const box = input.closest("[data-vk-file]"), form = input.form, file = input.files[0];
+    if (!box || !form) return;
+    const path = box.getAttribute("data-vk-file");
+    const field = (name) => Array.from(box.querySelectorAll('input[type="hidden"]')).find((i) => i.name === name);
+    const ref = field(path), err = field("_vk_file_err." + path), ticket = field("_vk_upload." + path);
+    const bar = box.querySelector("progress"), shown = box.querySelector(".vk-file__held"), csrf = form.querySelector('input[name="_vk_csrf"]');
+    if (!ref || !err || !ticket) return;
+    if (input.vkUpload) {
+      const old = input.vkUpload;
+      input.vkUpload = null;
+      old.abort();
+    }
+    const xhr = input.vkUpload = new XMLHttpRequest();
+    uploading.set(form, (uploading.get(form) || 0) + 1);
+    if (bar) { bar.hidden = false; bar.removeAttribute("value"); }
+    const settle = (refusal, up) => {
+      if (input.vkUpload === xhr) {
+        input.vkUpload = null;
+        if (bar) bar.hidden = true;
+        ref.value = up ? up.ref : "";
+        err.value = refusal || "";
+        input.value = "";
+        input.classList.toggle("vk-file__input--held", !!up);
+        if (shown) {
+          shown.hidden = !up;
+          const name = shown.querySelector(".vk-file__name");
+          if (name && up) name.textContent = up.name;
+        }
+        markUsed(form, ref);
+        if (httpForm(form)) { if (form.hasAttribute("data-vk-checks")) postForm(form, "check"); }
+        else ref.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      const n = (uploading.get(form) || 1) - 1;
+      if (n > 0) return void uploading.set(form, n);
+      uploading.delete(form);
+      if (!held.has(form)) return;
+      const s = held.get(form);
+      held.delete(form);
+      form.requestSubmit(s && s.isConnected && s.form === form ? s : undefined);
+    };
+    xhr.upload.onprogress = (e) => { if (bar && e.lengthComputable) bar.value = Math.round(e.loaded / e.total * 100); };
+    xhr.onload = () => {
+      let body = null;
+      try { body = JSON.parse(xhr.responseText); } catch (_) {}
+      if (xhr.status === 200 && body && body.ref) settle("", body);
+      else settle(body && body.error || "failed");
+    };
+    xhr.onerror = xhr.ontimeout = () => settle("failed");
+    xhr.onabort = () => settle("failed");
+    xhr.open("POST", new URL("upload", script.src).href);
+    xhr.setRequestHeader("Vk-Upload", ticket.value);
+    xhr.setRequestHeader("Vk-Upload-Name", encodeURIComponent(file.name));
+    if (csrf && csrf.value) xhr.setRequestHeader("X-CSRF-Token", csrf.value);
+    if (file.type) xhr.setRequestHeader("Content-Type", file.type);
+    xhr.send(file);
+  }
   function postForm(form, mode, submitter) {
     let fd;
     try { fd = new FormData(form, submitter || undefined); } catch (_) { fd = new FormData(form); }
+    for (const k of [...fd.keys()]) if (k.startsWith("_vk_file.")) fd.delete(k); // sent ahead (uploadFile)
     if (mode === "check") {
       if (form.vkBusy) return; // the submit's reply decides
       fd.set("_vk_check", form.hasAttribute("data-vk-submitted") ? "submitted" : "1");
