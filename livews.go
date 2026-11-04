@@ -588,6 +588,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		}
 		c.syncTopics()
 		c.write(ctx, reply)
+		c.startDeferred(true) // a component the event mounted
 	}
 	c.syncTopics()
 	return true
@@ -943,8 +944,8 @@ func (w withToken) MarshalJSON() ([]byte, error) {
 	return append(b, '}'), nil
 }
 
-// deferredSession is a session whose pages backed by their islands have
-// deferred fields (live.Session.Deferred).
+// deferredSession is a session whose pages and components have deferred
+// fields (live.Session.Deferred).
 type deferredSession interface {
 	Deferred() []*ui.DeferredLoad
 	Loaded(d *ui.DeferredLoad) any
@@ -954,7 +955,8 @@ type deferredSession interface {
 type loaded struct{ d *ui.DeferredLoad }
 
 // startDeferred runs the deferred loads of the page just joined or
-// navigated to, each on its own goroutine with the page's context; each,
+// navigated to, or of the components an event, a broadcast or a load
+// mounted (kept), each on its own goroutine with the page's context; each,
 // done, is applied as a broadcast is. Leaving the page ends its loads,
 // except on a patch (kept): its components stay mounted, and so do the
 // loads they started, which never start again.
@@ -1032,6 +1034,7 @@ func (c *conn) drain(ctx context.Context) bool {
 		}
 		end()
 	}
+	c.startDeferred(true) // a component a broadcast or a load mounted
 	c.syncTopics()
 	return true
 }

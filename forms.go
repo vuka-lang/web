@@ -198,6 +198,7 @@ func (a *App) formPost(rq *request, n ui.Node) {
 	end := a.span(rq.ctx, "render", "page")
 	s := live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
 	defer s.Close()
+	s.SetErrorText(func(err error) string { text, _ := a.liveErrorText(err); return text }) // a deferred group's loader's
 	if _, err := s.Render(); err != nil {
 		end()
 		a.writeError(w, r, err, true)
@@ -233,6 +234,12 @@ func (a *App) formPost(rq *request, n ui.Node) {
 	intent := errors.Is(p.Err, ui.ErrFormIntent)
 	if err := refusedVars(rq.ctx); err != nil {
 		a.WriteError(w, r, err, true)
+		return
+	}
+	// The page has no connection to receive its deferred fields over:
+	// they load before it is sent.
+	if err := s.LoadDeferred(rq.ctx); err != nil {
+		a.writeError(w, r, err, true)
 		return
 	}
 	html := withTitle([]byte(s.HTML()), ui.PageTitle(rq.ctx))
