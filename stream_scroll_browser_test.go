@@ -244,7 +244,7 @@ func TestBrowserStreamScrollTop(t *testing.T) {
 	g.release <- struct{}{}
 	v.span(161, 200)
 	v.stays(181, y)
-	wantCall(t, g, "newer 200") // nothing newer: the end
+	wantCall(t, g, "newer 200")     // nothing newer: the end
 	g.none(t, 400*time.Millisecond) // row 161 is far above the view
 
 	v.eval(`scrollTo(0, 0)`)
