@@ -57,6 +57,7 @@
 	{{- range .}}<details class="msg {{.Tone}}" data-ref="{{.Ref}}"{{if .Err}} data-err{{end}} data-seq="{{.Seq}}">
 		<summary><span class="type t-{{.Type}}">{{.Type}}</span> <code>{{.Subject}}</code>
 			<span class="meta">{{.Ms}} · {{.Q}} q · {{.Bytes}} <span class="dim">{{.Clock}}</span></span>
+			{{- range .Streams}}<div class="stream dim"><code>{{.}}</code></div>{{end}}
 			{{- if .Err}}<div class="errtext">{{.Err}}</div>{{end}}</summary>
 		<div class="msgbody">
 			{{- if .Frames}}<div class="wire" data-wire="{{.Seq}}"><p class="dim">Loading the frames…</p></div>
@@ -87,6 +88,7 @@
 	</table>{{end}}
 	{{- if .Rows}}<ul class="changes">{{range $i, $r := .Rows}}{{if lt $i 5}}<li><code>{{$r.Path}}</code> {{if $r.HasOld}}<code class="old">{{markOld $r.Old $r.New}}</code> <span class="arrow">→</span> <code class="new">{{markNew $r.Old $r.New}}</code>{{else}}<code class="new">"{{$r.New}}"</code>{{end}}{{if $r.Note}} <span class="dim">{{$r.Note}}</span>{{end}}</li>{{end}}{{end}}
 		{{- if gt (len .Rows) 5}}<li class="dim">{{sub (len .Rows) 5}} more in Diff</li>{{end}}</ul>{{end}}
+	{{- if .Streams}}<p class="jslist"><b>Streams</b> {{range $i, $s := .Streams}}{{if $i}}, {{end}}<code>{{$s}}</code>{{end}}</p>{{end}}
 	{{- if .JS}}<p class="jslist"><b>JS pushed</b> {{range $i, $j := .JS}}{{if $i}}, {{end}}<code>{{$j}}</code>{{end}}</p>{{end}}{{end}}
 	{{- end}}
 </div>
