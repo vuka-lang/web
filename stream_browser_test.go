@@ -26,6 +26,7 @@ type feedPage struct {
 	Log   *keyedLog
 	Start []feedItem
 	Max   int
+	Trim  string // the end Max trims: "start", "end", else the end away from the rows
 	title string
 	next  int
 	items ui.Stream[feedItem]
@@ -35,7 +36,12 @@ func (f *feedPage) LiveSchema(l *ui.LiveSchema) { l.Mount(f.mount) }
 
 func (f *feedPage) mount() error {
 	f.title, f.next = "Feed", 100
-	f.items.Limit(f.Max)
+	switch l := f.items.Limit(f.Max); f.Trim {
+	case "start":
+		l.TrimStart()
+	case "end":
+		l.TrimEnd()
+	}
 	f.items.Reset(f.Start...)
 	return nil
 }

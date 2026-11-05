@@ -536,7 +536,8 @@ func (c *conn) write(ctx context.Context, m any) {
 func (c *conn) handle(ctx context.Context, data []byte) bool {
 	var m struct {
 		live.ClientMessage
-		V int `json:"v,omitempty"` // the newest protocol version the page speaks (a join's)
+		V   int      `json:"v,omitempty"`   // the newest protocol version the page speaks (a join's)
+		Ext []string `json:"ext,omitempty"` // and the v2 extensions it speaks: "stream"
 	}
 	if err := json.Unmarshal(data, &m); err != nil {
 		c.write(ctx, live.ServerMessage{Type: live.Error, Error: "live: bad message"})
@@ -551,7 +552,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 			c.s.Close()
 			c.s = nil
 		}
-		reply, code := c.join(ctx, m.Ref, m.V)
+		reply, code := c.join(ctx, m.Ref, m.V, m.Ext)
 		if code == 0 && c.varsRefused() {
 			return false
 		}
@@ -704,7 +705,7 @@ func (w withError) MarshalJSON() ([]byte, error) {
 // version v when the app can (else v1). When the GET's own session is still
 // parked under the token and the same identity joins in time, it is adopted
 // instead of mounting the page's components again (livepark.go).
-func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode) {
+func (c *conn) join(ctx context.Context, ref, v int, ext []string) (any, websocket.StatusCode) {
 	j, rec, err := c.run(ctx, c.uri, "join")
 	if err != nil {
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: errBadToken.Error()}, closeReload
@@ -723,10 +724,10 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
-	if s := c.adopt(j, v); s != nil {
+	if s := c.adopt(j, v, ext); s != nil {
 		c.s = s
 	} else {
-		c.s = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax))
+		c.s = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax), ext...)
 	}
 	if e, ok := c.s.(interface{ SetErrorText(func(error) string) }); ok {
 		e.SetErrorText(c.errorText)
@@ -746,7 +747,7 @@ func (c *conn) join(ctx context.Context, ref, v int) (any, websocket.StatusCode)
 // adoption is an optimization, never a dependency. The route still ran:
 // only its render's components are kept instead of mounting again, with
 // the join's context and render from here on.
-func (c *conn) adopt(j *join, v int) liveproto.Session {
+func (c *conn) adopt(j *join, v int, ext []string) liveproto.Session {
 	a := c.app
 	if a.adoptWindow <= 0 {
 		return nil
@@ -764,7 +765,7 @@ func (c *conn) adopt(j *join, v int) liveproto.Session {
 		p.close()
 		return nil
 	}
-	s, err := liveproto.Adopt(p.s, j.ctx, c.render(j.page), ver)
+	s, err := liveproto.Adopt(p.s, j.ctx, c.render(j.page), ver, ext...)
 	if err != nil {
 		p.close()
 		return nil

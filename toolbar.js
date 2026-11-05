@@ -38,6 +38,7 @@
 
   const calls = [{ id: pageID, label: "page " + location.pathname + location.search, page: true }];
   const browserErrors = []; // failures the server never saw: a push timing out, a dropped connection
+  const streamProblems = []; // stream batches the runtime ignored or found out of step (vk:stream)
   let page = null, build = { state: "" }, selected = pageID, tab = recall("tab") || "Request";
   let buildAt = 0;
   let current = pageID; // the record of the page on screen: a live navigation moves it
@@ -135,7 +136,7 @@
     if (ide) ide.save();
     body.innerHTML = r.html;
     mountIDE();
-    if (id === current) addBrowserErrors();
+    if (id === current) { addBrowserErrors(); addStreamProblems(); }
     for (const d of body.querySelectorAll("details")) if (open.includes(d.dataset.seq || d.dataset.ref)) { d.open = true; wire(d); }
     show(body.querySelector(`[data-tab="${CSS.escape(tab)}"]`) ? tab : "Request");
     const p = body.querySelector(".panel:not([hidden])");
@@ -159,6 +160,30 @@
       if (e.ref && seen.has(String(e.ref))) continue;
       live.insertAdjacentHTML("afterbegin", `<details class="msg err"><summary><span class="type t-browser">browser</span>` +
         ` <code>${esc(e.message)}</code><span class="meta dim">${esc(e.at)}</span></summary></details>`);
+    }
+  }
+
+  // addStreamProblems draws, red, a stream batch the runtime ignored or
+  // found out of step under the message that carried it: the one whose
+  // stream line names the batch, else the reply to the event, else as a
+  // failure of its own.
+  function addStreamProblems() {
+    const live = body.querySelector('[data-panel="Live"] .live');
+    if (!live) return;
+    for (const p of streamProblems) {
+      const text = `${p.id} ${p.stream} ${p.batch}: ${p.problem}` + (p.applied ? `, the browser applied ${p.applied}` : "");
+      const line = `<div class="stream errtext" data-stream-problem><code>${esc(text)}</code></div>`;
+      const lines = [...live.querySelectorAll("details.msg .stream code")];
+      const at = lines.find((c) => c.textContent.startsWith(p.id + " ") && c.textContent.includes(` ${p.stream} ${p.batch}:`));
+      const msg = at ? at.closest("details.msg") : p.ref && live.querySelector(`details.msg[data-ref="${CSS.escape(String(p.ref))}"]`);
+      if (msg) {
+        msg.classList.add("err");
+        if (at) at.parentElement.insertAdjacentHTML("afterend", line);
+        else msg.querySelector("summary").insertAdjacentHTML("beforeend", line);
+        continue;
+      }
+      live.insertAdjacentHTML("afterbegin", `<details class="msg err"><summary><span class="type t-browser">browser</span>` +
+        ` <code>stream</code><span class="meta dim">${esc(p.at)}</span>${line}</summary></details>`);
     }
   }
 
@@ -267,6 +292,12 @@
   document.addEventListener("vk:error", (e) => {
     const d = e.detail || {};
     browserErrors.push({ message: d.message || String(d.error || "error"), ref: d.ref, at: new Date().toLocaleTimeString() });
+    if (selected === current) reload();
+  });
+
+  document.addEventListener("vk:stream", (e) => {
+    streamProblems.push(Object.assign({ at: new Date().toLocaleTimeString() }, e.detail || {}));
+    if (streamProblems.length > 50) streamProblems.shift();
     if (selected === current) reload();
   });
 

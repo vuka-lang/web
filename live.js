@@ -57,7 +57,9 @@
 
   // join asks for the page in protocol v2 (render trees); a server that
   // doesn't speak it answers in v1 (HTML).
-  const join = () => ws.send(JSON.stringify({ type: "join", ref: ++ref, v: 2 }));
+  // ext: the v2 extensions the runtime speaks — "stream", a stream
+  // container's attributes as one compact dynamic (tree, streamAttrs).
+  const join = () => ws.send(JSON.stringify({ type: "join", ref: ++ref, v: 2, ext: ["stream"] }));
 
   // idle follows the server closing a page that sat idle (dropping its
   // session): it connects again at once when the page is in view, else
@@ -81,6 +83,8 @@
   }
 
   function receive(m) {
+    replying = m.ref || 0;
+    carried.clear();
     const b = m.ref && busy.get(m.ref), n = nav && m.ref === nav.ref ? nav : null;
     if (m.ref > answered) answered = m.ref; // the server handles messages in order: it has seen every one up to m.ref
     switch (m.type) {
@@ -356,8 +360,11 @@
     const id = form.getAttribute("data-vk-form");
     const bad = document.getElementById(id + "-summary") || form.querySelector('[aria-invalid="true"]');
     const t = document.title;
+    // a stream row's form takes focus only from itself, or from nowhere: the
+    // visitor may be typing in another row's while its reply comes
+    const f = document.activeElement, mine = !form.hasAttribute("data-vk-row-form") || !f || f === document.body || form.contains(f);
     if (bad) {
-      bad.focus();
+      if (mine) bad.focus();
       if (!t.startsWith("Error: ")) document.title = "Error: " + t;
     } else if (t.startsWith("Error: ")) document.title = t.slice(7);
   }
@@ -798,8 +805,9 @@
     for (const e of rep.errors || []) putError(form, e, rep.words || {});
     const sid = rep.form + "-summary", old = document.getElementById(sid);
     // the summary takes its place: where a <ui.Summary/> is (-slot), else
-    // the form's top (-at); going, it leaves the place behind
-    if (rep.summary) {
+    // the form's top (-at); going, it leaves the place behind. A row's form
+    // rendered with NoSummary shows none.
+    if (rep.summary && !form.hasAttribute("data-vk-no-summary")) {
       const sum = summaryOf(sid, rep.summary);
       const at = old || document.getElementById(sid + "-slot") || document.getElementById(sid + "-at");
       sum.setAttribute("data-vk-from", old ? old.getAttribute("data-vk-from") || sid + "-at" : at ? at.id : sid + "-at");
@@ -828,6 +836,17 @@
       submitted(form);
     }
     emit("vk:form", { form, errors: rep.errors || [], submit });
+  }
+  // rowReport puts a stream row's form's report in place: the row isn't
+  // rendered again (the server forgets it), so its errors come as the
+  // form's report, which applyReport places without touching a field. The
+  // form is the one the report names, the submit's own when it is still
+  // there.
+  function rowReport(el, rep) {
+    const own = el && el.closest && el.closest("form[data-vk-form]");
+    const form = own && own.getAttribute("data-vk-form") === rep.form ? own : document.getElementById(rep.form);
+    if (!form || form.tagName !== "FORM" || !form.hasAttribute("data-vk-row-form")) return;
+    applyReport(form, rep, true);
   }
   function summaryOf(id, s) {
     const sum = document.createElement("div"), alert = document.createElement("div"), h = document.createElement("h2"), ul = document.createElement("ul");
@@ -1194,7 +1213,8 @@
   // starts with a reset; one further ahead is out of step, and the page
   // joins again.
   const streams = new WeakMap(); // container → { gen, n }: the batch it applied
-  let outOfStep = false;
+  let outOfStep = false, replying = 0; // the ref of the reply being applied
+  const carried = new Set(); // the batches the reply being applied carries (v2: decoded by tree)
   const batchOf = (el) => {
     const [gen, n] = (el.getAttribute("data-vk-batch") || "").split(".");
     return { gen, n: +n || 0 };
@@ -1218,10 +1238,18 @@
     met(el);
     const had = streams.get(el), b = batchOf(next);
     attrs(el, next);
-    if (b.gen === had.gen && b.n <= had.n) return counted(el), viewport(el); // applied
+    if (b.gen === had.gen && b.n <= had.n) {
+      // applied: the container morphed again. A batch the reply carried
+      // (every one v1 sends) no later than the one it applied is the
+      // server's mistake, or a reply delivered twice.
+      const nb = next.getAttribute("data-vk-batch");
+      if (next.hasAttribute("data-vk-ops") && (!trees || carried.has(nb))) streamProblem(el, b, had, "ignored");
+      return counted(el), viewport(el);
+    }
     if (b.gen === had.gen && b.n > had.n + 1) {
       outOfStep = true;
       warn("stream " + el.getAttribute("data-vk-stream") + ": batch " + b.gen + "." + b.n + " after " + had.gen + "." + had.n + ", out of step");
+      streamProblem(el, b, had, "out of step");
       return counted(el);
     }
     let ops = [];
@@ -1243,6 +1271,9 @@
   // its order. A limit trims from the end away from where rows went in.
   function batch(el, next, ops, limit) {
     const fresh = new Map(), held = new Map();
+    // the end the limit trims: data-vk-trim's (TrimStart, TrimEnd), else the
+    // end away from where a row went in
+    const fixed = next.getAttribute("data-vk-trim"), trimmed = (away) => (fixed === "start" ? firstRow : fixed === "end" ? lastRow : away)(el);
     for (const c of Array.from(next.children)) if (rowKey(c) !== null) fresh.set(rowKey(c), c);
     for (const c of rowsOf(el)) held.set(rowKey(c), c);
     const drop = (c) => { if (c) { held.delete(rowKey(c)); c.remove(); } };
@@ -1261,7 +1292,10 @@
           break;
         case "insert": {
           const n = fresh.get(k);
-          if (!n) return warn("stream " + el.getAttribute("data-vk-stream") + ": a batch inserts " + k + " and doesn't carry it");
+          if (!n) {
+            streamProblem(el, batchOf(next), streams.get(el), "inserts " + k + " without its row");
+            return warn("stream " + el.getAttribute("data-vk-stream") + ": a batch inserts " + k + " and doesn't carry it");
+          }
           let c = held.get(k);
           if (c && !resetting) return morph(c, n); // in place: it stays, nothing trimmed
           if (c) morph(c, n);
@@ -1269,30 +1303,42 @@
           if (op[2] === "start") {
             const first = firstRow(el);
             if (first !== c) el.insertBefore(c, first);
-            if (limit && held.size > limit) drop(lastRow(el));
+            if (limit && held.size > limit) drop(trimmed(lastRow));
           } else if (typeof op[2] === "number") {
             // before the row at that position (InsertAt), past the rows at the end
             const at = rowsOf(el).filter((r) => r !== c)[Math.max(0, op[2])];
             if (at) el.insertBefore(c, at);
             else if (c !== lastRow(el)) el.insertBefore(c, lastRow(el) ? lastRow(el).nextSibling : null);
-            if (limit && held.size > limit) drop(lastRow(el));
+            if (limit && held.size > limit) drop(trimmed(lastRow));
           } else if (resetting) {
             // after the row the reset put before it: kept rows already in
             // order aren't moved, keeping their focus
             const want = prev ? rowFrom(prev.nextElementSibling, "nextElementSibling") : firstRow(el);
             if (want !== c) el.insertBefore(c, want || (prev ? prev.nextSibling : null));
-            if (limit && held.size > limit) drop(firstRow(el));
+            if (limit && held.size > limit) drop(trimmed(firstRow));
           } else {
             const last = lastRow(el);
             if (last !== c) el.insertBefore(c, last ? last.nextSibling : null);
-            if (limit && held.size > limit) drop(firstRow(el));
+            if (limit && held.size > limit) drop(trimmed(firstRow));
           }
           if (resetting) prev = c;
           break;
         }
       }
     });
-    while (limit && held.size > limit) drop(firstRow(el));
+    while (limit && held.size > limit) drop(trimmed(firstRow));
+  }
+
+  // streamProblem tells the page (and the development toolbar, vk:stream)
+  // of a batch the container ignored — one no later than the one it
+  // applied, which the server should never send — or found out of step, or
+  // that inserts a row it doesn't carry: the reply carrying it is ref's.
+  function streamProblem(el, b, had, problem) {
+    const root = el.closest("[data-vk-id]");
+    emit("vk:stream", {
+      id: root ? root.getAttribute("data-vk-id") : "c0", stream: el.getAttribute("data-vk-stream"),
+      batch: b.gen + "." + b.n, applied: had ? had.gen + "." + had.n : "", problem, ref: replying,
+    });
   }
 
   // counted sets what only the browser knows of a container: how many rows
@@ -1629,7 +1675,10 @@
       return { t: o.t, d: o.d.map(dyn) };
     };
     const dyn = (v) => {
-      if (typeof v === "string") return v;
+      if (typeof v === "string") {
+        if (v.startsWith(' data-vk-stream="')) { const b = /data-vk-batch="([^"]*)"/.exec(v); if (b) carried.add(b[1]); }
+        return v;
+      }
       if (!v || typeof v !== "object") bad("dynamic");
       if (v.r !== undefined) {
         if (v.v !== undefined) strs.set(v.r, v.v);
@@ -1637,6 +1686,7 @@
       }
       if (v.c) return { c: v.c.map(frame) };
       if (v.id !== undefined) return { id: v.id };
+      if (v.st) { carried.add(v.st.b); return streamAttrs(v.st); }
       return frame(v);
     };
     const update = (f, u) => {
@@ -1723,6 +1773,34 @@
       for (const id of held.keys()) if (!keep.has(id)) held.delete(id);
     };
     return { apply, page: () => html("c0", new Set()) };
+  }
+
+  // streamAttrs writes a stream container's attributes back from their
+  // compact form ({"st":…}): what the server renders for the HTTP render, v1
+  // and a join without the extension. Operations are one letter — "r" a
+  // reset, "d" a delete, "e" and "s" an insert at the end or the start, a
+  // number one before that row — and a batch starting with a reset counts
+  // its rows as the server does.
+  const attrText = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&#34;").replace(/'/g, "&#39;");
+  function streamAttrs(st) {
+    const a = (name, v) => " " + name + '="' + attrText(v) + '"';
+    let out = a("data-vk-stream", st.n) + a("data-vk-batch", st.b);
+    if (st.l) out += a("data-vk-limit", st.l);
+    if (st.tr) out += a("data-vk-trim", st.tr === "s" ? "start" : "end");
+    if (!Array.isArray(st.o) || !st.o.length) return out;
+    let rows = 0;
+    const ops = st.o.map((o) => {
+      if (o[0] === "r") return ["reset"];
+      if (o[0] === "d") return ["delete", o[1]];
+      rows++;
+      return ["insert", o[1], typeof o[0] === "number" ? o[0] : o[0] === "s" ? "start" : "end"];
+    });
+    out += a("data-vk-ops", JSON.stringify(ops));
+    if (ops[0][0] === "reset") {
+      if (st.l) rows = Math.min(rows, st.l);
+      out += a("data-vk-rows", rows) + (rows ? "" : " data-vk-empty");
+    }
+    return out;
   }
 
   // patchText applies a token patch: both strings cut before every "<" and
@@ -1941,6 +2019,7 @@
   // differently.
   function applyResult(el, res, ts, mode) {
     if (Array.isArray(res.js)) return run(el, res.js, null, []);
+    if (res.report && typeof res.report === "object") return rowReport(el, res.report);
     for (const t of ts) {
       if (Array.isArray(res.options)) {
         if (t.tagName === "SELECT") setOptions(t, res.options, true);
@@ -2648,6 +2727,8 @@
         if (v !== undefined && v !== null) msg.value = typeof v === "string" ? v : JSON.stringify(v);
       }
       const form = type === "submit" || a.form ? (e && e.target && e.target.closest && e.target.closest("form")) || (el && el.closest("form")) : null;
+      if (form && type === "submit" && form.hasAttribute("data-vk-form") && (form.getAttribute("data-vk-submit") || "prevent") === "prevent" &&
+        [...busy.values()].some((b) => b.form === form)) return; // a struct form's submit in flight: this one is dropped
       if (form) msg.form = formOf(form, type === "submit" && e && e.submitter);
       flush();
       const marks = rec && rec.busy ? rec.busy.splice(0) : [];

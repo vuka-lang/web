@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/vuka-lang/ui/v2/live"
 )
 
 // What a live page's socket messages carried, for the toolbar's Live panel:
@@ -358,6 +360,12 @@ func (d *decoding) value(raw json.RawMessage) any {
 		var id string
 		json.Unmarshal(o["id"], &id)
 		return mInst(id)
+	case o["st"] != nil:
+		// a stream container's attributes, compact (live.ExtStream): the
+		// browser writes them back, and so does the mirror
+		d.dyn += len(raw)
+		s, _ := live.StreamAttrs(o["st"])
+		return s
 	}
 	return ""
 }
@@ -1053,6 +1061,9 @@ func (m *wireMirror) streamLines(insts []instReport) []string {
 			line := fmt.Sprintf("%s %s %s %s: %s", in.ID, in.Type, name, batch, strings.Join(parts, " "))
 			if l := attr("data-vk-limit"); l != "" {
 				line += ", limit " + l
+				if tr := attr("data-vk-trim"); tr != "" {
+					line += " trimming the " + tr
+				}
 			}
 			if close := rowsBytes(h, at+end+1); close >= 0 && ins > 0 {
 				line += ", " + bytesText(close)

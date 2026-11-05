@@ -32,36 +32,44 @@ type Render = func(context.Context) ui.Node
 // V2 replaces the Vuka session for v2 joins when set (a test's stand-in).
 var V2 func(ctx context.Context, render Render) Session
 
-// New is the session of a page that joined asking for protocol version v.
-// The Vuka session answers in the newest version both speak: a session that
-// predates v2 ignores the request and renders in v1, which the page follows.
-func New(ctx context.Context, render Render, v int) Session {
+// New is the session of a page that joined asking for protocol version v,
+// with the v2 extensions ext. The Vuka session answers in the newest
+// version both speak: a session that predates v2 ignores the request and
+// renders in v1, which the page follows; one that predates an extension
+// ignores it.
+func New(ctx context.Context, render Render, v int, ext ...string) Session {
 	if v >= 2 && V2 != nil {
 		return V2(ctx, render)
 	}
-	return native{live.NewSession(ctx, render), v}
+	return native{live.NewSession(ctx, render), v, ext}
 }
 
 // Adopt is the session of a page whose HTTP render's live session was kept
 // for its connection (live.Session.Adopt): its instances, mounted by the
 // render, serve the join without mounting again, speaking protocol version
 // v. ctx and render replace the finished render request's.
-func Adopt(s *live.Session, ctx context.Context, render Render, v int) (Session, error) {
+func Adopt(s *live.Session, ctx context.Context, render Render, v int, ext ...string) (Session, error) {
 	if err := s.Adopt(ctx, render); err != nil {
 		return nil, err
 	}
-	return native{s, v}, nil
+	return native{s, v, ext}, nil
 }
 
 type native struct {
-	s *live.Session
-	v int
+	s   *live.Session
+	v   int
+	ext []string
 }
 
-// Join goes through the session's JSON so that the version travels with the
-// join whether or not this Vuka's ClientMessage has a field for it.
+// Join goes through the session's JSON so that the version and the
+// extensions travel with the join whether or not this Vuka's ClientMessage
+// has fields for them.
 func (x native) Join(ref int) any {
-	b, _ := json.Marshal(map[string]any{"type": live.Join, "ref": ref, "v": max(x.v, 1)})
+	join := map[string]any{"type": live.Join, "ref": ref, "v": max(x.v, 1)}
+	if len(x.ext) > 0 {
+		join["ext"] = x.ext
+	}
+	b, _ := json.Marshal(join)
 	var m live.ServerMessage
 	if err := json.Unmarshal(x.s.HandleJSON(b), &m); err != nil {
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: "live: " + err.Error()}
@@ -71,7 +79,7 @@ func (x native) Join(ref int) any {
 
 // Native reports whether the Vuka live session speaks protocol v2.
 func Native() bool {
-	x := native{live.NewSession(context.Background(), func(context.Context) ui.Node { return ui.Text("") }), 2}
+	x := native{live.NewSession(context.Background(), func(context.Context) ui.Node { return ui.Text("") }), 2, nil}
 	defer x.Close()
 	b, _ := json.Marshal(x.Join(1))
 	return bytes.Contains(b, []byte(`"trees"`))
