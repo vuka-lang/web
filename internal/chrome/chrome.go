@@ -558,3 +558,19 @@ func (p *Page) Front() {
 	p.b.t.Helper()
 	p.front()
 }
+
+// Compose starts or updates an input method's composition of text in the
+// element with the focus (compositionstart, compositionupdate, input
+// events), the caret at its end; Commit ends it.
+func (p *Page) Compose(text string) error {
+	p.front()
+	n := len([]rune(text))
+	return p.b.call(p.session, "Input.imeSetComposition", map[string]any{"text": text, "selectionStart": n, "selectionEnd": n}, nil)
+}
+
+// Commit ends a composition, inserting text (compositionend).
+func (p *Page) Commit(text string) {
+	p.b.t.Helper()
+	p.front()
+	p.must("Input.insertText", map[string]any{"text": text}, nil)
+}
