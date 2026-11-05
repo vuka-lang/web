@@ -82,6 +82,7 @@
 
   function receive(m) {
     const b = m.ref && busy.get(m.ref), n = nav && m.ref === nav.ref ? nav : null;
+    if (m.ref > answered) answered = m.ref; // the server handles messages in order: it has seen every one up to m.ref
     switch (m.type) {
       case "render":
         joined = true;
@@ -126,7 +127,7 @@
           join();
           break;
         }
-        if (b && b.form && !m.error && b.form.isConnected && !b.form.hasAttribute("data-vk-form")) b.form.reset();
+        if (b && b.form && !m.error && b.form.isConnected && !b.form.hasAttribute("data-vk-form")) resetSent(b.form, b.shows);
         if (b && b.form && b.form.isConnected && b.form.hasAttribute("data-vk-form") && !b.aborted) submitted(b.form);
         if (m.error) fail(m.error, m.ref);
         if (n) arrived(n, m);
@@ -328,6 +329,24 @@
     msg.form = formOf(form, e.type === "submit" ? e.submitter : undefined);
     msg.form._vk_seq = [String(++formSeq)];
     return true;
+  }
+
+  // resetSent resets a form once its submit succeeded: all of it, or,
+  // when the visitor changed fields since it was sent (typing the next
+  // message), the other fields only.
+  function resetSent(form, shows) {
+    const els = form.elements ? Array.from(form.elements) : [];
+    const changed = els.filter((c, i) => isField(c) && (!shows || shows[i] !== fieldShows(c)));
+    if (!changed.length || !shows || shows.length !== els.length) return void form.reset();
+    for (const c of els) {
+      if (!isField(c) || changed.includes(c)) continue;
+      if (checkable(c)) c.checked = c.defaultChecked;
+      else if (c.tagName === "SELECT") {
+        let any = false;
+        for (const o of c.options) any = (o.selected = o.defaultSelected) || any;
+        if (!any && !c.multiple && c.options.length) c.selectedIndex = 0;
+      } else if (c.type !== "hidden" && c.value !== c.defaultValue) c.value = c.defaultValue;
+    }
   }
 
   // submitted follows a struct form's submit reply: a failed submit moves
@@ -901,9 +920,9 @@
     if (!ws || !joined || nav) return; // a page on its way out sends nothing
     msg.ref = ++ref;
     const f = document.activeElement;
-    sentField = f && isField(f) ? { el: f, shows: fieldShows(f) } : null;
+    sentField = f && isField(f) ? { el: f, shows: fieldShows(f), ref: msg.ref } : null;
     if (el && (form || msg.event === "click" || edge(msg.event))) {
-      busy.set(msg.ref, { el, form });
+      busy.set(msg.ref, { el, form, shows: form && form.elements && Array.from(form.elements, (c) => isField(c) ? fieldShows(c) : null) });
       el.setAttribute("aria-busy", "true");
     }
     ws.send(JSON.stringify(msg));
@@ -956,26 +975,65 @@
       return keptText(el, next) || keptKids(el, next) || children(el, next);
     }
     const seen = fieldState(el), before = serverValue(el), fresh = regen && regen.contains(el);
-    const typing = !fresh && el === document.activeElement && !(sentField && sentField.el === el && sentField.shows === fieldShows(el));
+    const shown = !fresh && el === document.activeElement && el !== composing && sentField && sentField.el === el && sentField.shows === fieldShows(el);
+    const unanswered = shown && sentField.ref > answered;
+    const typing = !fresh && el === document.activeElement && (!shown || unanswered);
     attrs(el, next);
     if (el.tagName === "TEXTAREA") {
       if (el.textContent !== next.textContent) el.textContent = next.textContent;
     } else if (!(el.tagName === "SELECT" && keptKids(el, next))) {
       children(el, next); // a select keeps the options a script (an Options command) put in it while the server renders the ones it did
     }
-    if (typing) restore(el, seen);
-    else if (fresh || serverValue(el) !== before) takeServer(el);
+    if (typing) {
+      restore(el, seen);
+      // a value the server changed before it had the field's event: taken
+      // with the answer, if the field still shows what it sent
+      if (unanswered && serverValue(el) !== before) heldServer.add(el);
+      else if (!unanswered) heldServer.delete(el);
+    } else if (fresh || serverValue(el) !== before || heldServer.has(el)) takeServer(el);
+    if (!typing) heldServer.delete(el);
   }
+  const heldServer = new WeakSet(); // fields whose server value changed while their event was unanswered
 
   // regen is a form being morphed whose generation changed.
   let regen = null;
 
-  // sentField is the focused field when the page last sent an event, and
-  // what it showed.
-  let sentField = null;
+  // sentField is the focused field when the page last sent an event, what
+  // it showed and the event's ref; answered is the latest ref the server
+  // replied to. A patch rendered before the server had the event (the
+  // reply to an earlier keystroke, a broadcast) renders a value the field
+  // showed before: a field showing what it sent takes the server's value
+  // only once the server answered that event.
+  let sentField = null, answered = 0;
+
+  // composing is the field an input method is composing text in: a patch
+  // never touches what it shows until the composition ends.
+  let composing = null;
+  document.addEventListener("compositionstart", (e) => { composing = e.target; }, true);
+  document.addEventListener("compositionend", () => { composing = null; }, true);
   const fieldShows = (el) => checkable(el) || el.tagName === "SELECT" ? JSON.stringify(fieldState(el)) : el.value;
 
-  const keyOf = (n) => n.nodeType === 1 ? n.id || n.getAttribute("data-vk-id") || "" : "";
+  // An element's key: its id, an instance's data-vk-id, or the key of a
+  // keyed loop's element (data-vk-key on an element with no keyboard
+  // handler, whose data-vk-key lists the keys it takes) while the
+  // children being matched have one each (loopKeys).
+  const keyOf = (n) => n.nodeType === 1 ? n.id || n.getAttribute("data-vk-id") || (loopKeys ? loopKey(n) : "") : "";
+  const loopKey = (n) => {
+    const k = n.getAttribute("data-vk-key");
+    if (k === null) return "";
+    for (const a of n.attributes) if (/^data-vk-(on|js)-key/.test(a.name)) return "";
+    return "\0" + k;
+  };
+  let loopKeys = false;
+  const uniqueLoopKeys = (p) => {
+    const ks = new Set();
+    for (const c of p.children) {
+      const k = loopKey(c);
+      if (k && ks.has(k)) return false;
+      ks.add(k);
+    }
+    return true;
+  };
   const same = (a, b) => a.nodeType === b.nodeType && (a.nodeType !== 1 || a.tagName === b.tagName);
 
   // ahead is an unkeyed node of n's kind past cur, when cur isn't the next
@@ -990,6 +1048,12 @@
   const keysOf = (next) => new Set(Array.from(next.childNodes, keyOf).filter(Boolean));
 
   function children(el, next) {
+    const was = loopKeys;
+    loopKeys = uniqueLoopKeys(el) && uniqueLoopKeys(next);
+    try { childrenIn(el, next); } finally { loopKeys = was; }
+  }
+
+  function childrenIn(el, next) {
     // Elements a script added beside the server's (a popup's backdrop and
     // focus guards) stay where it put them, the server's matched past
     // them, so a script's references to either stay good; children a
@@ -1038,7 +1102,19 @@
         }
       }
       if (match) {
-        if (match !== cur) el.insertBefore(match, cur);
+        if (match !== cur) {
+          const f = document.activeElement;
+          if (cur && f && f !== document.body && match.contains(f) && match.parentNode === el && (cur.compareDocumentPosition(match) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+            // moving the element with the focus would blur it: the nodes
+            // between go after it instead, matched from there
+            const after = match.nextSibling;
+            for (let c = cur; c && c !== match;) {
+              const x = c;
+              c = c.nextSibling;
+              if (!kept(x)) el.insertBefore(x, after);
+            }
+          } else el.insertBefore(match, cur);
+        }
         if (n.nodeType === 1) morph(match, n);
         else if (match.nodeValue !== n.nodeValue) match.nodeValue = n.nodeValue;
         cur = skip(match.nextSibling);
@@ -1414,9 +1490,15 @@
   // the body's children they added, the attributes and children of the
   // server's elements they changed.
   function note(records) {
-    const kids = new Map();
+    const kids = new Map(), texts = new Map();
     for (const r of records) {
       const t = r.target;
+      if (r.type === "characterData") {
+        const p = t.parentNode;
+        if (!texts.has(t)) texts.set(t, r.oldValue);
+        if (p && p.nodeType === 1 && placed.has(p) && !ownedKids.has(p) && !kids.has(p)) kids.set(p, []);
+        continue;
+      }
       if (r.type === "attributes") {
         if (!placed.has(t) || runtimeAttr.test(r.attributeName)) continue;
         let m = owned.get(t);
@@ -1440,11 +1522,11 @@
         kids.get(t).push(r);
       }
     }
-    kids.forEach((rs, t) => ownedKids.set(t, before(t, rs)));
+    kids.forEach((rs, t) => ownedKids.set(t, before(t, rs, texts)));
   }
 
   // before is t's children, as HTML, before records rs changed them.
-  function before(t, rs) {
+  function before(t, rs, texts) {
     const nodes = Array.from(t.childNodes);
     for (const r of rs.reverse()) {
       r.addedNodes.forEach((n) => { const i = nodes.indexOf(n); if (i >= 0) nodes.splice(i, 1); });
@@ -1453,7 +1535,7 @@
       nodes.splice(at, 0, ...r.removedNodes);
     }
     const tpl = document.createElement("template");
-    nodes.forEach((n) => tpl.content.appendChild(n.cloneNode(true)));
+    nodes.forEach((n) => tpl.content.appendChild(texts.has(n) ? document.createTextNode(texts.get(n)) : n.cloneNode(true)));
     return tpl.innerHTML;
   }
 
@@ -3140,7 +3222,7 @@
     // what follows this script in the body, scripts put there before it
     // ran: the text nodes too, a teleport's anchors its owner removes by
     for (let n = script.parentNode === document.body ? script.nextSibling : null; n; n = n.nextSibling) foreign.add(n);
-    watch.observe(document.body, { childList: true, subtree: true, attributes: true, attributeOldValue: true });
+    watch.observe(document.body, { childList: true, subtree: true, attributes: true, attributeOldValue: true, characterData: true, characterDataOldValue: true });
   }
   const partsToken = script && script.getAttribute ? script.getAttribute("data-vk-parts") : null;
   if (document.readyState === "complete") loadParts(partsToken);
