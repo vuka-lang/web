@@ -11,12 +11,14 @@ import (
 	"github.com/vuka-lang/web/v2/examples/live/rooms"
 )
 
-// Chat is a room at /chat/{room}: Room binds from the path, log is injected.
+// Chat is a room at /chat/{room}: Room binds from the path, log is
+// injected. Its lines are a stream: the session sends each line and forgets
+// it, the browser keeping the last 200.
 type Chat struct {
 	ui.Live
 	Room  string
 	log   *rooms.Log
-	lines []string
+	lines ui.Stream[rooms.Line]
 	name  string
 }
 
@@ -27,12 +29,13 @@ func (c *Chat) topic() string { return "chat:" + c.Room }
 @ui.Mount
 func (c *Chat) mount(ctx context.Context) error {
 	c.Subscribe(c.topic())
-	c.lines = c.log.History(c.Room)
+	c.lines.Limit(200)
+	c.lines.Reset(c.log.History(c.Room, 200)...)
 	return nil
 }
 
-func (c *Chat) Update(m rooms.Said)   { c.lines = append(c.lines, m.Who+": "+m.Text) }
-func (c *Chat) Update(j rooms.Joined) { c.lines = append(c.lines, j.Who+" joined") }
+func (c *Chat) Update(m rooms.Said)   { c.lines.Insert(m.Line) }
+func (c *Chat) Update(j rooms.Joined) { c.lines.Insert(j.Line) }
 
 func (c *Chat) SetName(ctx context.Context, f rooms.Form) error {
 	name := strings.TrimSpace(f.Text)
@@ -40,24 +43,22 @@ func (c *Chat) SetName(ctx context.Context, f rooms.Form) error {
 		return web.BadRequest("pick a name")
 	}
 	c.name = name
-	c.log.Add(c.Room, name+" joined")
-	return web.Broadcast(ctx, c.topic(), rooms.Joined{Who: name})
+	return web.Broadcast(ctx, c.topic(), rooms.Joined{Line: c.log.Add(c.Room, name+" joined")})
 }
 
 func (c *Chat) Send(ctx context.Context, f rooms.Form) error {
 	if strings.TrimSpace(f.Text) == "" {
 		return nil
 	}
-	c.log.Add(c.Room, c.name+": "+f.Text)
-	return web.Broadcast(ctx, c.topic(), rooms.Said{Who: c.name, Text: f.Text})
+	return web.Broadcast(ctx, c.topic(), rooms.Said{Line: c.log.Add(c.Room, c.name+": "+f.Text)})
 }
 </script>
 
 <section class="chat">
 	<h2>#{Room}</h2>
 	<ul class="lines">
-		for i, l := range lines {
-			<li key={i}>{l}</li>
+		for _, l := range lines.Rows() {
+			<li key={l.ID}>{l.Text}</li>
 		}
 	</ul>
 	if name == "" {

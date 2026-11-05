@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"maps"
@@ -93,6 +94,7 @@ type wireReport struct {
 	Split            []share
 	Insts            []instReport
 	JS               []string // "c3: 2 commands"
+	Streams          []string // "c1 Chat messages q7.12: +1 −1, limit 200, 312 B"
 	Rows             []diffRow
 	MoreRows         int
 }
@@ -132,6 +134,7 @@ type wireMirror struct {
 	strs    map[int]string
 	inst    map[string]any // *mFrame, or an instance's HTML
 	typeOf  func(id string) string
+	batches map[string]string // the stream batch last reported, by instance and stream
 }
 
 type mFrame struct {
@@ -238,6 +241,7 @@ func (m *wireMirror) apply(b []byte) *wireReport {
 			r.JS = append(r.JS, fmt.Sprintf("%s: %d command%s", p.ID, len(p.Ops), plural(len(p.Ops))))
 		}
 	}
+	r.Streams = m.streamLines(r.Insts)
 	note := ""
 	if d.fresh > 0 {
 		note = fmt.Sprintf("new fingerprints %d", d.fresh)
@@ -985,4 +989,106 @@ func marked(a, b string, side int) template.HTML {
 		out += "<mark>" + esc(mid) + "</mark>"
 	}
 	return template.HTML(out + esc(s[len(s)-suf:]) + `"`)
+}
+
+// streamLines are the stream batches the instances a frame sent carry, one
+// line each: "c1 Chat messages q7.12: +1 −1, limit 200, 312 B" — the rows
+// inserted and the keys deleted, a reset, the limit, the rows' bytes.
+func (m *wireMirror) streamLines(insts []instReport) []string {
+	var out []string
+	if m.batches == nil {
+		m.batches = map[string]string{}
+	}
+	for _, in := range insts {
+		h := m.html(m.inst[in.ID], 0)
+		for i := 0; ; {
+			at := strings.Index(h[i:], ` data-vk-stream="`)
+			if at < 0 {
+				break
+			}
+			at += i
+			i = at + 1
+			end := strings.IndexByte(h[at:], '>')
+			if end < 0 {
+				break
+			}
+			tag := h[at : at+end]
+			attr := func(name string) string {
+				j := strings.Index(tag, " "+name+`="`)
+				if j < 0 {
+					return ""
+				}
+				v := tag[j+len(name)+3:]
+				return html.UnescapeString(v[:strings.IndexByte(v, '"')])
+			}
+			ops := attr("data-vk-ops")
+			if ops == "" {
+				continue // no batch: the container rendered again
+			}
+			name, batch := attr("data-vk-stream"), attr("data-vk-batch")
+			if m.batches[in.ID+" "+name] == batch {
+				continue // the batch reported already, as the browser applies it once
+			}
+			m.batches[in.ID+" "+name] = batch
+			var list [][]any
+			json.Unmarshal([]byte(ops), &list)
+			var parts []string
+			ins, del := 0, 0
+			for _, op := range list {
+				switch op[0] {
+				case "reset":
+					parts = append(parts, "reset")
+				case "insert":
+					ins++
+				case "delete":
+					del++
+				}
+			}
+			if ins > 0 {
+				parts = append(parts, fmt.Sprintf("+%d", ins))
+			}
+			if del > 0 {
+				parts = append(parts, fmt.Sprintf("−%d", del))
+			}
+			line := fmt.Sprintf("%s %s %s %s: %s", in.ID, in.Type, name, batch, strings.Join(parts, " "))
+			if l := attr("data-vk-limit"); l != "" {
+				line += ", limit " + l
+			}
+			if close := rowsBytes(h, at+end+1); close >= 0 && ins > 0 {
+				line += ", " + bytesText(close)
+			}
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// rowsBytes is the size of the content of the element whose start tag
+// ends at from: a container's rows.
+func rowsBytes(h string, from int) int {
+	start := strings.LastIndexByte(h[:from], '<')
+	if start < 0 {
+		return -1
+	}
+	tag := h[start+1:]
+	tag = tag[:strings.IndexAny(tag, " \t\n/>")]
+	depth := 1
+	for i := from; i < len(h); {
+		lt := strings.IndexByte(h[i:], '<')
+		if lt < 0 {
+			return -1
+		}
+		i += lt
+		rest := h[i+1:]
+		switch {
+		case strings.HasPrefix(rest, "/"+tag+">"):
+			if depth--; depth == 0 {
+				return i - from
+			}
+		case strings.HasPrefix(rest, tag) && len(rest) > len(tag) && strings.IndexByte(" \t\n/>", rest[len(tag)]) >= 0:
+			depth++
+		}
+		i++
+	}
+	return -1
 }

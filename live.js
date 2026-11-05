@@ -117,7 +117,14 @@
           }
         }
         const done = [];
+        outOfStep = false;
         for (const u of ups) if (!done.some((el) => el && el.isConnected && el.contains(byID(u.id)))) done.push(apply(u));
+        if (outOfStep && !n) { // a batch was lost: start over
+          fail("live: a stream is out of step with the server");
+          joined = false;
+          join();
+          break;
+        }
         if (b && b.form && !m.error && b.form.isConnected && !b.form.hasAttribute("data-vk-form")) b.form.reset();
         if (b && b.form && b.form.isConnected && b.form.hasAttribute("data-vk-form") && !b.aborted) submitted(b.form);
         if (m.error) fail(m.error, m.ref);
@@ -930,6 +937,8 @@
     // its attributes — a changed data-vk-props drives the island's update() —
     // but never morph into its subtree.
     if (el.hasAttribute("data-vk-island")) return attrs(el, next);
+    // A stream's container owns its rows: it applies each batch once.
+    if (el.hasAttribute("data-vk-stream") && next.hasAttribute("data-vk-stream")) return stream(el, next);
     if (!isField(el)) {
       if (el.tagName === "FORM" && next.hasAttribute("data-vk-gen") && el.getAttribute("data-vk-gen") !== next.getAttribute("data-vk-gen")) {
         // the form was loaded or reset: its fields take the server's values
@@ -1091,7 +1100,116 @@
     if (n.nodeType !== 1) return n;
     placed.add(n);
     for (const c of n.querySelectorAll("*")) placed.add(c);
+    for (const c of n.matches("[data-vk-stream]") ? [n] : n.querySelectorAll("[data-vk-stream]")) met(c);
     return n;
+  }
+
+  // Streams (ui.Stream). A container (data-vk-stream) holds rows the
+  // server sent and forgot, each with its key in data-vk-row; the server
+  // renders, with each batch of operations, the batch's number
+  // (data-vk-batch, <generation>.<n>), its operations (data-vk-ops) and the
+  // rows they insert. The runtime keeps the batch each container applied
+  // and applies a batch only when it is the next one: one it applied (the
+  // container morphed again because something else in its instance
+  // changed) leaves the rows alone; another generation's (a fresh mount)
+  // starts with a reset; one further ahead is out of step, and the page
+  // joins again.
+  const streams = new WeakMap(); // container → { gen, n }: the batch it applied
+  let outOfStep = false;
+  const batchOf = (el) => {
+    const [gen, n] = (el.getAttribute("data-vk-batch") || "").split(".");
+    return { gen, n: +n || 0 };
+  };
+  const rowKey = (c) => c.nodeType === 1 ? c.getAttribute("data-vk-row") : null;
+  const rowsOf = (el) => Array.from(el.children).filter((c) => rowKey(c) !== null);
+  const rowFrom = (c, step) => { while (c && rowKey(c) === null) c = c[step]; return c; };
+  const firstRow = (el) => rowFrom(el.firstElementChild, "nextElementSibling");
+  const lastRow = (el) => rowFrom(el.lastElementChild, "previousElementSibling");
+
+  // met records a container the runtime meets for the first time — in the
+  // page as it loaded, or put by a morph — as holding its batch.
+  function met(el) {
+    if (streams.has(el)) return;
+    streams.set(el, batchOf(el));
+    counted(el);
+  }
+
+  function stream(el, next) {
+    met(el);
+    const had = streams.get(el), b = batchOf(next);
+    attrs(el, next);
+    if (b.gen === had.gen && b.n <= had.n) return counted(el); // applied
+    if (b.gen === had.gen && b.n > had.n + 1) {
+      outOfStep = true;
+      warn("stream " + el.getAttribute("data-vk-stream") + ": batch " + b.gen + "." + b.n + " after " + had.gen + "." + had.n + ", out of step");
+      return counted(el);
+    }
+    let ops = [];
+    try { ops = JSON.parse(next.getAttribute("data-vk-ops") || "[]"); } catch (_) { warn("bad data-vk-ops"); }
+    batch(el, next, ops, +next.getAttribute("data-vk-limit") || 0);
+    streams.set(el, b);
+    counted(el);
+  }
+
+  // batch applies a batch's operations, in order, with next's rows. An
+  // insert of a key the container holds morphs that row in place; a reset
+  // keeps the rows whose keys the batch inserts, morphed and moved into
+  // its order. A limit trims from the end away from where rows went in.
+  function batch(el, next, ops, limit) {
+    const fresh = new Map(), held = new Map();
+    for (const c of Array.from(next.children)) if (rowKey(c) !== null) fresh.set(rowKey(c), c);
+    for (const c of rowsOf(el)) held.set(rowKey(c), c);
+    const drop = (c) => { if (c) { held.delete(rowKey(c)); c.remove(); } };
+    let resetting = false, prev = null;
+    ops.forEach((op, i) => {
+      const k = op[1] === undefined ? "" : String(op[1]);
+      switch (op[0]) {
+        case "reset": {
+          resetting = true;
+          const keep = new Set(ops.slice(i + 1).filter((o) => o[0] === "insert").map((o) => String(o[1])));
+          held.forEach((c, key) => { if (!keep.has(key)) drop(c); });
+          break;
+        }
+        case "delete":
+          drop(held.get(k));
+          break;
+        case "insert": {
+          const n = fresh.get(k);
+          if (!n) return warn("stream " + el.getAttribute("data-vk-stream") + ": a batch inserts " + k + " and doesn't carry it");
+          let c = held.get(k);
+          if (c && !resetting) return morph(c, n); // in place: it stays, nothing trimmed
+          if (c) morph(c, n);
+          else held.set(k, (c = place(document.importNode(n, true))));
+          if (op[2] === "start") {
+            const first = firstRow(el);
+            if (first !== c) el.insertBefore(c, first);
+            if (limit && held.size > limit) drop(lastRow(el));
+          } else if (resetting) {
+            // after the row the reset put before it: kept rows already in
+            // order aren't moved, keeping their focus
+            const want = prev ? rowFrom(prev.nextElementSibling, "nextElementSibling") : firstRow(el);
+            if (want !== c) el.insertBefore(c, want || (prev ? prev.nextSibling : null));
+            if (limit && held.size > limit) drop(firstRow(el));
+          } else {
+            const last = lastRow(el);
+            if (last !== c) el.insertBefore(c, last ? last.nextSibling : null);
+            if (limit && held.size > limit) drop(firstRow(el));
+          }
+          if (resetting) prev = c;
+          break;
+        }
+      }
+    });
+    while (limit && held.size > limit) drop(firstRow(el));
+  }
+
+  // counted sets what only the browser knows of a container: how many rows
+  // it holds, and whether none.
+  function counted(el) {
+    const n = rowsOf(el).length;
+    if (el.getAttribute("data-vk-rows") !== String(n)) el.setAttribute("data-vk-rows", n);
+    if (n) el.removeAttribute("data-vk-empty");
+    else if (!el.hasAttribute("data-vk-empty")) el.setAttribute("data-vk-empty", "");
   }
 
   function home(n, parent, prev) {

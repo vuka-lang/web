@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/coder/websocket"
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/ui/v2/live"
 )
 
 // livePage opens path's page on srv, its live connection joined in protocol
@@ -317,5 +320,27 @@ func TestToolbarWirePageBudget(t *testing.T) {
 	}
 	if fmt.Sprint(kept) != "[false false true true true]" {
 		t.Errorf("frames kept: %v", kept)
+	}
+}
+
+// TestToolbarWireStreams: a frame carrying a stream's batch has a line
+// saying what it did.
+func TestToolbarWireStreams(t *testing.T) {
+	log := &keyedLog{}
+	s := live.NewSession(context.Background(), func(context.Context) ui.Node {
+		return ui.Component("f", nil, &feedPage{Log: log, Max: 5, Start: []feedItem{{1, "one"}, {2, "two"}}})
+	})
+	m := newWireMirror(func(id string) string { return map[string]string{"c1": "feedPage"}[id] })
+	r := m.apply(s.HandleJSON([]byte(`{"type":"join","v":2}`)))
+	if len(r.Streams) != 1 || !regexp.MustCompile(`^c1 feedPage items \w+\.1: reset \+2, limit 5, \d+ B$`).MatchString(r.Streams[0]) {
+		t.Fatalf("join: %q", r.Streams)
+	}
+	r = m.apply(s.HandleJSON([]byte(`{"type":"event","target":"c1:Remove","event":"click","args":[1]}`)))
+	if len(r.Streams) != 1 || !regexp.MustCompile(`^c1 feedPage items \w+\.2: −1, limit 5$`).MatchString(r.Streams[0]) {
+		t.Fatalf("delete: %q", r.Streams)
+	}
+	r = m.apply(s.HandleJSON([]byte(`{"type":"event","target":"c1:2","event":"click"}`))) // rename
+	if len(r.Streams) != 0 {
+		t.Fatalf("a render with no batch: %q", r.Streams)
 	}
 }

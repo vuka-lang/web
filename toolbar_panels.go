@@ -349,6 +349,7 @@ func logsOf(ls []tbLog) []logRow {
 
 type liveMsg struct {
 	Type, Subject, Clock, Ms, Bytes, Err, Tone string
+	Streams                                    []string // the stream batches its frames carried
 	Ref, Q, Seq, Frames                        int
 	Dropped                                    bool
 	SQL                                        sqlView
@@ -364,6 +365,11 @@ func liveOf(msgs []*tbEntry) []liveMsg {
 		s := sqlOf(m.Queries)
 		v := liveMsg{Type: m.Method, Subject: m.URI, Clock: m.Start.Format("15:04:05.000"), Ms: ms(m.Dur), Bytes: bytesText(m.Bytes),
 			Err: m.Err, Ref: m.Ref, Q: len(m.Queries), Seq: m.Seq, Frames: len(m.Frames), Dropped: m.FramesDropped, SQL: s, Timeline: timelineOf(m), Logs: logsOf(m.Logs)}
+		for _, f := range m.Frames {
+			if f.Report != nil {
+				v.Streams = append(v.Streams, f.Report.Streams...)
+			}
+		}
 		switch {
 		case m.Err != "": // red only for a message that failed; what it ran warns
 			v.Tone = "err"
