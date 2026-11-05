@@ -51,6 +51,9 @@ func (f *feedPage) Rename() { f.title += "!" }
 func (f *feedPage) Clear()  { f.items.Reset() }
 func (f *feedPage) Reload() { f.items.Reset(feedItem{1, "one"}, feedItem{2, "two"}) }
 
+func (f *feedPage) At()    { f.items.InsertAt(1, f.item(), f.item()) }
+func (f *feedPage) AtEnd() { f.items.InsertAt(99, f.item()) }
+
 func (f *feedPage) Edit(id int) { f.items.Insert(feedItem{id, "edited"}) }
 
 func (f *feedPage) Move(id int) {
@@ -77,8 +80,10 @@ func (f *feedPage) Render() ui.Node {
 <button id="rename" onClick={rename}>rename</button>
 <button id="clear" onClick={clear}>clear</button>
 <button id="reload" onClick={reload}>reload</button>
+<button id="at" onClick={at}>at</button>
+<button id="atend" onClick={atend}>at end</button>
 <ul id="feed" {attrs...}>{rows}</ul>
-</main>`, f.title, f.Add, f.Top, f.Rename, f.Clear, f.Reload, rows.Attrs(), rows)
+</main>`, f.title, f.Add, f.Top, f.Rename, f.Clear, f.Reload, f.At, f.AtEnd, rows.Attrs(), rows)
 }
 
 // TestBrowserStream: live.js applies a stream's batches — insert, prepend,

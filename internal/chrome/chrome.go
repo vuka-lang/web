@@ -551,3 +551,10 @@ func (p *Page) MouseAt(x, y float64) {
 	p.front()
 	p.must("Input.dispatchMouseEvent", map[string]any{"type": "mouseMoved", "x": x, "y": y}, nil)
 }
+
+// Front brings the page's tab to the front, where it renders frames:
+// what its IntersectionObservers and animation frames wait for.
+func (p *Page) Front() {
+	p.b.t.Helper()
+	p.front()
+}

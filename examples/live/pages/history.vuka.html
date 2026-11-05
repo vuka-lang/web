@@ -1,0 +1,60 @@
+<script lang="go">
+package pages
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/vuka-lang/ui/v2"
+)
+
+// historyLen is how many lines the history holds: 1 the oldest.
+const historyLen = 10000
+
+// HistoryLine is a line of the history.
+type HistoryLine struct {
+	N    int
+	Text string
+}
+
+func historyLines(from, to int) []HistoryLine {
+	var out []HistoryLine
+	for n := max(from, 1); n <= min(to, historyLen); n++ {
+		out = append(out, HistoryLine{n, fmt.Sprintf("line %d", n)})
+	}
+	return out
+}
+
+// History is a two-way window over a long log at /history (?at=5000 opens
+// it there, else at the newest): older lines load as the top comes into
+// view, newer ones as the bottom does, and the browser keeps 150, so
+// neither the server nor the page holds the log.
+type History struct {
+	ui.Live
+	At    int
+	lines ui.Stream[HistoryLine]
+}
+
+@ui.Mount
+func (h *History) mount(ctx context.Context) error {
+	at := h.At
+	if at <= 0 || at > historyLen {
+		at = historyLen
+	}
+	h.lines.Limit(150)
+	h.lines.Reset(historyLines(at-49, at)...)
+	return nil
+}
+
+func (h *History) Older(first int) { h.lines.Prepend(historyLines(first-50, first-1)...) }
+func (h *History) Newer(last int)  { h.lines.Insert(historyLines(last+1, last+50)...) }
+</script>
+
+<section class="history">
+	<h2>History</h2>
+	<ol class="lines" style="height: 24rem; overflow: auto" onViewportTop={Older} onViewportBottom={Newer}>
+		for _, l := range lines.Rows() {
+			<li key={l.N}>{l.Text}</li>
+		}
+	</ol>
+</section>

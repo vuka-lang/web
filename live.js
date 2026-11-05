@@ -18,7 +18,7 @@
   const build = script.dataset.vkBuildId || ""; // the build that rendered the page: a navigation over HTTP names it
   const root = script.dataset.vkRoot || "-"; // the page's root layout: a page under another is another document
   const dev = script.hasAttribute("data-vk-dev"); // rendered in development: say why a navigation loads in full
-  const nobubble = new Set(["focus", "blur", "mouseenter", "mouseleave", "load", "error", "scroll"]);
+  const nobubble = new Set(["focus", "blur", "mouseenter", "mouseleave", "load", "error", "scroll", "viewporttop", "viewportbottom"]);
   const listening = new Set();
   const busy = new Map(); // ref → {el, form}: elements waiting for their reply
   const pending = new Map(); // el → {timer, msg}: debounced events
@@ -43,6 +43,7 @@
       pending.clear();
       busy.forEach((b) => release(b.el));
       busy.clear();
+      edgeRefs.forEach((_, r) => edgeReplied(r)); // no reply comes
       [...preds.keys()].forEach((r) => settle(r, true)); // no reply comes
       replies.forEach((w) => w.reject(new Error("live: the connection closed")));
       replies.clear();
@@ -147,6 +148,7 @@
       busy.delete(m.ref);
       release(b.el);
     }
+    if (m.ref) edgeReplied(m.ref);
     if (m.ref && m.type !== "redirect") settle(m.ref, m.type === "error" || !!m.error, m.result, m.error);
     const w = m.ref && replies.get(m.ref);
     if (w) {
@@ -271,7 +273,7 @@
     if (!joined) return; // the join's render will replace what was clicked
     const msg = { type: "event", target: el.getAttribute("data-vk-on-" + e.type), event: e.type };
     if (typeof e.key === "string") msg.key = e.key;
-    const v = valueOf(el);
+    const v = edge(e.type) ? e.detail && e.detail.key : valueOf(el);
     if (v !== undefined) msg.value = v;
     if (vf) {
       if (!formEvent(vf, t, e, msg)) return;
@@ -288,7 +290,8 @@
       return;
     }
     flush();
-    send(msg, el, e.type === "submit" ? e.target.closest("form") : null);
+    const r = send(msg, el, e.type === "submit" ? e.target.closest("form") : null);
+    if (r && edge(e.type)) edgeSent(el, e.type, r, msg.value);
   }
 
   // Struct forms (<ui.Form for>, data-vk-form): the server decides what
@@ -899,7 +902,7 @@
     msg.ref = ++ref;
     const f = document.activeElement;
     sentField = f && isField(f) ? { el: f, shows: fieldShows(f) } : null;
-    if (el && (form || msg.event === "click")) {
+    if (el && (form || msg.event === "click" || edge(msg.event))) {
       busy.set(msg.ref, { el, form });
       el.setAttribute("aria-busy", "true");
     }
@@ -1132,13 +1135,14 @@
     if (streams.has(el)) return;
     streams.set(el, batchOf(el));
     counted(el);
+    setTimeout(() => viewport(el)); // once it is in the page
   }
 
   function stream(el, next) {
     met(el);
     const had = streams.get(el), b = batchOf(next);
     attrs(el, next);
-    if (b.gen === had.gen && b.n <= had.n) return counted(el); // applied
+    if (b.gen === had.gen && b.n <= had.n) return counted(el), viewport(el); // applied
     if (b.gen === had.gen && b.n > had.n + 1) {
       outOfStep = true;
       warn("stream " + el.getAttribute("data-vk-stream") + ": batch " + b.gen + "." + b.n + " after " + had.gen + "." + had.n + ", out of step");
@@ -1146,9 +1150,15 @@
     }
     let ops = [];
     try { ops = JSON.parse(next.getAttribute("data-vk-ops") || "[]"); } catch (_) { warn("bad data-vk-ops"); }
+    const v = edges.get(el);
+    const anchor = ops.length ? anchorOf(el, v && v.wait.top) : null, focus = focusedRow(el);
     batch(el, next, ops, +next.getAttribute("data-vk-limit") || 0);
     streams.set(el, b);
     counted(el);
+    if (anchor) anchored(el, anchor);
+    if (focus) handOff(el, focus);
+    if (v && ops.length && ops[0][0] === "reset") v.fired = {}; // its edges may come again
+    viewport(el);
   }
 
   // batch applies a batch's operations, in order, with next's rows. An
@@ -1184,6 +1194,12 @@
             const first = firstRow(el);
             if (first !== c) el.insertBefore(c, first);
             if (limit && held.size > limit) drop(lastRow(el));
+          } else if (typeof op[2] === "number") {
+            // before the row at that position (InsertAt), past the rows at the end
+            const at = rowsOf(el).filter((r) => r !== c)[Math.max(0, op[2])];
+            if (at) el.insertBefore(c, at);
+            else if (c !== lastRow(el)) el.insertBefore(c, lastRow(el) ? lastRow(el).nextSibling : null);
+            if (limit && held.size > limit) drop(lastRow(el));
           } else if (resetting) {
             // after the row the reset put before it: kept rows already in
             // order aren't moved, keeping their focus
@@ -1210,6 +1226,148 @@
     if (el.getAttribute("data-vk-rows") !== String(n)) el.setAttribute("data-vk-rows", n);
     if (n) el.removeAttribute("data-vk-empty");
     else if (!el.hasAttribute("data-vk-empty")) el.setAttribute("data-vk-empty", "");
+  }
+
+  // Scroll anchoring: a batch adding, trimming or changing rows above what
+  // the reader sees would move it. Before the batch the runtime measures
+  // the first rows fully in view of the container's scroller, and after it
+  // scrolls by however far the first of them still there moved — nothing,
+  // where the browser's own scroll anchoring (overflow-anchor) already kept
+  // it. A scroller at its top isn't anchored (new rows at the start of a
+  // newest-first feed show), unless the batch answers the container's
+  // onViewportTop: the rows it loads go above the reader.
+  function scrollerOf(el) {
+    for (let e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      const o = getComputedStyle(e).overflowY;
+      if (o === "auto" || o === "scroll" || o === "overlay") return e;
+    }
+    return null;
+  }
+
+  function anchorOf(el, top) {
+    const sc = scrollerOf(el) || document.scrollingElement || document.documentElement;
+    if (!sc.scrollTop && !top) return null;
+    const box = sc === document.scrollingElement || sc === document.documentElement ? { top: 0, bottom: innerHeight } : sc.getBoundingClientRect();
+    const rows = [];
+    let part = null;
+    for (const r of rowsOf(el)) {
+      const b = r.getBoundingClientRect();
+      if (b.top >= box.bottom) break;
+      if (b.bottom <= box.top || !b.height) continue;
+      if (b.top >= box.top) rows.push({ row: r, top: b.top });
+      else if (!part) part = { row: r, top: b.top };
+      if (rows.length === 4) break;
+    }
+    if (part) rows.push(part); // rows taller than the view: the one across its top
+    return rows.length ? { sc, rows } : null;
+  }
+
+  function anchored(el, a) {
+    const r = a.rows.find((r) => r.row.parentNode === el);
+    if (!r) return;
+    const d = r.row.getBoundingClientRect().top - r.top;
+    if (Math.abs(d) >= 0.5) a.sc.scrollTop += d;
+  }
+
+  // Focus: a row the batch removed (deleted, trimmed, left out of a reset)
+  // that held focus hands it to the nearest row still there, the next
+  // else the previous, else the container; a row isn't focusable by
+  // itself, so it gets tabindex="-1". Focus anywhere else is left alone.
+  function focusedRow(el) {
+    const f = document.activeElement;
+    if (!f || f === el || !el.contains(f)) return null;
+    let r = f;
+    while (r.parentNode !== el) r = r.parentNode;
+    return rowKey(r) === null ? null : { row: r, was: f, order: rowsOf(el) };
+  }
+
+  function handOff(el, { row, was, order }) {
+    const f = document.activeElement;
+    const lost = !f || f === document.body || f === document.documentElement;
+    if (row.parentNode === el) { // kept: a row a reset moved into order loses focus as it moves
+      if (lost && was.isConnected && row.contains(was)) was.focus({ preventScroll: true });
+      return;
+    }
+    if (!lost && !row.contains(f)) return; // focus moved on meanwhile
+    const i = order.indexOf(row);
+    const to = order.slice(i + 1).find((r) => r.parentNode === el) || order.slice(0, i).reverse().find((r) => r.parentNode === el) || el;
+    if (to.tabIndex < 0 && !to.hasAttribute("tabindex")) {
+      to.setAttribute("tabindex", "-1");
+      let own = owned.get(to);
+      if (!own) owned.set(to, (own = new Map()));
+      own.set("tabindex", null); // the runtime's while the server renders none
+    }
+    to.focus({ preventScroll: true });
+  }
+
+  // Infinite scroll: a container's onViewportTop and onViewportBottom
+  // (data-vk-on-viewporttop, -bottom) fire when its first or last row
+  // comes within the margin (data-vk-viewport-margin, 400px) of its
+  // scroller's edge — an IntersectionObserver on the edge rows, the root the
+  // nearest scrolling ancestor (the container itself when it scrolls), else
+  // the viewport. The event's value is the edge row's key. An edge waits
+  // for its reply (the container aria-busy meanwhile), then fires again
+  // only for another edge row: a reply adding none at that end is the end
+  // of the list. Checks are throttled to one per container per 100ms.
+  const edges = new WeakMap(); // container → its observer and what each edge fired
+  const edgeRefs = new Map(); // ref → { el, edge }: an edge's event waiting for its reply
+  const edge = (type) => type === "viewporttop" || type === "viewportbottom";
+
+  function viewport(el) {
+    let v = edges.get(el);
+    const want = ["top", "bottom"].filter((e) => el.hasAttribute("data-vk-on-viewport" + e) || el.hasAttribute("data-vk-js-viewport" + e));
+    if (!want.length || typeof IntersectionObserver !== "function" || !el.isConnected) {
+      if (v && !want.length) { v.io.disconnect(); edges.delete(el); }
+      return;
+    }
+    const root = scrollerOf(el), margin = el.getAttribute("data-vk-viewport-margin") || "400px";
+    if (v && (v.root !== root || v.margin !== margin)) { v.io.disconnect(); v = null; }
+    if (!v) {
+      v = { root, margin, seen: new Set(), on: [], fired: {}, wait: {}, timer: 0, at: 0 };
+      const cb = (es) => { for (const e of es) e.isIntersecting ? v.seen.add(e.target) : v.seen.delete(e.target); edgeSoon(el, v); };
+      try { v.io = new IntersectionObserver(cb, { root, rootMargin: margin }); } catch (_) { v.io = new IntersectionObserver(cb, { root, rootMargin: "400px" }); }
+      edges.set(el, v);
+    }
+    v.want = want;
+    const on = [firstRow(el), lastRow(el)].filter(Boolean);
+    for (const r of v.on) if (!on.includes(r)) { v.io.unobserve(r); v.seen.delete(r); }
+    for (const r of on) if (!v.on.includes(r)) v.io.observe(r); // reports where it is at once
+    v.on = on;
+    edgeSoon(el, v);
+  }
+
+  function edgeSoon(el, v) {
+    if (v.timer) return;
+    v.timer = setTimeout(() => { v.timer = 0; edgeCheck(el, v); }, Math.max(0, v.at + 100 - Date.now()));
+  }
+
+  function edgeCheck(el, v) {
+    if (!el.isConnected || edges.get(el) !== v) return;
+    for (const e of v.want) {
+      const row = e === "top" ? firstRow(el) : lastRow(el);
+      if (!row || !v.seen.has(row) || v.wait[e] || v.fired[e] === rowKey(row)) continue;
+      v.at = Date.now();
+      if (!el.hasAttribute("data-vk-on-viewport" + e)) v.fired[e] = rowKey(row); // commands only: no reply to wait for
+      el.dispatchEvent(new CustomEvent("viewport" + e, { detail: { key: rowKey(row) } }));
+    }
+  }
+
+  function edgeSent(el, type, r, key) {
+    const v = edges.get(el), e = type.slice(8);
+    if (!v) return;
+    v.fired[e] = key;
+    v.wait[e] = r;
+    edgeRefs.set(r, { el, e });
+  }
+
+  function edgeReplied(r) {
+    const w = edgeRefs.get(r);
+    if (!w) return;
+    edgeRefs.delete(r);
+    const v = edges.get(w.el);
+    if (!v || v.wait[w.e] !== r) return;
+    v.wait[w.e] = 0;
+    edgeSoon(w.el, v);
   }
 
   function home(n, parent, prev) {
