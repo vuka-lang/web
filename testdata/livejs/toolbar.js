@@ -30,6 +30,7 @@ function open(o = {}) {
       fetch: (url, init) => {
         gets.push(String(url));
         if (o.fetch && !String(url).includes("/_vuka/")) return o.fetch(url, init);
+        if (o.panels && String(url).includes("/_vuka/toolbar/r/")) return Promise.resolve({ headers: { get: () => null }, json: () => Promise.resolve({ html: o.panels }) });
         return Promise.resolve({ headers: { get: () => null }, json: () => Promise.resolve({ ms: "3ms", queries: 0 }) });
       },
     },
@@ -100,6 +101,32 @@ test("a navigation over HTTP shows as a page: its fetch's record", async () => {
   const opts = t.$("select").querySelectorAll("option").map((o) => [o.getAttribute("value"), o.textContent]);
   eq([t.p.$("h1") && t.p.$("h1").textContent, opts.some(([v, l]) => v === "r2" && l.includes("page /books/7")), t.gets.some((u) => u.endsWith("/_vuka/toolbar/r/r2"))],
     ["book", true, true], "the page's record follows the navigation");
+});
+
+test("the States panel: each instance's states, live, editable; a Derived read only", async () => {
+  const j = (v) => JSON.stringify(v).replace(/'/g, "&#39;");
+  const tab = { s: "c1:ft:1", i: "a", n: "Tabs.tab" }, opened = { s: "c1:fo:1", i: false, n: "Tabs.open" };
+  const wide = { s: "c1:sw:1", i: false, n: "Tabs.wide", x: ["==", tab, "b"] };
+  const t = open({
+    body: `<main data-vk-id="c1"><button id="b" data-vk-js-click='${j([["state_set", { ...tab, v: "b" }]])}'>b</button>
+      <p id="p" data-vk-b-title='${j(tab)}' data-vk-b-hidden='${j(["!", opened])}' data-vk-b-data-wide='${j(wide)}' title="a" hidden></p></main>`,
+    panels: `<nav class="tabs" role="tablist"><button type="button" role="tab" class="tab" data-tab="Request">Request</button></nav><section class="panel" data-panel="Request" hidden></section>`,
+  });
+  await settle();
+  t.p.fire(t.$(".handle"), "click");
+  await settle();
+  await settle();
+  const rows = () => t.$('section[data-panel="States"]').querySelectorAll("tr").map((r) => [r.querySelector("code").textContent, (r.querySelector(".sv").value ?? r.querySelector(".sv").textContent), r.querySelector(".by").textContent]);
+  eq(t.$('[data-tab="States"]').textContent, "States 3", "the tab");
+  eq(rows(), [["tab", '"a"', ""], ["open", "false", ""], ["wide", "false", ""]], "the states");
+  t.p.fire("#b", "click");
+  eq(rows()[0], ["tab", '"b"', "click #b"], "an event's write, flashed with the event");
+  eq(rows()[2][1], "true", "and the Derived following it");
+  const input = t.$('input.sv[data-key="c1:fo:1"]');
+  input.value = "true";
+  t.p.fire(input, "change");
+  eq([t.p.$("#p").hasAttribute("hidden"), rows()[1][2]], [false, "the toolbar"], "edited in place: the page follows");
+  eq(t.$('section[data-panel="States"]').querySelectorAll("input").length, 2, "a Derived isn't editable");
 });
 
 (async () => {

@@ -278,3 +278,7 @@ pre.json { margin: 0; max-height: 50vh; overflow: auto; padding: 8px 10px; borde
 .vk.gql-full .drawer { width: 100vw; border-left: 0; }
 .vk.gql-full .bar, .vk.gql-full .tabs, .vk.gql-full .foot { display: none; }
 .vk.gql-full [data-panel="GraphiQL"] { padding: 10px 12px; }
+
+.states input.sv { font: inherit; width: 100%; min-width: 8rem; background: transparent; color: inherit; border: 1px solid var(--line, #8884); border-radius: 3px; padding: 1px 4px; }
+.states tr.flash td { animation: vk-flash 0.8s ease-out; }
+@keyframes vk-flash { from { background: #f5c24255; } to { background: transparent; } }
