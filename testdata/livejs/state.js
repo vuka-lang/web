@@ -207,6 +207,51 @@ test("@ui.Notify: a browser write calls the handler with the value, once per wri
   eq(ws.sent.length, before + 1, "the server's write isn't sent back");
 });
 
+// tabs is a localStorage and a BroadcastChannel two pages share, as two
+// tabs of one origin do.
+function tabs() {
+  const data = new Map(), chans = [];
+  const localStorage = { getItem: (k) => data.has(k) ? data.get(k) : null, setItem: (k, v) => data.set(k, String(v)) };
+  class BroadcastChannel {
+    constructor(name) { this.name = name; chans.push(this); }
+    postMessage(d) { const m = JSON.parse(JSON.stringify(d)); chans.filter((c) => c !== this && c.name === this.name).forEach((c) => c.onmessage && c.onmessage({ data: m })); }
+  }
+  return { data, globals: { localStorage, BroadcastChannel } };
+}
+
+test("@ui.Keep: the stored value wins at load, each write is stored; no storage is a plain state", () => {
+  const t = tabs();
+  t.data.set("vuka:theme", JSON.stringify("dark"));
+  const theme = { ...s("c1:theme:1", "light"), k: "theme" };
+  const body = `<div data-vk-id="c1"><p id="t" data-vk-b-title='${j(theme)}' title="light"></p>
+    <button id="b" data-vk-js-click='${j([["state_set", { ...theme, v: "blue" }]])}'></button></div>`;
+  const p = open(body, { globals: t.globals });
+  eq(p.$("#t").getAttribute("title"), "dark", "the stored value");
+  p.fire("#b", "click");
+  eq([p.$("#t").getAttribute("title"), t.data.get("vuka:theme")], ["blue", '"blue"'], "stored");
+  const bad = { getItem() { throw new Error("denied"); }, setItem() { throw new Error("denied"); } };
+  const q = open(body, { globals: { localStorage: bad } });
+  q.fire("#b", "click");
+  eq(q.$("#t").getAttribute("title"), "blue", "a refused storage");
+});
+
+test("@ui.Shared: a write shows in the other tab, which watches it and doesn't send it back", () => {
+  const t = tabs();
+  const side = (k) => ({ ...s(k, false), k: "sidebar", sh: "k:sidebar" });
+  const body = (k) => `<div data-vk-id="c1"><p id="s" data-vk-b-hidden='${j(["!", side(k)])}' hidden></p>
+    <button id="b" data-vk-js-click='${j([["state_toggle", side(k)]])}'></button></div>`;
+  const a = open(body("c1:side:1"), { globals: t.globals }), b = open(body("c1:side:9"), { globals: t.globals });
+  const seen = [], posts = [];
+  b.window.vuka.states.watch(side("c1:side:9"), (now, was) => seen.push([now, was]));
+  const send = t.globals.BroadcastChannel.prototype.postMessage;
+  t.globals.BroadcastChannel.prototype.postMessage = function (d) { posts.push(d); return send.call(this, d); };
+  a.fire("#b", "click");
+  eq([a.$("#s").hasAttribute("hidden"), b.$("#s").hasAttribute("hidden")], [false, false], "shown in both");
+  eq([seen, posts.length], [[[true, false]], 1], "watched there, posted once: by the tab that wrote it");
+  b.fire("#b", "click");
+  eq(a.$("#s").hasAttribute("hidden"), true, "and back");
+});
+
 test("bindings refuse what commands refuse", () => {
   const u = s("c1:u:1", "/a");
   const p = open(`<a id="a" href="/a" data-vk-b-href='${j(u)}'></a><button id="b" data-vk-js-click='${j([["state_set", { ...u, v: "javascript:alert(1)" }]])}'></button>`);

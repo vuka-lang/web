@@ -2429,7 +2429,9 @@
   const derivs = new Map(), dsubs = new Map(); // derived key → {x, deps}; a state's key → the derived keys reading it
   const sinit = (r) => {
     if (store.has(r.s)) return r;
-    if (r.x === undefined) store.set(r.s, r.i === undefined ? null : r.i);
+    if (r.k || r.sh) metas.set(r.s, { k: r.k, sh: r.sh });
+    if (r.sh) channel();
+    if (r.x === undefined) store.set(r.s, r.k ? kept(r.k, r.i === undefined ? null : r.i) : r.i === undefined ? null : r.i);
     else {
       const d = { x: r.x, deps: deps(r.x) };
       derivs.set(r.s, d);
@@ -2448,6 +2450,43 @@
     dirty.add([r.s, ...p].join("\0"));
     if (r.w && !notifies.has(r.s)) notifies.set(r.s, r.w);
     if (!serverWrite) written.add(r.s);
+    const m = metas.get(r.s);
+    if (m) {
+      if (m.k) keep(m.k, store.get(r.s));
+      if (m.sh && !remoteWrite && channel()) channel().postMessage({ sh: m.sh, v: store.get(r.s) });
+    }
+  }
+  // @ui.Keep: a state stored in localStorage under its key ("vuka:" and the
+  // key), the stored value read when the state is set up and every write
+  // stored; a browser refusing storage leaves it an ordinary state.
+  // @ui.Shared: a state's writes posted on a BroadcastChannel, and applied
+  // in the page's other tabs as their own writes (their watches and
+  // notifications run), never posted again from there.
+  const metas = new Map(); // state key → {k, sh}
+  let remoteWrite = false, bc;
+  function kept(k, fallback) {
+    try {
+      const v = localStorage.getItem("vuka:" + k);
+      return v === null ? fallback : JSON.parse(v);
+    } catch (_) { return fallback; }
+  }
+  function keep(k, v) { try { localStorage.setItem("vuka:" + k, JSON.stringify(v)); } catch (_) {} }
+  function channel() {
+    if (bc === undefined) {
+      bc = null;
+      try {
+        if (typeof BroadcastChannel === "function") {
+          bc = new BroadcastChannel("vuka-states");
+          bc.onmessage = (e) => {
+            const d = e.data || {};
+            remoteWrite = true;
+            try { for (const [k, m] of metas) if (m.sh === d.sh) swrite({ s: k }, d.v); } finally { remoteWrite = false; }
+            if (dirty.size) flushStates();
+          };
+        }
+      } catch (_) {}
+    }
+    return bc;
   }
   // Watches: a script's state(name).watch(fn) and an island's, run with
   // the new value and the one before once a batch of writes is applied to
