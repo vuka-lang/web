@@ -2420,13 +2420,28 @@
   // each binding they reach updates once, before the chain's next other
   // step and at its end. A morph renders the initial values back; the
   // bindings then put the browser's back.
+  // A ui.Derived is a state the browser computes ("x", its expression) and
+  // keeps by key: computed again when a state it reads changes, in a chain
+  // when one Derived reads another, its readers following only when its
+  // value changed.
   const store = new Map(), subs = new Map(), dirty = new Set(), bound = new WeakMap();
-  const sinit = (r) => { if (!store.has(r.s)) store.set(r.s, r.i === undefined ? null : r.i); return r; };
+  const derivs = new Map(), dsubs = new Map(); // derived key → {x, deps}; a state's key → the derived keys reading it
+  const sinit = (r) => {
+    if (store.has(r.s)) return r;
+    if (r.x === undefined) store.set(r.s, r.i === undefined ? null : r.i);
+    else {
+      const d = { x: r.x, deps: deps(r.x) };
+      derivs.set(r.s, d);
+      d.deps.forEach((p) => { if (!dsubs.has(p[0])) dsubs.set(p[0], new Set()); dsubs.get(p[0]).add(r.s); });
+      store.set(r.s, ev(r.x));
+    }
+    return r;
+  };
   const at = (v, p) => { for (const k of p || []) v = v == null ? undefined : v[k]; return v; };
   const sread = (r) => at(store.get(sinit(r).s), r.p);
   const equal = (a, b) => a === b || a !== null && b !== null && typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b);
   function swrite(r, v) {
-    if (!r.s || equal(sread(r), v)) return;
+    if (!r.s || r.x !== undefined || equal(sread(r), v)) return;
     const p = r.p || [], put = (o, i) => i === p.length ? v : { ...(o && typeof o === "object" ? o : {}), [p[i]]: put(o && o[p[i]], i + 1) };
     store.set(r.s, put(store.get(r.s), 0));
     dirty.add([r.s, ...p].join("\0"));
@@ -2437,6 +2452,17 @@
   function flushStates() {
     const ds = [...dirty].map((d) => d.split("\0")), todo = new Set();
     dirty.clear();
+    for (let next = ds, round = 0; next.length; round++) {
+      if (round > 100) { warn("derived states read each other"); break; }
+      const keys = new Set(), changed = [];
+      for (const d of next) (dsubs.get(d[0]) || []).forEach((k) => { if (derivs.get(k).deps.some((p) => p[0] === d[0] && reach(p, d))) keys.add(k); });
+      for (const k of keys) {
+        const v = ev(derivs.get(k).x);
+        if (!equal(v, store.get(k))) { store.set(k, v); changed.push([k]); }
+      }
+      ds.push(...changed);
+      next = changed;
+    }
     for (const d of ds) (subs.get(d[0]) || []).forEach((b) => { if (b.deps.some((p) => p[0] === d[0] && reach(p, d))) todo.add(b); });
     todo.forEach((b) => b.el.isConnected ? put(b) : unsub(b));
   }
@@ -2457,6 +2483,7 @@
       case ">=": return ev(a) >= ev(b);
       case "+": return ev(a) + ev(b);
       case "-": return ev(a) - ev(b);
+      case "*": return ev(a) * ev(b);
       case "len": return size(ev(a));
       case "class": { const out = {}; for (const k in a) out[k] = !!ev(a[k]); return out; }
     }
