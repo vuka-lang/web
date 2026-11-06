@@ -1875,7 +1875,13 @@
         const rest = ops.slice(i + 1), r = rec;
         return pace(name, el, e, a.ms || 0, () => run(el, rest, e, r));
       } else if (name === "key") {
-        if (!e || !(a.keys || []).includes(e.key)) return;
+        if (!e || !(a.keys || []).some((k) => keyMatches(e, k))) return;
+      } else if (name === "once") {
+        if (!e || ran(el, e.type)) return;
+      } else if (name === "prevent") {
+        if (e) e.preventDefault();
+      } else if (name === "stop") {
+        if (e) stopAt(el, e);
       } else if (name === "confirm") {
         if (!window.confirm(a.msg)) return false;
       } else if (name === "busy") {
@@ -1885,6 +1891,37 @@
         else warn("unknown JS command " + name);
       }
     }
+  }
+
+  // keyMatches reports whether a key press is k: a key as KeyboardEvent.key
+  // names it, after the modifiers it needs held, joined by + (ctrl+Enter).
+  const mods = { ctrl: "ctrlKey", shift: "shiftKey", alt: "altKey", meta: "metaKey" };
+  function keyMatches(e, k) {
+    const parts = String(k).split("+"), key = parts.pop();
+    return (e.key === key || key.length === 1 && String(e.key).toLowerCase() === key.toLowerCase()) &&
+      parts.every((m) => mods[m.toLowerCase()] && e[mods[m.toLowerCase()]]);
+  }
+
+  // ran reports whether an element's once step has run for an event type,
+  // and marks it run.
+  const onceRan = new WeakMap();
+  function ran(el, type) {
+    let s = onceRan.get(el);
+    if (!s) onceRan.set(el, (s = new Set()));
+    if (s.has(type)) return true;
+    s.add(type);
+    return false;
+  }
+
+  // stopAt stops the event once it has reached el: the element's own
+  // listeners run, its ancestors' don't (the runtime's are on the document,
+  // capturing, so stopping it here would keep it from the element too).
+  function stopAt(el, e) {
+    const halt = (ev) => {
+      el.removeEventListener(e.type, halt);
+      if (ev === e) ev.stopPropagation();
+    };
+    el.addEventListener(e.type, halt);
   }
 
   // Calling JavaScript: a method of the component's own script (the
