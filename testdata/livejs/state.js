@@ -298,6 +298,31 @@ test("optimistic: two in flight fail in either order and leave what was there be
   eq(p.$("#l").textContent, "false", "then the earlier: back to the start");
 });
 
+test("show={…}: hidden while it doesn't hold; the transition's phases, the leave waited for; a change mid-way settles", () => {
+  const tr = { ms: 100, enter: { c: ["fx", "in-from", "in-to"] }, leave: { c: ["fx", "out-from", "out-to"] } };
+  const html = (n) => `<div data-vk-id="c1"><button id="b" data-vk-js-click='${j([["state_toggle", open1]])}'>${n}</button>
+    <section id="m" hidden data-vk-v='${j(open1)}' data-vk-transition='${j(tr)}'></section><p id="q" hidden data-vk-v='${j(open1)}'></p></div>`;
+  const p = joined(html(0)), m = () => p.$("#m");
+  p.fire("#b", "click");
+  eq([m().hasAttribute("hidden"), m().className, p.$("#q").hasAttribute("hidden")], [false, "fx in-from", false], "entering; no transition: at once");
+  p.tick(40);
+  eq(m().className, "fx in-to", "a frame later");
+  p.tick(100);
+  eq(m().className, "", "settled");
+  p.fire("#b", "click");
+  eq([m().hasAttribute("hidden"), m().className], [false, "fx out-from"], "leaving: still shown");
+  p.tick(20);
+  p.fire("#b", "click");
+  eq([m().hasAttribute("hidden"), m().className], [false, "fx in-from"], "shown again mid-leave: the leave settled, the enter starts");
+  p.tick(150);
+  eq([m().hasAttribute("hidden"), m().className], [false, ""], "shown");
+  p.fire("#b", "click");
+  p.tick(150);
+  eq(m().hasAttribute("hidden"), true, "hidden once the leave is done");
+  p.server({ type: "patch", ref: 2, updates: [{ id: "c1", html: html(1) }] });
+  eq([m().hasAttribute("hidden"), m().className], [true, ""], "a render shows the browser's value at once");
+});
+
 test("bindings refuse what commands refuse", () => {
   const u = s("c1:u:1", "/a");
   const p = open(`<a id="a" href="/a" data-vk-b-href='${j(u)}'></a><button id="b" data-vk-js-click='${j([["state_set", { ...u, v: "javascript:alert(1)" }]])}'></button>`);
