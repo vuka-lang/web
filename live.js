@@ -1835,7 +1835,8 @@
   function pushed(list) {
     for (const p of list || []) {
       const root = byID(p.id);
-      if (root) try { run(root, p.ops || [], null, []); } catch (err) { fail("live: a pushed command failed: " + err.message); }
+      serverWrite = true;
+      if (root) try { run(root, p.ops || [], null, []); } catch (err) { fail("live: a pushed command failed: " + err.message); } finally { serverWrite = false; }
     }
   }
 
@@ -2445,6 +2446,43 @@
     const p = r.p || [], put = (o, i) => i === p.length ? v : { ...(o && typeof o === "object" ? o : {}), [p[i]]: put(o && o[p[i]], i + 1) };
     store.set(r.s, put(store.get(r.s), 0));
     dirty.add([r.s, ...p].join("\0"));
+    if (r.w && !notifies.has(r.s)) notifies.set(r.s, r.w);
+    if (!serverWrite) written.add(r.s);
+  }
+  // Watches: a script's state(name).watch(fn) and an island's, run with
+  // the new value and the one before once a batch of writes is applied to
+  // the page, never while it renders or a patch is. A state marked
+  // @ui.Notify (w, its push) calls its handler with each value the browser
+  // writes (not one the server sent). Writes a watch makes are applied
+  // and watched in the next round; past 10 rounds the watches are cut, with
+  // a warning naming the states they kept writing.
+  const notifies = new Map(), written = new Set(), names = new Map(), watchQueue = [];
+  let serverWrite = false, draining = false;
+  const nameOf = (k) => names.get(k) || k;
+  function drainWatches() {
+    if (draining) return;
+    draining = true;
+    try {
+      const keys = new Set();
+      for (let round = 0; watchQueue.length; round++) {
+        const batch = watchQueue.splice(0);
+        if (round >= 10) {
+          warn("watches keep writing " + [...keys].map(nameOf).join(", ") + ": cut a loop");
+          break;
+        }
+        if (round >= 5) batch.forEach((w) => keys.add(w.key));
+        for (const w of batch) {
+          try { w.run(); } catch (err) { console.error("vuka: a watch of " + nameOf(w.key) + ":", err); }
+          if (dirty.size) flushStates();
+        }
+      }
+    } finally { draining = false; watchQueue.length = 0; }
+  }
+  function notify(key) {
+    const ops = notifies.get(key), root = byID(String(key).split(":")[0]);
+    if (!ops || !root || !live) return;
+    const v = store.get(key), type = "vk-notify " + key;
+    run(root, ops.map(([n, a]) => n === "push" ? [n, { ...a, event: "change", args: [v] }] : [n, a]), { type, preventDefault() {} }, []);
   }
   // Paths reach each other when one starts the other: a struct's write
   // reaches its fields' readers, a field's write the struct's.
@@ -2464,7 +2502,17 @@
       next = changed;
     }
     for (const d of ds) (subs.get(d[0]) || []).forEach((b) => { if (b.deps.some((p) => p[0] === d[0] && reach(p, d))) todo.add(b); });
-    todo.forEach((b) => b.el.isConnected ? put(b) : unsub(b));
+    const watched = [];
+    todo.forEach((b) => !b.el.isConnected ? unsub(b) : b.kind === "fn" ? watched.push(b) : put(b));
+    for (const b of watched) {
+      const was = b.last, now = ev(b.x);
+      if (equal(now, was)) continue;
+      b.last = now;
+      watchQueue.push({ key: b.key, run: () => b.fn(now, was) });
+    }
+    for (const k of written) if (notifies.has(k)) watchQueue.push({ key: k, run: () => notify(k) });
+    written.clear();
+    drainWatches();
   }
   function ev(x) {
     if (x === null || typeof x !== "object") return x;
@@ -3227,8 +3275,9 @@
   const states = {
     read: (x) => ev(x),
     write: (r, v) => { if (r && r.s && !r.x) { swrite(r, v); flushStates(); } },
-    watch: (x, fn, el) => {
-      const b = { el: el || document.documentElement, kind: "fn", x, fn, deps: deps(x) };
+    watch: (x, fn, el, name) => {
+      const b = { el: el || document.documentElement, kind: "fn", x, fn, deps: deps(x), key: x && x.s };
+      if (name && x && x.s) names.set(x.s, name);
       b.last = ev(x);
       b.deps.forEach((d) => { if (!subs.has(d[0])) subs.set(d[0], new Set()); subs.get(d[0]).add(b); });
       return () => unsub(b);

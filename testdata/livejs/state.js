@@ -166,6 +166,47 @@ test("the server sets a state with a pushed command", () => {
   eq(p.$("#y").getAttribute("data-tab"), "env");
 });
 
+test("watches: after the page shows the write, with the value before; not on a render", () => {
+  const html = (n) => `<div data-vk-id="c1"><button id="b" data-vk-js-click='${j([["state_set", { ...tab, v: "env" }], ["state_set", { ...open1, v: true }]])}'>${n}</button>
+    <p id="y" data-vk-b-data-tab='${j(tab)}' data-tab="logs"></p></div>`;
+  const p = joined(html(0));
+  const seen = [];
+  p.window.vuka.states.watch(tab, (now, was) => seen.push([now, was, p.$("#y").getAttribute("data-tab")]), null, "tab");
+  p.server({ type: "patch", ref: 2, updates: [{ id: "c1", html: html(1) }] });
+  eq(seen, [], "a render isn't a write");
+  p.fire("#b", "click");
+  eq(seen, [["env", "logs", "env"]], "one call, the page already showing env");
+  p.fire("#b", "click");
+  eq(seen.length, 1, "an unchanged value isn't watched again");
+});
+
+test("a watch writing states: applied in the next round; a loop is cut with the states' names", () => {
+  const n = s("c1:n:1", 0), m = s("c1:m:1", 0);
+  const p = open(`<div data-vk-id="c1"><i id="n" data-vk-b-title='${j(n)}'></i><i id="m" data-vk-b-title='${j(m)}'></i>
+    <button id="b" data-vk-js-click='${j([["state_inc", { ...n, by: 1 }]])}'></button></div>`);
+  const st = p.window.vuka.states;
+  st.watch(n, (v) => st.write(m, v * 10), null, "n");
+  p.fire("#b", "click");
+  eq([p.$("#n").getAttribute("title"), p.$("#m").getAttribute("title")], ["1", "10"], "a watch's write");
+  st.watch(m, (v) => st.write(n, v + 1), null, "m");
+  p.fire("#b", "click");
+  if (!p.logs.some((l) => /warn .*watches keep writing (n, m|m, n): cut a loop/.test(l))) throw new Error("no warning: " + p.logs.join("\n"));
+});
+
+test("@ui.Notify: a browser write calls the handler with the value, once per write; a server's doesn't", () => {
+  const q = { ...s("c1:q:1", ""), w: [["push", { h: "c1:5", args: [""] }]] };
+  const p = joined(`<div data-vk-id="c1"><button id="b" data-vk-js-click='${j([["state_set", { ...q, v: "dog" }]])}'></button>
+    <button id="c" data-vk-js-click='${j([["state_set", { ...q, v: "dog" }]])}'></button></div>`);
+  const ws = p.ws(), before = ws.sent.length;
+  p.fire("#b", "click");
+  const sent = ws.sent.slice(before);
+  eq(sent.map((m) => [m.target, m.args]), [["c1:5", ["dog"]]], "the handler, with the value");
+  p.fire("#c", "click");
+  eq(ws.sent.length, before + 1, "the same value isn't a write");
+  p.server({ type: "patch", ref: 2, updates: [], js: [{ id: "c1", ops: [["state_set", { ...q, v: "cat" }]] }] });
+  eq(ws.sent.length, before + 1, "the server's write isn't sent back");
+});
+
 test("bindings refuse what commands refuse", () => {
   const u = s("c1:u:1", "/a");
   const p = open(`<a id="a" href="/a" data-vk-b-href='${j(u)}'></a><button id="b" data-vk-js-click='${j([["state_set", { ...u, v: "javascript:alert(1)" }]])}'></button>`);
