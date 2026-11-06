@@ -401,6 +401,29 @@ test("key filters the chain", () => {
   eq(p.$("div").className, "esc", "its key");
 });
 
+test("key with modifiers", () => {
+  const p = open(`<div data-vk-js-keydown='${js([["key", { keys: ["ctrl+Enter", "Escape"] }], ["exec", { attr: "data-count" }]])}' data-count='[]'><input></div>`);
+  let n = 0;
+  p.$("div").getAttribute = ((get) => function (k) { if (k === "data-count") n++; return get.call(this, k); })(p.$("div").getAttribute);
+  p.fire("input", "keydown", { key: "Enter" });
+  eq(n, 0, "Enter without ctrl");
+  p.fire("input", "keydown", { key: "Enter", ctrlKey: true });
+  eq(n, 1, "ctrl+Enter");
+  p.fire("input", "keydown", { key: "Escape", shiftKey: true });
+  eq(n, 2, "a key named without modifiers, others held");
+});
+
+test("prevent, stop and once", () => {
+  const p = open(`<div id="outer"><a id="a" href="/x" data-vk-js-click='${js([["prevent", {}], ["stop", {}], ["once", {}], ["add_class", { names: ["n"] }]])}'>x</a></div>`);
+  let bubbled = 0;
+  p.$("#outer").addEventListener("click", () => bubbled++);
+  const e = p.fire("#a", "click");
+  eq([e.defaultPrevented, bubbled, p.$("#a").className], [true, 0, "n"], "the first click");
+  p.$("#a").className = "";
+  const e2 = p.fire("#a", "click");
+  eq([e2.defaultPrevented, bubbled, p.$("#a").className], [true, 0, ""], "once: the steps after it don't run again");
+});
+
 test("confirm", () => {
   const ops = [["confirm", { msg: "Sure?" }], ["add_class", { names: ["done"] }]];
   const yes = open(`<button data-vk-js-click='${js(ops)}'></button>`);
