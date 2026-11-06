@@ -2626,17 +2626,17 @@
   // bindings, and unbinds those that lost theirs.
   function bindIn(root, html) {
     if (root) for (const el of root.querySelectorAll("input[data-vk-mixed]")) el.indeterminate = true;
-    if (!root || !subs.size && !/ data-vk-(b|show)/.test(html)) return;
-    for (const el of [root, ...root.querySelectorAll("*")]) if (bound.has(el) || Array.from(el.attributes).some((a) => /^data-vk-(b|show)(-|$)/.test(a.name))) bind(el);
+    if (!root || !subs.size && !/ data-vk-(b|show|v)/.test(html)) return;
+    for (const el of [root, ...root.querySelectorAll("*")]) if (bound.has(el) || Array.from(el.attributes).some((a) => /^data-vk-(b|show|v)(-|$)/.test(a.name))) bind(el);
   }
   function bind(el) {
     const old = bound.get(el) || [], list = [];
     for (const a of Array.from(el.attributes)) {
-      const m = /^data-vk-(b|show)(?:-(.+))?$/.exec(a.name);
+      const m = /^data-vk-(b|show|v)(?:-(.+))?$/.exec(a.name);
       if (!m) continue;
       let x;
       try { x = JSON.parse(a.value); } catch (_) { warn("bad binding " + a.name); continue; }
-      const kind = m[1] === "show" ? "show" : m[2] ? "attr" : "text", name = m[2];
+      const kind = m[1] === "show" ? "show" : m[1] === "v" ? "vis" : m[2] ? "attr" : "text", name = m[2];
       const b = old.find((o) => o.kind === kind && o.name === name) || { el, kind, name };
       b.x = x;
       list.push(b);
@@ -2655,6 +2655,7 @@
     b.last = v;
     if (b.kind === "fn") return b.fn(v);
     if (b.kind === "show") return showSet(b, !!v, again);
+    if (b.kind === "vis") return visSet(b.el, !!v, again);
     if (b.kind === "text") {
       const t = v == null ? "" : String(v);
       if (el.textContent !== t) el.textContent = t;
@@ -2718,6 +2719,44 @@
       }
       frame(() => { if (b.phase === phase) { mark("data-closed", true); ended(b, kids, () => { mark("data-leave", false); visible(false); }); } });
     }
+  }
+  // show={…}: an element (data-vk-v) hidden while its expression doesn't
+  // hold. Its data-vk-transition animates the change — classes or inline
+  // styles while it runs, at its start, at its end — the element hidden
+  // once the leave phase's time has passed. A change while one runs
+  // settles that one at once and starts from where it is; a first render,
+  // a morph and reduced motion show the value at once.
+  const visRuns = new WeakMap();
+  function visSet(el, on, now) {
+    const run = visRuns.get(el);
+    if (run) run.settle();
+    let t = null;
+    try { t = JSON.parse(el.getAttribute("data-vk-transition") || "null"); } catch (_) {}
+    const ph = t && (on ? t.enter : t.leave);
+    if (now || reduced() || !ph || !(ph.c || ph.s)) return quiet(() => visible(el, on));
+    const set = (i, add) => {
+      if (ph.c) words(ph.c[i]).forEach((c) => el.classList[add ? "add" : "remove"](c));
+      if (ph.s && el.style) for (const k in ph.s[i] || {}) add ? el.style.setProperty(k, ph.s[i][k]) : el.style.removeProperty(k);
+    };
+    let done = false, timer = 0;
+    const r = { settle: () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      visRuns.delete(el);
+      quiet(() => { [0, 1, 2].forEach((i) => set(i, false)); if (!on) visible(el, false); });
+    } };
+    visRuns.set(el, r);
+    quiet(() => { set(0, true); set(1, true); if (on) visible(el, true); });
+    frame(() => {
+      if (done) return;
+      quiet(() => { set(1, false); set(2, true); });
+      timer = setTimeout(r.settle, t.ms == null ? 200 : t.ms);
+    });
+  }
+  function visible(el, on) {
+    if (on) el.removeAttribute("hidden");
+    else if (!el.hasAttribute("hidden")) el.setAttribute("hidden", "");
   }
   const popOpen = (p) => { try { return p.matches(":popover-open"); } catch (_) { return false; } };
   // A popover the browser closed: the state its <vk-show> shows is written
