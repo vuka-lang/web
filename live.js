@@ -1847,12 +1847,14 @@
   // predictions; a chain run from inside one (exec) shares its record, and r
   // starts a record of its own (or carries one across a call it waits for).
   function run(el, ops, e, r) {
+    const was = writer;
+    if (e && e.type) writer = e.type + (el && el.id ? " #" + el.id : el && el.tagName ? " <" + el.tagName.toLowerCase() + ">" : "");
     try {
       if (rec && !r) return steps(el, ops, e);
       const outer = rec;
       rec = r || [];
       try { return steps(el, ops, e); } finally { rec = outer; }
-    } finally { if (dirty.size) flushStates(); }
+    } finally { if (dirty.size) flushStates(); writer = was; }
   }
 
   function steps(el, ops, e) {
@@ -2458,6 +2460,7 @@
   const derivs = new Map(), dsubs = new Map(); // derived key → {x, deps}; a state's key → the derived keys reading it
   const sinit = (r) => {
     if (store.has(r.s)) return r;
+    if (r.n) names.set(r.s, r.n);
     if (r.k || r.sh) metas.set(r.s, { k: r.k, sh: r.sh });
     if (r.sh) channel();
     if (r.x === undefined) store.set(r.s, r.k ? readKept(r.k, r.i === undefined ? null : r.i) : r.i === undefined ? null : r.i);
@@ -2527,7 +2530,8 @@
   // and watched in the next round; past 10 rounds the watches are cut, with
   // a warning naming the states they kept writing.
   const notifies = new Map(), written = new Set(), names = new Map(), watchQueue = [];
-  let serverWrite = false, draining = false;
+  let serverWrite = false, draining = false, writer = "a script";
+  const observers = new Set(); // the dev toolbar's: each write's state, value and what wrote it
   const nameOf = (k) => names.get(k) || k;
   function drainWatches() {
     if (draining) return;
@@ -2572,6 +2576,10 @@
       next = changed;
     }
     for (const d of ds) (subs.get(d[0]) || []).forEach((b) => { if (b.deps.some((p) => p[0] === d[0] && reach(p, d))) todo.add(b); });
+    if (observers.size) {
+      const by = serverWrite ? "the server" : remoteWrite ? "another tab" : writer;
+      for (const k of new Set(ds.map((d) => d[0]))) observers.forEach((fn) => { try { fn({ key: k, name: nameOf(k), value: store.get(k), by }); } catch (_) {} });
+    }
     const watched = [];
     todo.forEach((b) => !b.el.isConnected ? unsub(b) : b.kind === "fn" ? watched.push(b) : put(b));
     for (const b of watched) {
@@ -3383,6 +3391,11 @@
   // state (or a derived expression), follows it, and writes it back.
   const states = {
     read: (x) => ev(x),
+    // The dev toolbar's: the states the page's fields keep, by name; a
+    // write as an event's; each write as it happens.
+    list: () => [...names].filter(([k]) => store.has(k)).map(([key, name]) => ({ key, name, value: store.get(key), derived: derivs.has(key), at: key.split(":")[0] })),
+    set: (key, v) => { if (!derivs.has(key) && store.has(key)) { const was = writer; writer = "the toolbar"; try { swrite({ s: key }, v); flushStates(); } finally { writer = was; } } },
+    observe: (fn) => { observers.add(fn); return () => observers.delete(fn); },
     write: (r, v) => { if (r && r.s && !r.x) { swrite(r, v); flushStates(); } },
     watch: (x, fn, el, name) => {
       const b = { el: el || document.documentElement, kind: "fn", x, fn, deps: deps(x), key: x && x.s };

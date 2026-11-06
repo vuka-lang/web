@@ -202,6 +202,16 @@ class Element extends Node {
     }
     return el;
   }
+  get dataset() {
+    const el = this, attr = (k) => "data-" + String(k).replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
+    return new Proxy({}, {
+      get: (_, k) => typeof k === "string" && el.hasAttribute(attr(k)) ? el.getAttribute(attr(k)) : undefined,
+      set: (_, k, v) => { el.setAttribute(attr(k), String(v)); return true; },
+      has: (_, k) => el.hasAttribute(attr(k)),
+    });
+  }
+  get hidden() { return this.hasAttribute("hidden"); }
+  set hidden(v) { v ? this.setAttribute("hidden", "") : this.removeAttribute("hidden"); }
   focus() { this.ownerDocument.activeElement = this; this.ownerDocument.focused.push(this); }
   blur() { if (this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = this.ownerDocument.body; }
   select() {}

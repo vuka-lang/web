@@ -136,7 +136,7 @@
     if (ide) ide.save();
     body.innerHTML = r.html;
     mountIDE();
-    if (id === current) { addBrowserErrors(); addStreamProblems(); }
+    if (id === current) { addBrowserErrors(); addStreamProblems(); addStates(); }
     for (const d of body.querySelectorAll("details")) if (open.includes(d.dataset.seq || d.dataset.ref)) { d.open = true; wire(d); }
     show(body.querySelector(`[data-tab="${CSS.escape(tab)}"]`) ? tab : "Request");
     const p = body.querySelector(".panel:not([hidden])");
@@ -150,6 +150,66 @@
     for (const p of body.querySelectorAll(".panel")) p.hidden = p.dataset.panel !== name;
     if (ide) ide.visible(name === "GraphiQL" && !drawer.hidden);
   }
+
+  // The States panel: the page's browser states, by the component
+  // instance keeping them, live; a state's value is edited in place, written
+  // as an event's write is (a Derived is read only), and each write flashes
+  // with what wrote it — the event and its element, the server, a script.
+  let unobserve = null;
+  const states = () => window.vuka && window.vuka.states && window.vuka.states.list ? window.vuka.states : null;
+  const jsonText = (v) => { try { return JSON.stringify(v); } catch { return String(v); } };
+  function addStates() {
+    const st = states(), tabs = body.querySelector("nav.tabs");
+    if (!st || !tabs) return;
+    const list = st.list().sort((a, b) => a.at.localeCompare(b.at) || a.name.localeCompare(b.name));
+    if (!list.length) return;
+    const button = document.createElement("button");
+    button.setAttribute("type", "button");
+    button.setAttribute("role", "tab");
+    button.className = "tab";
+    button.setAttribute("data-tab", "States");
+    button.innerHTML = `States <span class="count">${list.length}</span>`;
+    tabs.appendChild(button);
+    const groups = new Map();
+    for (const s of list) groups.set(s.at, [...(groups.get(s.at) || []), s]);
+    let html = "";
+    for (const [at, ss] of groups) {
+      const type = (ss[0].name.split(".")[0]) || at;
+      html += `<h4>${esc(type)} <span class="dim">${esc(at)}</span></h4><table class="grid states">`;
+      for (const s of ss) {
+        const field = s.name.slice(s.name.indexOf(".") + 1);
+        const val = s.derived ? `<code class="sv">${esc(jsonText(s.value))}</code> <span class="dim">derived</span>`
+          : `<input class="sv" data-key="${esc(s.key)}" value="${esc(jsonText(s.value))}" aria-label="${esc(s.name)}">`;
+        html += `<tr data-state="${esc(s.key)}"><td><code>${esc(field)}</code></td><td>${val}</td><td class="by dim"></td></tr>`;
+      }
+      html += "</table>";
+    }
+    const panel = document.createElement("section");
+    panel.className = "panel";
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("data-panel", "States");
+    panel.hidden = true;
+    panel.innerHTML = html;
+    body.appendChild(panel);
+    if (!unobserve) unobserve = st.observe(stateWritten);
+  }
+  function stateWritten(w) {
+    const row = body.querySelector(`tr[data-state="${CSS.escape(w.key)}"]`);
+    if (!row) return;
+    const v = row.querySelector(".sv"), text = jsonText(w.value);
+    if (v.tagName === "INPUT") { if (root.activeElement !== v) v.value = text; } else v.textContent = text;
+    row.querySelector(".by").textContent = w.by;
+    row.classList.remove("flash");
+    void row.offsetWidth;
+    row.classList.add("flash");
+  }
+  body.addEventListener("change", (e) => {
+    const input = e.target.closest && e.target.closest("input.sv[data-key]"), st = states();
+    if (!input || !st) return;
+    let v;
+    try { v = JSON.parse(input.value); } catch { v = input.value; }
+    st.set(input.getAttribute("data-key"), v);
+  });
 
   // addBrowserErrors lists the live failures only the browser saw.
   function addBrowserErrors() {
