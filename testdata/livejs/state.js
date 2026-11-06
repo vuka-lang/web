@@ -250,6 +250,8 @@ test("@ui.Shared: a write shows in the other tab, which watches it and doesn't s
   eq([seen, posts.length], [[[true, false]], 1], "watched there, posted once: by the tab that wrote it");
   b.fire("#b", "click");
   eq(a.$("#s").hasAttribute("hidden"), true, "and back");
+});
+
 test("optimistic: a failed push puts back the states its chain wrote; plain pushes keep them", () => {
   const liked = s("c1:liked:1", false), n = s("c1:n:1", 0);
   const p = joined(`<div data-vk-id="c1"><vk-t id="l" data-vk-b='${j(liked)}'>false</vk-t><vk-t id="n" data-vk-b='${j(n)}'>0</vk-t>
