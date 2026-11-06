@@ -118,14 +118,14 @@ test("the States panel: each instance's states, live, editable; a Derived read o
   await settle();
   const rows = () => t.$('section[data-panel="States"]').querySelectorAll("tr").map((r) => [r.querySelector("code").textContent, (r.querySelector(".sv").value ?? r.querySelector(".sv").textContent), r.querySelector(".by").textContent]);
   eq(t.$('[data-tab="States"]').textContent, "States 3", "the tab");
-  eq(rows(), [["tab", '"a"', ""], ["open", "false", ""], ["wide", "false", ""]], "the states");
+  eq(rows(), [["open", "false", ""], ["tab", '"a"', ""], ["wide", "false", ""]], "the states, by name");
   t.p.fire("#b", "click");
-  eq(rows()[0], ["tab", '"b"', "click #b"], "an event's write, flashed with the event");
+  eq(rows()[1], ["tab", '"b"', "click #b"], "an event's write, flashed with the event");
   eq(rows()[2][1], "true", "and the Derived following it");
   const input = t.$('input.sv[data-key="c1:fo:1"]');
   input.value = "true";
   t.p.fire(input, "change");
-  eq([t.p.$("#p").hasAttribute("hidden"), rows()[1][2]], [false, "the toolbar"], "edited in place: the page follows");
+  eq([t.p.$("#p").hasAttribute("hidden"), rows()[0][2]], [false, "the toolbar"], "edited in place: the page follows");
   eq(t.$('section[data-panel="States"]').querySelectorAll("input").length, 2, "a Derived isn't editable");
 });
 

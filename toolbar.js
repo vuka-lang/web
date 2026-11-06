@@ -161,7 +161,7 @@
   function addStates() {
     const st = states(), tabs = body.querySelector("nav.tabs");
     if (!st || !tabs) return;
-    const list = st.list();
+    const list = st.list().sort((a, b) => a.at.localeCompare(b.at) || a.name.localeCompare(b.name));
     if (!list.length) return;
     const button = document.createElement("button");
     button.setAttribute("type", "button");
