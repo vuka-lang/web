@@ -2431,7 +2431,7 @@
     if (store.has(r.s)) return r;
     if (r.k || r.sh) metas.set(r.s, { k: r.k, sh: r.sh });
     if (r.sh) channel();
-    if (r.x === undefined) store.set(r.s, r.k ? kept(r.k, r.i === undefined ? null : r.i) : r.i === undefined ? null : r.i);
+    if (r.x === undefined) store.set(r.s, r.k ? readKept(r.k, r.i === undefined ? null : r.i) : r.i === undefined ? null : r.i);
     else {
       const d = { x: r.x, deps: deps(r.x) };
       derivs.set(r.s, d);
@@ -2452,7 +2452,7 @@
     if (!serverWrite) written.add(r.s);
     const m = metas.get(r.s);
     if (m) {
-      if (m.k) keep(m.k, store.get(r.s));
+      if (m.k) saveKept(m.k, store.get(r.s));
       if (m.sh && !remoteWrite && channel()) channel().postMessage({ sh: m.sh, v: store.get(r.s) });
     }
   }
@@ -2464,13 +2464,13 @@
   // notifications run), never posted again from there.
   const metas = new Map(); // state key → {k, sh}
   let remoteWrite = false, bc;
-  function kept(k, fallback) {
+  function readKept(k, fallback) {
     try {
       const v = localStorage.getItem("vuka:" + k);
       return v === null ? fallback : JSON.parse(v);
     } catch (_) { return fallback; }
   }
-  function keep(k, v) { try { localStorage.setItem("vuka:" + k, JSON.stringify(v)); } catch (_) {} }
+  function saveKept(k, v) { try { localStorage.setItem("vuka:" + k, JSON.stringify(v)); } catch (_) {} }
   function channel() {
     if (bc === undefined) {
       bc = null;
