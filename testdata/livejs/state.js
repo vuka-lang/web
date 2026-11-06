@@ -64,6 +64,28 @@ test("operators", () => {
   eq([p.$("#a").getAttribute("title"), p.$("#c").hasAttribute("data-x")], ["9", false], "dec");
 });
 
+test("a Derived: computed once per change, in a chain, its readers following only a new value", () => {
+  const count = s("c1:count:1", 2), price = s("c1:price:1", 30);
+  const total = { s: "c1:total:1", i: 60, x: ["*", count, price] };
+  const over = { s: "c1:over:1", i: false, x: [">", total, 100] };
+  const p = open(`<div>
+    <i id="t" data-vk-b-title='${j(total)}' title="60"></i>
+    <i id="u" data-vk-b-title='${j(["+", total, 1])}' title="61"></i>
+    <i id="o" data-vk-b-data-over='${j(over)}'></i>
+    <button id="up" data-vk-js-click='${j([["state_inc", { ...count, by: 2 }]])}'></button>
+    <button id="same" data-vk-js-click='${j([["state_set", { ...count, v: 1 }], ["state_set", { ...price, v: 120 }]])}'></button>
+    <button id="bad" data-vk-js-click='${j([["state_set", { ...total, v: 5 }]])}'></button></div>`);
+  const w = writes(p);
+  p.fire("#up", "click");
+  eq([p.$("#t").getAttribute("title"), p.$("#u").getAttribute("title"), p.$("#o").hasAttribute("data-over")], ["120", "121", true], "4 * 30");
+  eq([w("t title"), w("u title"), w("o data-over")], [1, 1, 1], "one write each");
+  p.fire("#same", "click");
+  eq([p.$("#t").getAttribute("title"), w("t title"), w("o data-over")], ["120", 1, 1], "1 * 120: the same total, nothing written");
+  p.fire("#bad", "click");
+  eq(p.$("#t").getAttribute("title"), "120", "a Derived isn't written");
+  eq(p.window.vuka.states.read(total), 120, "read by islands and scripts");
+});
+
 test("a chain's writes land together: one write per binding", () => {
   const p = open(`<div>
     <button id="b" data-vk-js-click='${j([["state_set", { ...tab, v: "env" }], ["state_set", { ...open1, v: true }], ["state_set", { ...tab, v: "logs" }], ["state_set", { ...tab, v: "env" }]])}'></button>
