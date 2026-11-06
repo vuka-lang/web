@@ -133,7 +133,7 @@
         }
         if (b && b.form && !m.error && b.form.isConnected && !b.form.hasAttribute("data-vk-form")) resetSent(b.form, b.shows);
         if (b && b.form && b.form.isConnected && b.form.hasAttribute("data-vk-form") && !b.aborted) submitted(b.form);
-        if (m.error) fail(m.error, m.ref);
+        if (m.error) { unpredict(m.ref); fail(m.error, m.ref); }
         if (n) arrived(n, m);
         else markActive();
         emit("vk:patched", { ids: ups.map((u) => u.id) });
@@ -142,6 +142,7 @@
       }
       case "error":
         if (n) return load(n.href, n.pop || n.replace);
+        unpredict(m.ref);
         fail(m.error, m.ref);
         break;
       case "redirect":
@@ -1877,6 +1878,8 @@
         return pace(name, el, e, a.ms || 0, () => run(el, rest, e, r));
       } else if (name === "key") {
         if (!e || !(a.keys || []).some((k) => keyMatches(e, k))) return;
+      } else if (name === "optimistic") {
+        if (rec) rec.opt = true;
       } else if (name === "once") {
         if (!e || ran(el, e.type)) return;
       } else if (name === "prevent") {
@@ -2002,6 +2005,7 @@
   // is that push's: when every target is, neither the result nor the
   // hooks run.
   function settle(id, error, result, msg) {
+    if (error) unpredict(id);
     const p = preds.get(id);
     if (!p) return;
     preds.delete(id);
@@ -2135,6 +2139,7 @@
   const fieldValue = (el) => checkable(el) ? el.checked : el.value;
   function undo(r) { return quiet(() => undoIn(r)); }
   function undoIn(r) {
+    if (r.state) return undoState(r);
     const el = r.el, t = running.get(el);
     if (t) t.finish();
     if (r.field) {
@@ -2152,6 +2157,30 @@
     k.value = val(el, name);
     if (k.value === k.server) m.delete(name);
     if (!m.size) touched.delete(el);
+  }
+
+  // unpredict puts back the states a failed push predicted (an optimistic
+  // chain's writes), last first, before its error shows.
+  function unpredict(id) {
+    const p = id && preds.get(id);
+    if (!p || p.a.keep || !p.recs.some((r) => r.state)) return;
+    for (let i = p.recs.length; i--;) if (p.recs[i].state) undoState(p.recs[i]);
+    p.recs = p.recs.filter((r) => !r.state);
+    serverWrite = true;
+    try { if (dirty.size) flushStates(); } finally { serverWrite = false; }
+  }
+
+  // undoState puts back a state an optimistic push predicted, when it still
+  // holds what the chain wrote. When a later push has written it since, that
+  // push's prediction starts from this one's value instead: a failure of it
+  // then puts back what was there before either.
+  function undoState(r) {
+    if (!equal(store.get(r.state), r.after)) {
+      for (const q of preds.values()) for (const o of q.recs) if (o.state === r.state && o !== r && equal(o.before, r.after)) o.before = r.before;
+      return;
+    }
+    store.set(r.state, r.before);
+    dirty.add(r.state);
   }
 
   // branch returns the index after which the branch of the if at i that
@@ -2445,9 +2474,11 @@
   const equal = (a, b) => a === b || a !== null && b !== null && typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b);
   function swrite(r, v) {
     if (!r.s || r.x !== undefined || equal(sread(r), v)) return;
+    const pred = rec && rec.opt && !serverWrite ? { state: r.s, before: store.get(r.s) } : null;
     const p = r.p || [], put = (o, i) => i === p.length ? v : { ...(o && typeof o === "object" ? o : {}), [p[i]]: put(o && o[p[i]], i + 1) };
     store.set(r.s, put(store.get(r.s), 0));
     dirty.add([r.s, ...p].join("\0"));
+    if (pred) { pred.after = store.get(r.s); rec.push(pred); }
     if (r.w && !notifies.has(r.s)) notifies.set(r.s, r.w);
     if (!serverWrite) written.add(r.s);
     const m = metas.get(r.s);
