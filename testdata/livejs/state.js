@@ -252,6 +252,52 @@ test("@ui.Shared: a write shows in the other tab, which watches it and doesn't s
   eq(a.$("#s").hasAttribute("hidden"), true, "and back");
 });
 
+test("optimistic: a failed push puts back the states its chain wrote; plain pushes keep them", () => {
+  const liked = s("c1:liked:1", false), n = s("c1:n:1", 0);
+  const p = joined(`<div data-vk-id="c1"><vk-t id="l" data-vk-b='${j(liked)}'>false</vk-t><vk-t id="n" data-vk-b='${j(n)}'>0</vk-t>
+    <button id="o" data-vk-js-click='${j([["optimistic"], ["state_toggle", liked], ["state_inc", { ...n, by: 1 }], ["push", { h: "c1:1" }]])}'></button>
+    <button id="plain" data-vk-js-click='${j([["state_toggle", liked], ["push", { h: "c1:1" }]])}'></button></div>`);
+  const ws = p.ws(), last = () => ws.sent[ws.sent.length - 1].ref;
+  const shown = () => [p.$("#l").textContent, p.$("#n").textContent];
+  const errs = [];
+  p.doc.addEventListener("vk:error", () => errs.push(shown()));
+  p.fire("#o", "click");
+  eq(shown(), ["true", "1"], "shown at once");
+  p.server({ type: "patch", ref: last(), updates: [], error: "nope" });
+  eq([shown(), errs.length > 0 && errs.every((e) => e.join() === "false,0")], [["false", "0"], true], "put back before the error shows");
+  p.fire("#o", "click");
+  p.server({ type: "patch", ref: last(), updates: [] });
+  eq(shown(), ["true", "1"], "kept on success");
+  p.fire("#plain", "click");
+  p.server({ type: "patch", ref: last(), updates: [], error: "nope" });
+  eq(shown(), ["false", "1"], "a plain push keeps its writes");
+});
+
+test("optimistic: two in flight fail in either order and leave what was there before both", () => {
+  for (const order of [[0, 1], [1, 0]]) {
+    const liked = s("c1:liked:1", false);
+    const p = joined(`<div data-vk-id="c1"><vk-t id="l" data-vk-b='${j(liked)}'>false</vk-t>
+      <button id="o" data-vk-js-click='${j([["optimistic"], ["state_toggle", liked], ["push", { h: "c1:1" }]])}'></button></div>`);
+    const ws = p.ws(), refs = [];
+    p.fire("#o", "click"); refs.push(ws.sent[ws.sent.length - 1].ref);
+    p.fire("#o", "click"); refs.push(ws.sent[ws.sent.length - 1].ref);
+    eq(p.$("#l").textContent, "false", "toggled twice");
+    for (const i of order) p.server({ type: "patch", ref: refs[i], updates: [], error: "nope" });
+    eq(p.$("#l").textContent, "false", "order " + order);
+  }
+  const liked = s("c1:liked:1", false);
+  const p = joined(`<div data-vk-id="c1"><vk-t id="l" data-vk-b='${j(liked)}'>false</vk-t>
+    <button id="t" data-vk-js-click='${j([["optimistic"], ["state_set", { ...liked, v: true }], ["push", { h: "c1:1" }]])}'></button>
+    <button id="f" data-vk-js-click='${j([["optimistic"], ["state_set", { ...liked, v: false }], ["push", { h: "c1:1" }]])}'></button></div>`);
+  const ws = p.ws(), refs = [];
+  p.fire("#t", "click"); refs.push(ws.sent[ws.sent.length - 1].ref);
+  p.fire("#f", "click"); refs.push(ws.sent[ws.sent.length - 1].ref);
+  p.server({ type: "patch", ref: refs[1], updates: [], error: "nope" });
+  eq(p.$("#l").textContent, "true", "the later one fails: back to the earlier's prediction");
+  p.server({ type: "patch", ref: refs[0], updates: [], error: "nope" });
+  eq(p.$("#l").textContent, "false", "then the earlier: back to the start");
+});
+
 test("bindings refuse what commands refuse", () => {
   const u = s("c1:u:1", "/a");
   const p = open(`<a id="a" href="/a" data-vk-b-href='${j(u)}'></a><button id="b" data-vk-js-click='${j([["state_set", { ...u, v: "javascript:alert(1)" }]])}'></button>`);
