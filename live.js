@@ -41,7 +41,7 @@
       if (nav) return load(nav.href, nav.pop || nav.replace); // the page it was going to, the long way
       pending.forEach((p) => clearTimeout(p.timer));
       pending.clear();
-      busy.forEach((b) => release(b.el));
+      busy.forEach((b) => { release(b.el); if (b.held) b.held(); });
       busy.clear();
       edgeRefs.forEach((_, r) => edgeReplied(r)); // no reply comes
       [...preds.keys()].forEach((r) => settle(r, true)); // no reply comes
@@ -153,6 +153,7 @@
     if (b) {
       busy.delete(m.ref);
       release(b.el);
+      if (b.held) b.held();
     }
     if (m.ref) edgeReplied(m.ref);
     if (m.ref && m.type !== "redirect") settle(m.ref, m.type === "error" || !!m.error, m.result, m.error);
@@ -763,15 +764,19 @@
       fd.set("_vk_check", form.hasAttribute("data-vk-submitted") ? "submitted" : "1");
     }
     const seq = form.vkSeq = (form.vkSeq || 0) + 1;
+    let held = null;
     if (mode === "submit") {
       clearTimeout(form.vkCheckTimer);
       form.vkBusy = true;
       form.setAttribute("aria-busy", "true");
+      held = holdForm(form, submitter);
     }
     const done = () => {
       if (mode !== "submit") return;
       form.vkBusy = false;
       form.removeAttribute("aria-busy");
+      if (held) held();
+      held = null;
     };
     const action = httpURL(form.getAttribute("action") || location.href);
     if (!action || action.origin !== location.origin) return done();
@@ -942,11 +947,34 @@
     const f = document.activeElement;
     sentField = f && isField(f) ? { el: f, shows: fieldShows(f), ref: msg.ref } : null;
     if (el && (form || msg.event === "click" || edge(msg.event))) {
-      busy.set(msg.ref, { el, form, shows: form && form.elements && Array.from(form.elements, (c) => isField(c) ? fieldShows(c) : null) });
+      const held = form && msg.event === "submit" && form.hasAttribute("data-vk-form") ? holdForm(form, lastSubmitter) : null;
+      busy.set(msg.ref, { el, form, held, shows: form && form.elements && Array.from(form.elements, (c) => isField(c) ? fieldShows(c) : null) });
       el.setAttribute("aria-busy", "true");
     }
     ws.send(JSON.stringify(msg));
     return msg.ref;
+  }
+
+  // A struct form's submit in flight: the button that sent it — inside the
+  // form, or outside it naming it (form="…") — busy (aria-busy,
+  // data-vk-busy), the form's other controls aria-disabled (not disabled,
+  // which would leave them out of the post) until its reply. The returned
+  // function puts back what it changed.
+  let lastSubmitter = null;
+  document.addEventListener("submit", (e) => { lastSubmitter = e.submitter || null; }, true);
+  function holdForm(form, submitter) {
+    const undo = [];
+    const mark = (el, name, v) => {
+      if (el.hasAttribute(name)) return;
+      el.setAttribute(name, v);
+      undo.push(() => el.removeAttribute(name));
+    };
+    const btn = submitter && submitter.form === form ? submitter : null;
+    if (btn) { mark(btn, "aria-busy", "true"); mark(btn, "data-vk-busy", ""); }
+    for (const c of form.elements) {
+      if (c !== btn && c.type !== "hidden" && (isField(c) || c.tagName === "BUTTON")) mark(c, "aria-disabled", "true");
+    }
+    return () => undo.forEach((f) => f());
   }
 
   const isField = (el) => el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
