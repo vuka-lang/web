@@ -65,9 +65,9 @@ func noteApp() *App {
 	return a
 }
 
-// TestBrowserFormBusy: a second click on the submit button while the
-// first submit is on its way reaches the button — no CSS keeps it from
-// it — and the runtime drops the submit it would send.
+// TestBrowserFormBusy: while a submit is on its way the button that sent
+// it is busy (aria-busy, data-vk-busy): a second click on it doesn't
+// reach it, and the runtime would drop the submit it sent anyway.
 func TestBrowserFormBusy(t *testing.T) {
 	noteSaves.Store(0)
 	srv := httptest.NewServer(noteApp().Handler())
@@ -76,18 +76,21 @@ func TestBrowserFormBusy(t *testing.T) {
 	p.Eval(`window.__clicks = 0; document.querySelector(".vk-btn--submit").addEventListener("click", () => window.__clicks++)`, nil)
 	p.Click(".vk-btn--submit")
 	p.Wait(`document.querySelector("form").getAttribute("aria-busy") === "true"`)
-	var pe any
-	p.Eval(`getComputedStyle(document.querySelector(".vk-btn--submit")).pointerEvents`, &pe)
-	if pe == "none" {
-		t.Errorf("a busy form's submit button takes no clicks (pointer-events: none)")
+	var busy any
+	p.Eval(`[document.querySelector(".vk-btn--submit").getAttribute("aria-busy"), document.querySelector(".vk-btn--submit").hasAttribute("data-vk-busy")]`, &busy)
+	if b, ok := busy.([]any); !ok || b[0] != "true" || b[1] != true {
+		t.Errorf("the submit button while its submit is on its way: [aria-busy, data-vk-busy] = %v", busy)
 	}
 	p.Click(".vk-btn--submit")
 	p.Wait(`!document.querySelector("form").hasAttribute("aria-busy")`)
 	time.Sleep(600 * time.Millisecond)
 	var clicks any
 	p.Eval(`window.__clicks`, &clicks)
-	if clicks != float64(2) || noteSaves.Load() != 1 {
-		t.Errorf("%v clicks reached the button, %d saves: the second click is the button's, its submit dropped", clicks, noteSaves.Load())
+	if clicks != float64(1) || noteSaves.Load() != 1 {
+		t.Errorf("%v clicks reached the button, %d saves: the busy button takes no second click, and one save is made", clicks, noteSaves.Load())
+	}
+	if p.Eval(`document.querySelector(".vk-btn--submit").hasAttribute("aria-busy")`, &busy); busy != false {
+		t.Errorf("the submit button stays busy after the reply")
 	}
 	p.Wait(`document.querySelector("#saved") !== null`)
 	p.Wait(`document.querySelector("#saved") === null`) // Saved is over after 2s
