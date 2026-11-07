@@ -132,7 +132,10 @@
           break;
         }
         if (b && b.form && !m.error && b.form.isConnected && !b.form.hasAttribute("data-vk-form")) resetSent(b.form, b.shows);
-        if (b && b.form && b.form.isConnected && b.form.hasAttribute("data-vk-form") && !b.aborted) submitted(b.form);
+        if (b && b.form && b.form.isConnected && b.form.hasAttribute("data-vk-form") && !b.aborted) {
+          if (b.reset) b.form.dispatchEvent(new CustomEvent("vkreset", { bubbles: true }));
+          else submitted(b.form);
+        }
         if (m.error) { unpredict(m.ref); fail(m.error, m.ref); }
         if (n) arrived(n, m);
         else markActive();
@@ -270,6 +273,15 @@
   function handle(e) {
     const t = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
     const el = owner(t, e.type);
+    // A field's own handler (<input model={…} onChange={…}>, a <fieldset
+    // for> with onChange) runs after its struct form's: the form takes the
+    // new value first, as if the field had none.
+    const vf = el && el.tagName !== "FORM" && t.closest && t.closest("form[data-vk-form]");
+    if (vf && vf.contains(el) && e.type !== "submit" && vf.hasAttribute("data-vk-on-" + e.type)) handleAt(vf, t, e);
+    handleAt(el, t, e);
+  }
+
+  function handleAt(el, t, e) {
     if (!el || el.hasAttribute("data-vk-js-" + e.type) && commands(el, e) === false) return;
     if (!el.hasAttribute("data-vk-on-" + e.type)) return;
     const vf = el.tagName === "FORM" && el.hasAttribute("data-vk-form") ? el : null;
@@ -369,7 +381,26 @@
       if (mine) bad.focus();
       if (!t.startsWith("Error: ")) document.title = "Error: " + t;
     } else if (t.startsWith("Error: ")) document.title = t.slice(7);
+    // the form's onSuccess or onError commands (data-vk-js-vksuccess, -vkerror)
+    form.dispatchEvent(new CustomEvent(bad ? "vkerror" : "vksuccess", { bubbles: true }));
   }
+
+  // Reset: a struct form's reset (a <button type="reset">) is the
+  // server's: the runtime sends it as a submit with the intent "reset",
+  // the form's loaded values come back in the reply, and then its onReset
+  // commands run (vkreset). Without a connection the browser resets it.
+  document.addEventListener("reset", (e) => {
+    const form = e.target;
+    if (!joined || !form || form.tagName !== "FORM" || !form.hasAttribute("data-vk-form") || !form.hasAttribute("data-vk-on-submit")) return;
+    e.preventDefault();
+    const msg = { type: "event", target: form.getAttribute("data-vk-on-submit"), event: "submit", form: formOf(form) };
+    msg.form._vk_intent = ["reset"];
+    lastSubmitter = null;
+    flush();
+    const r = send(msg, form, form);
+    const b = r && busy.get(r);
+    if (b) b.reset = true;
+  }, true);
 
   // An error summary's links move focus to the field, its label in view.
   document.addEventListener("click", (e) => {
@@ -632,6 +663,7 @@
     }
     sum.focus();
     if (!document.title.startsWith("Error: ")) document.title = "Error: " + document.title;
+    form.dispatchEvent(new CustomEvent("vkinvalid", { bubbles: true })); // the form's onInvalid commands
     return false;
   }
   document.addEventListener("submit", (e) => {
