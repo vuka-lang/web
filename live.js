@@ -438,6 +438,29 @@
     });
   });
 
+  // Init: a form rendered hidden (data-vk-init) asks the server to run its
+  // form type's Init once the browser first shows it — opened, its tab
+  // chosen — with a vkinit event, the form busy until the reply. While an
+  // event is unanswered it waits: the reply may render the form ready (a
+  // Load in the event that showed it), its marker gone.
+  const initView = typeof IntersectionObserver === "function" ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) initForm(e.target); })) : null;
+  function initForm(f) {
+    if (f.vkInit || !f.isConnected || !f.hasAttribute("data-vk-init") || !f.getClientRects().length) return;
+    if (!joined || ref > answered) return; // looked at again once the reply is in
+    f.vkInit = true;
+    if (initView) initView.unobserve(f);
+    f.dispatchEvent(new CustomEvent("vkinit", { bubbles: true }));
+  }
+  document.addEventListener("vk:patched", () => {
+    document.querySelectorAll("form[data-vk-init]").forEach((f) => {
+      if (initView && !f.vkInitSeen) {
+        f.vkInitSeen = true;
+        initView.observe(f);
+      }
+      initForm(f);
+    });
+  });
+
   // Checks before a submit sent without a connection: the rules a control's
   // data-vk-check lists — the field's own, in the server's order, with the
   // server's messages — run in the browser, and a submit breaking one shows

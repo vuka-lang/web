@@ -173,7 +173,9 @@ func TestBrowserTeleport(t *testing.T) {
 // TestTeleportInPlace: without the runtime the content is where it is written.
 func TestTeleportInPlace(t *testing.T) {
 	a := New(Only("none"))
-	a.Live("/tp", func() *vkTeleportPage { return &vkTeleportPage{mu: &sync.Mutex{}, sent: new([]vkTeleportSent), Open: true} })
+	a.Live("/tp", func() *vkTeleportPage {
+		return &vkTeleportPage{mu: &sync.Mutex{}, sent: new([]vkTeleportSent), Open: true}
+	})
 	html := get(a.Handler(), "GET", "/tp").Body.String()
 	clip := strings.Index(html, `id="clip"`)
 	tp := strings.Index(html, `<vk-teleport id="tp"`)
