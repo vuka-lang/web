@@ -124,7 +124,7 @@
         }
         const done = [];
         outOfStep = false;
-        for (const u of ups) if (!done.some((el) => el && el.isConnected && el.contains(byID(u.id)))) done.push(apply(u));
+        for (const u of ups) if (!done.some((el) => el && el.isConnected && inside(el, byID(u.id)))) done.push(apply(u));
         if (outOfStep && !n) { // a batch was lost: start over
           fail("live: a stream is out of step with the server");
           joined = false;
@@ -257,7 +257,7 @@
     const on = "data-vk-on-" + type, js = "data-vk-js-" + type;
     if (!el) return null;
     if (nobubble.has(type)) return el.hasAttribute(on) || el.hasAttribute(js) ? el : null;
-    return el.closest("[" + on + "],[" + js + "]");
+    return up(el, "[" + on + "],[" + js + "]");
   }
 
   // prevent keeps an event the server answers from doing what the browser
@@ -436,6 +436,29 @@
         f.vkSaved = null;
         if (f.isConnected && f.hasAttribute("data-vk-saved")) f.dispatchEvent(new CustomEvent("vksaved", { bubbles: true }));
       }, +ms) };
+    });
+  });
+
+  // Init: a form rendered hidden (data-vk-init) asks the server to run its
+  // form type's Init once the browser first shows it — opened, its tab
+  // chosen — with a vkinit event, the form busy until the reply. While an
+  // event is unanswered it waits: the reply may render the form ready (a
+  // Load in the event that showed it), its marker gone.
+  const initView = typeof IntersectionObserver === "function" ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) initForm(e.target); })) : null;
+  function initForm(f) {
+    if (f.vkInit || !f.isConnected || !f.hasAttribute("data-vk-init") || !f.getClientRects().length) return;
+    if (!joined || ref > answered) return; // looked at again once the reply is in
+    f.vkInit = true;
+    if (initView) initView.unobserve(f);
+    f.dispatchEvent(new CustomEvent("vkinit", { bubbles: true }));
+  }
+  document.addEventListener("vk:patched", () => {
+    document.querySelectorAll("form[data-vk-init]").forEach((f) => {
+      if (initView && !f.vkInitSeen) {
+        f.vkInitSeen = true;
+        initView.observe(f);
+      }
+      initForm(f);
     });
   });
 
@@ -849,7 +872,7 @@
   // form is the one the report names, the submit's own when it is still
   // there.
   function rowReport(el, rep) {
-    const own = el && el.closest && el.closest("form[data-vk-form]");
+    const own = el && el.closest && up(el, "form[data-vk-form]");
     const form = own && own.getAttribute("data-vk-form") === rep.form ? own : document.getElementById(rep.form);
     if (!form || form.tagName !== "FORM" || !form.hasAttribute("data-vk-row-form")) return;
     applyReport(form, rep, true);
@@ -1065,7 +1088,7 @@
   // keyed loop's element (data-vk-key on an element with no keyboard
   // handler, whose data-vk-key lists the keys it takes) while the
   // children being matched have one each (loopKeys).
-  const keyOf = (n) => n.nodeType === 1 ? n.id || n.getAttribute("data-vk-id") || (loopKeys ? loopKey(n) : "") : "";
+  const keyOf = (n) => n.nodeType === 1 ? (minted.has(n) ? "" : n.id) || n.getAttribute("data-vk-id") || (loopKeys ? loopKey(n) : "") : "";
   const loopKey = (n) => {
     const k = n.getAttribute("data-vk-key");
     if (k === null) return "";
@@ -1363,7 +1386,7 @@
   // applied, which the server should never send — or found out of step, or
   // that inserts a row it doesn't carry: the reply carrying it is ref's.
   function streamProblem(el, b, had, problem) {
-    const root = el.closest("[data-vk-id]");
+    const root = up(el, "[data-vk-id]");
     emit("vk:stream", {
       id: root ? root.getAttribute("data-vk-id") : "c0", stream: el.getAttribute("data-vk-stream"),
       batch: b.gen + "." + b.n, applied: had ? had.gen + "." + had.n : "", problem, ref: replying,
@@ -1536,6 +1559,97 @@
     foreign.delete(n);
   }
 
+  // Teleports (ui.Teleport): a <vk-teleport data-vk-teleport="body|#id">
+  // renders its content where it is written, and the runtime moves it to
+  // the end of its target, out of reach of the ancestors that would clip a
+  // fixed overlay (mask-image, transform, filter, contain). It is a moved
+  // element as a script's are: homed at its place in the server's markup,
+  // patched where it is, never put back, gone when the server stops
+  // rendering it there — or when its place leaves the page. For the
+  // runtime it is still where it was written: an event in it finds its
+  // handler, instance and form there (up), a command's targets in an
+  // instance include its teleported content (rootsOf), and its fields
+  // belong to the form it was written in (form=, an id minted for a form
+  // the server rendered without one). The DOM's own bubbling follows where
+  // the content is.
+  const teleported = new Set(); // the moved <vk-teleport>s, in the order they moved
+  const minted = new WeakSet(); // forms given an id for their teleported fields
+  let mints = 0;
+  const parentOf = (n) => teleported.has(n) && homes.has(n) ? homes.get(n).parent : n.parentElement;
+  // up is el's closest element matching sel, through teleports to where
+  // their content was written.
+  function up(el, sel) {
+    for (let x = el; x; x = parentOf(x)) if (x.nodeType === 1 && x.matches(sel)) return x;
+    return null;
+  }
+  // inside reports whether n is a, or in a where the server rendered it.
+  function inside(a, n) {
+    for (let x = n; x; x = parentOf(x)) if (x === a) return true;
+    return false;
+  }
+  // rootsOf is root and the teleported content rendered inside it.
+  function rootsOf(root) {
+    const out = [root];
+    for (const t of teleported) if (t !== root && !root.contains(t) && inside(root, t)) out.push(t);
+    return out;
+  }
+  function formAt(el) {
+    return el.form && el.form.tagName === "FORM" ? el.form : up(el, "form");
+  }
+  const controls = "button,fieldset,input,object,output,select,textarea";
+  // teleport, once html is in the page, moves the teleports not yet moved,
+  // forgets the ones whose place is gone (removing them) and keeps their
+  // fields in their forms.
+  function teleport(html) {
+    if (!teleported.size && !/<vk-teleport\b/.test(html)) return;
+    quiet(() => {
+      for (let again = true; again;) {
+        again = false;
+        for (const t of teleported) {
+          const h = homes.get(t);
+          if (t.isConnected && h && h.parent.isConnected) continue;
+          teleported.delete(t);
+          leave(t);
+          t.remove();
+          again = true;
+        }
+      }
+      for (const t of Array.from(document.querySelectorAll("vk-teleport[data-vk-teleport]"))) {
+        if (teleported.has(t)) continue;
+        const to = t.getAttribute("data-vk-teleport") || "body";
+        const at = to === "body" ? document.body : to[0] === "#" ? document.getElementById(to.slice(1)) : null;
+        if (!at || at === t || t.contains(at) || t.parentNode === at) continue; // no target (yet), or there already: it stays in place
+        const f = document.activeElement, keep = f && f !== document.body && t.contains(f) ? fieldState(f) : null;
+        home(t, t.parentNode, t.previousSibling);
+        teleported.add(t);
+        at.appendChild(t);
+        if (keep) {
+          try { f.focus({ preventScroll: true }); } catch (_) {}
+          if (isField(f)) restore(f, keep);
+        }
+      }
+      for (const t of teleported) associate(t);
+    });
+  }
+  // associate gives the fields of t written in a form outside it form=,
+  // and takes back the ones it gave that no longer are.
+  function associate(t) {
+    const form = up(parentOf(t), "form");
+    for (const c of t.querySelectorAll(controls)) {
+      const own = c.parentElement.closest("form, vk-teleport");
+      if (own && own !== t) continue; // in a form, or a teleport, inside
+      const mine = c.hasAttribute("data-vk-formed");
+      if (c.hasAttribute("form") && !mine) continue; // the server's
+      if (!form) {
+        if (mine) { c.removeAttribute("form"); c.removeAttribute("data-vk-formed"); }
+        continue;
+      }
+      if (!form.id) { form.id = "vk-form-" + ++mints; minted.add(form); }
+      if (c.getAttribute("form") !== form.id) c.setAttribute("form", form.id);
+      if (!mine) c.setAttribute("data-vk-formed", "");
+    }
+  }
+
   // awayFrom is el's children a script moved elsewhere, still there.
   function awayFrom(el) {
     const s = away.get(el);
@@ -1638,7 +1752,7 @@
       return true;
     };
     for (const a of Array.from(el.attributes)) {
-      if (next.hasAttribute(a.name) || own && own.has(a.name) || waiting && a.name === "aria-busy" || /^data-vk-(pending|failed)$/.test(a.name) || seed(a.name)) continue;
+      if (next.hasAttribute(a.name) || a.name === "id" && minted.has(el) || own && own.has(a.name) || waiting && a.name === "aria-busy" || /^data-vk-(pending|failed)$/.test(a.name) || seed(a.name)) continue;
       el.removeAttribute(a.name);
     }
     for (const a of Array.from(next.attributes)) {
@@ -1646,6 +1760,7 @@
       el.setAttribute(a.name, a.value);
     }
     if (own && !own.size) owned.delete(el);
+    if (next.hasAttribute("id")) minted.delete(el);
     keep(el, next);
     if (checkable(el)) el.indeterminate = el.hasAttribute("data-vk-mixed");
   }
@@ -1976,7 +2091,7 @@
       return failed(el, path, "no such function");
     }
     const ctx = { el: a.to ? targets(el, a.to)[0] || null : el, event: e,
-      root: el && el.closest("[data-vk-id]") || document, target: (to) => targets(el, to) };
+      root: el && up(el, "[data-vk-id]") || document, target: (to) => targets(el, to) };
     try {
       return fn.apply(own || fns.has(path) ? undefined : self, [ctx, ...(a.args || []).map((v) => arg(el, v))]);
     } catch (err) {
@@ -2019,7 +2134,7 @@
   let local = 0;
   function track(el, a, recs, sent, marks) {
     const id = sent || "local" + ++local;
-    const root = el && el.closest("[data-vk-id]");
+    const root = el && up(el, "[data-vk-id]");
     const p = { el, a, recs, marks: marks || [], root: root && root.getAttribute("data-vk-id") };
     preds.set(id, p);
     if (el) {
@@ -2247,7 +2362,7 @@
       }
       if (to.attr) return scoped(el, attrSel(to.attr), !!to.attr.page);
       if (to.sel) return Array.from(document.querySelectorAll([].concat(to.sel).join(", ")));
-      if (to.closest) { const c = el && el.closest(to.closest); return c ? [c] : []; }
+      if (to.closest) { const c = el && up(el, to.closest); return c ? [c] : []; }
       if (to.inner) return el ? Array.from(el.querySelectorAll(to.inner)) : [];
     } catch (err) { warn(err.message); }
     return [];
@@ -2255,11 +2370,15 @@
   // scoped is the elements matching sel in el's instance (or, with page or
   // on a static page, the document), the instance's root among them.
   function scoped(el, sel, page) {
-    const scope = !page && el && el.closest("[data-vk-id]");
-    const all = Array.from((scope || document).querySelectorAll(sel));
-    if (!scope) return all;
+    const scope = !page && el && up(el, "[data-vk-id]");
+    if (!scope) return Array.from(document.querySelectorAll(sel));
+    const all = [];
+    for (const r of rootsOf(scope)) {
+      if (r !== scope && r.matches(sel)) all.push(r);
+      all.push(...r.querySelectorAll(sel));
+    }
     if (scope.matches(sel)) all.unshift(scope);
-    return all.filter((x) => x === scope || x.parentElement.closest("[data-vk-id]") === scope);
+    return all.filter((x) => x === scope || up(parentOf(x), "[data-vk-id]") === scope);
   }
   // attrSel is an attr target's selector, every name and value escaped: a
   // value is data, never selector syntax.
@@ -2661,8 +2780,12 @@
   // bindIn binds every element in root, whose HTML is html, that has
   // bindings, and unbinds those that lost theirs.
   function bindIn(root, html) {
-    if (root) for (const el of root.querySelectorAll("input[data-vk-mixed]")) el.indeterminate = true;
-    if (!root || !subs.size && !/ data-vk-(b|show|v)/.test(html)) return;
+    for (const r of root ? rootsOf(root) : []) bindOne(r, html);
+    teleport(html || "");
+  }
+  function bindOne(root, html) {
+    for (const el of root.querySelectorAll("input[data-vk-mixed]")) el.indeterminate = true;
+    if (!subs.size && !/ data-vk-(b|show|v)/.test(html)) return;
     for (const el of [root, ...root.querySelectorAll("*")]) if (bound.has(el) || Array.from(el.attributes).some((a) => /^data-vk-(b|show|v)(-|$)/.test(a.name))) bind(el);
   }
   function bind(el) {
@@ -2983,7 +3106,7 @@
         const v = "value" in a ? a.value : el && valueOf(el);
         if (v !== undefined && v !== null) msg.value = typeof v === "string" ? v : JSON.stringify(v);
       }
-      const form = type === "submit" || a.form ? (e && e.target && e.target.closest && e.target.closest("form")) || (el && el.closest("form")) : null;
+      const form = type === "submit" || a.form ? (e && e.target && e.target.closest && formAt(e.target)) || (el && formAt(el)) : null;
       if (form && type === "submit" && form.hasAttribute("data-vk-form") && (form.getAttribute("data-vk-submit") || "prevent") === "prevent" &&
         [...busy.values()].some((b) => b.form === form)) return; // a struct form's submit in flight: this one is dropped
       if (form) msg.form = formOf(form, type === "submit" && e && e.submitter);
@@ -3023,7 +3146,7 @@
     if (!u) return marks.forEach(unbusy);
     u.hash = "";
     const args = JSON.stringify((a.args || []).map((v) => arg(el, v)));
-    const f = a.form ? (e && e.target && e.target.closest && e.target.closest("form")) || (el && el.closest("form")) : null;
+    const f = a.form ? (e && e.target && e.target.closest && formAt(e.target)) || (el && formAt(el)) : null;
     const form = f ? JSON.stringify(formOf(f)) : "";
     const id = track(el, a, recs, 0, marks);
     claim(id, el, a);
@@ -3375,7 +3498,7 @@
   // settles with the reply.
   const replies = new Map(), waiting = [];
   function push(el, name, payload) {
-    const root = el && el.closest("[data-vk-id]");
+    const root = el && up(el, "[data-vk-id]");
     if (!live || !root) return Promise.reject(new Error("live: push needs a live component"));
     return new Promise((resolve, reject) => {
       const go = () => {
