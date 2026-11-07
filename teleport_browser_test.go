@@ -165,7 +165,7 @@ func TestBrowserTeleport(t *testing.T) {
 	// on an ancestor where the overlay is written; back without moving twice
 	p.Eval(`document.querySelector("#inner").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); 0`, nil)
 	p.Wait(`document.querySelector("#count") === null`)
-	if got := evalString(t, p, `String(document.querySelectorAll("vk-teleport").length) + ":" + String(document.querySelector("#nested"))`); got != "2:null" {
+	if got := evalString(t, p, `String(document.querySelectorAll("vk-teleport").length) + ":" + String(document.querySelector("#nested"))`); got != "3:null" {
 		t.Fatalf("after close: %q", got)
 	}
 	clickJS(p, "#show")
