@@ -1603,8 +1603,11 @@
   // instance include its teleported content (rootsOf), and its fields
   // belong to the form it was written in (form=, an id minted for a form
   // the server rendered without one). The DOM's own bubbling follows where
-  // the content is.
-  const teleported = new Set(); // the moved <vk-teleport>s, in the order they moved
+  // the content is. A <vk-teleport> that is all of an instance's root
+  // (<vk-c>, a component whose markup starts with it) moves with the root,
+  // so the component's script finds its markup under its root.
+  const teleported = new Set(); // the moved elements, in the order they moved
+  const carries = new WeakMap(); // a <vk-teleport> → the element moved for it
   const minted = new WeakSet(); // forms given an id for their teleported fields
   let mints = 0;
   const parentOf = (n) => teleported.has(n) && homes.has(n) ? homes.get(n).parent : n.parentElement;
@@ -1629,6 +1632,14 @@
     return el.form && el.form.tagName === "FORM" ? el.form : up(el, "form");
   }
   const controls = "button,fieldset,input,object,output,select,textarea";
+  // carrierOf is what moves for a <vk-teleport>: itself, or the instance
+  // root (<vk-c>) it is all of — a component whose markup's root is a
+  // teleport moves whole, its script's root with it.
+  function carrierOf(v) {
+    let t = v;
+    for (let p = t.parentElement; p && p.tagName === "VK-C" && Array.from(p.childNodes).every((n) => n === t || n.nodeType === 8 || n.nodeType === 3 && !n.data.trim()); p = t.parentElement) t = p;
+    return t;
+  }
   // teleport, once html is in the page, moves the teleports not yet moved,
   // forgets the ones whose place is gone (removing them) and keeps their
   // fields in their forms.
@@ -1646,14 +1657,15 @@
           again = true;
         }
       }
-      for (const t of Array.from(document.querySelectorAll("vk-teleport[data-vk-teleport]"))) {
-        if (teleported.has(t)) continue;
-        const to = t.getAttribute("data-vk-teleport") || "body";
+      for (const v of Array.from(document.querySelectorAll("vk-teleport[data-vk-teleport]"))) {
+        if (teleported.has(carries.get(v))) continue;
+        const t = carrierOf(v), to = v.getAttribute("data-vk-teleport") || "body";
         const at = to === "body" ? document.body : to[0] === "#" ? document.getElementById(to.slice(1)) : null;
-        if (!at || at === t || t.contains(at) || t.parentNode === at) continue; // no target (yet), or there already: it stays in place
+        if (!at || t.contains(at) || t.parentNode === at) continue; // no target (yet), or there already: it stays in place
         const f = document.activeElement, keep = f && f !== document.body && t.contains(f) ? fieldState(f) : null;
         home(t, t.parentNode, t.previousSibling);
         teleported.add(t);
+        carries.set(v, t);
         at.appendChild(t);
         if (keep) {
           try { f.focus({ preventScroll: true }); } catch (_) {}
@@ -1669,7 +1681,7 @@
     const form = up(parentOf(t), "form");
     for (const c of t.querySelectorAll(controls)) {
       const own = c.parentElement.closest("form, vk-teleport");
-      if (own && own !== t) continue; // in a form, or a teleport, inside
+      if (own && (own.tagName === "FORM" || carries.get(own) !== t)) continue; // in a form, or another teleport
       const mine = c.hasAttribute("data-vk-formed");
       if (c.hasAttribute("form") && !mine) continue; // the server's
       if (!form) {
