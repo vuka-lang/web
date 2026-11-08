@@ -73,7 +73,7 @@ func TestBrowserFormEvents(t *testing.T) {
 	p.Wait(`document.querySelector("#status").getAttribute("data-state") === "failed"`)
 	p.Eval(`document.querySelector('input[name="title"]').value = ""`, nil)
 	p.Type(title, "Second")
-	p.Click("#save")
+	p.Eval(`document.querySelector("#save").click()`, nil) // the summary going may move the button under the mouse
 	p.Wait(`document.querySelector("#status").getAttribute("data-state") === "saved"`)
 	p.Type(title, " draft")
 	p.Click("#reset")
