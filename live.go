@@ -483,6 +483,10 @@ func (a *App) page(rq *request, n ui.Node) {
 		j.page, j.ctx = n, rq.ctx
 		return
 	}
+	if id := r.Header.Get(LazyHeader); id != "" && r.Method == http.MethodGet && n != nil {
+		a.lazyRegion(rq, n, id)
+		return
+	}
 	buf := pageBufs.Get().(*bytes.Buffer)
 	defer putPageBuf(buf)
 	if !wholePage(r) {

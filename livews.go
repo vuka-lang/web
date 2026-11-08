@@ -649,6 +649,30 @@ func (c *conn) event(m live.ClientMessage) any {
 			}
 		}
 	}
+	if len(c.app.liveGuards) > 0 && len(m.Shown) > 0 {
+		// the hidden forms and regions shown with it: those a guard refuses
+		// stay waiting
+		shown := m.Shown[:0:0]
+		h, _ := c.s.(interface{ Handler(string) any })
+	targets:
+		for _, t := range m.Shown {
+			if h == nil {
+				break
+			}
+			sfn := h.Handler(t)
+			if sfn == nil {
+				continue
+			}
+			lh := c.liveHandler(t, sfn, handlerName(sfn))
+			for _, g := range c.app.liveGuards {
+				if g(c.page, lh) != nil {
+					continue targets
+				}
+			}
+			shown = append(shown, t)
+		}
+		m.Shown = shown
+	}
 	c.ev = ev
 	reply := c.s.Event(m)
 	c.ev = nil

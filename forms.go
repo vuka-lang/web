@@ -196,7 +196,9 @@ func (a *App) formPost(rq *request, n ui.Node) {
 	}
 	formFiles(rq.ctx, r, r.PostForm)
 	end := a.span(rq.ctx, "render", "page")
-	s := live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
+	// no browser asks for its lazy regions and hidden forms' Init: they
+	// render at once, the posted form among them
+	s := live.NewSession(ui.WithEager(rq.ctx), func(context.Context) ui.Node { return n })
 	defer s.Close()
 	s.SetErrorText(func(err error) string { text, _ := a.liveErrorText(err); return text }) // a deferred group's loader's
 	if _, err := s.Render(); err != nil {
