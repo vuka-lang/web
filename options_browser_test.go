@@ -414,7 +414,8 @@ func (p *deliveryPage) Render() ui.Node {
 }
 
 // TestBrowserFormChoicesHTTP: on a page that isn't live, a field's choices
-// follow the field they depend on: the form's check carries them.
+// follow the field they depend on: the form's check carries them, as it
+// carries every field's that has a <Field>Choices method.
 func TestBrowserFormChoicesHTTP(t *testing.T) {
 	a := New(Only("none"))
 	a.Get("/delivery", func() ui.Node { return (&deliveryPage{}).Render() })
@@ -435,7 +436,7 @@ func TestBrowserFormChoicesHTTP(t *testing.T) {
 	}
 	json.NewDecoder(res.Body).Decode(&rep)
 	res.Body.Close()
-	if fmt.Sprint(rep.Choices) != "map[city:[map[label:Nairobi value:nbo] map[label:Arusha (KE) value:aru]]]" {
+	if fmt.Sprint(rep.Choices) != "map[city:[map[label:Nairobi value:nbo] map[label:Arusha (KE) value:aru]] country:[map[label:Tanzania value:tz] map[label:Kenya value:ke]]]" {
 		t.Errorf("the check's choices: %d %v", res.StatusCode, rep.Choices)
 	}
 

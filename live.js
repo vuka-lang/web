@@ -470,28 +470,109 @@
     });
   });
 
-  // Init: a form rendered hidden (data-vk-init) asks the server to run its
-  // form type's Init once the browser first shows it — opened, its tab
-  // chosen — with a vkinit event, the form busy until the reply. While an
-  // event is unanswered it waits: the reply may render the form ready (a
-  // Load in the event that showed it), its marker gone.
-  const initView = typeof IntersectionObserver === "function" ? new IntersectionObserver((es) => es.forEach((e) => { if (e.isIntersecting) initForm(e.target); })) : null;
-  function initForm(f) {
-    if (f.vkInit || !f.isConnected || !f.hasAttribute("data-vk-init") || !f.getClientRects().length) return;
-    if (!joined || ref > answered) return; // looked at again once the reply is in
-    f.vkInit = true;
-    if (initView) initView.unobserve(f);
-    f.dispatchEvent(new CustomEvent("vkinit", { bubbles: true }));
+  // Shown: a form rendered hidden (data-vk-init) waiting for its form
+  // type's Init, and a lazy region (<vk-lazy>, ui.Lazy) waiting for its
+  // content, ask for it once the browser first shows them — opened, their
+  // tab chosen — busy until the reply: a vkinit event on a live page; on one
+  // that isn't, a GET of the page with Vk-Lazy naming the region
+  // (data-vk-region), whose reply takes its place. An event sent while one
+  // shows carries it (shown) instead: its reply renders it, and no vkinit
+  // follows. While an event is unanswered they wait: its reply may render
+  // them ready (a Load in the event that showed the form). A region with
+  // data-vk-each asks again each time it shows after being hidden. They are
+  // looked at when they may have shown: an attribute changed, a patch, in
+  // view.
+  const waits = new Map(); // element → the elements watched in view for it
+  const inView0 = typeof IntersectionObserver === "function" ? new IntersectionObserver((es) => es.forEach((e) => {
+    for (const [el, ts] of waits) if (ts.includes(e.target)) ask(el);
+  })) : null;
+  const changes = typeof MutationObserver === "function" ? new MutationObserver(() => checkShown()) : null;
+  let watchingShown = false;
+  function shows(el) {
+    if (el.getClientRects().length) return true; // a <vk-lazy> is display: contents: its content's boxes
+    if (typeof document.createRange !== "function") return false;
+    const r = document.createRange();
+    r.selectNodeContents(el);
+    return r.getClientRects().length > 0;
   }
-  document.addEventListener("vk:patched", () => {
-    document.querySelectorAll("form[data-vk-init]").forEach((f) => {
-      if (initView && !f.vkInitSeen) {
-        f.vkInitSeen = true;
-        initView.observe(f);
-      }
-      initForm(f);
+  function unwait(el) {
+    if (inView0) (waits.get(el) || []).forEach((t) => inView0.unobserve(t));
+    waits.delete(el);
+  }
+  // due reports whether el asks now, noting what it saw.
+  function due(el) {
+    if (!el.isConnected) return void unwait(el);
+    if (el.hasAttribute("data-vk-init")) return !el.vkInit && shows(el);
+    if (!el.hasAttribute("data-vk-each")) return void unwait(el);
+    if (!shows(el)) {
+      if (el.vkShown) el.vkHid = true;
+      return false;
+    }
+    el.vkShown = true;
+    return !!el.vkHid;
+  }
+  const claimShown = (el) => { el.vkInit = true; el.vkHid = false; };
+  function ask(el) {
+    if (!due(el)) return;
+    if (live) {
+      if (!joined || ref > answered || !el.hasAttribute("data-vk-on-vkinit")) return; // looked at again once the reply is in
+      claimShown(el);
+      return void el.dispatchEvent(new CustomEvent("vkinit", { bubbles: true }));
+    }
+    const id = el.getAttribute("data-vk-region");
+    if (id === null || typeof fetch !== "function") return;
+    claimShown(el);
+    region(el, id);
+  }
+  // shownWith is the vkinit handlers of the elements showing as an event is
+  // sent, which it carries.
+  function shownWith() {
+    const out = [];
+    for (const el of Array.from(waits.keys())) if (el.hasAttribute("data-vk-on-vkinit") && due(el)) { claimShown(el); out.push(el.getAttribute("data-vk-on-vkinit")); }
+    return out;
+  }
+  function checkShown() {
+    Array.from(waits.keys()).forEach(ask);
+    if (!changes) return;
+    if (waits.size && !watchingShown) changes.observe(document.documentElement, { attributes: true, subtree: true, attributeFilter: ["hidden", "style", "class", "open"] });
+    else if (!waits.size && watchingShown) changes.disconnect();
+    watchingShown = waits.size > 0;
+  }
+  function watchShown() {
+    if (!document.querySelectorAll) return;
+    document.querySelectorAll("[data-vk-init], vk-lazy[data-vk-each]").forEach((el) => {
+      if (waits.has(el)) return;
+      const ts = [el, ...Array.from(el.children)];
+      waits.set(el, ts);
+      if (inView0) ts.forEach((t) => inView0.observe(t));
     });
-  });
+    checkShown();
+  }
+  // region asks a page that isn't live for one of its regions, and puts
+  // the reply in its place; a failure shows in the region (a form stays as
+  // it is, without its Init).
+  function region(el, id) {
+    const failed = () => quiet(() => {
+      el.removeAttribute("aria-busy");
+      if (el.tagName === "VK-LAZY") el.innerHTML = partFailed;
+    });
+    fetch(location.pathname + location.search, { headers: { "Vk-Lazy": id }, credentials: "same-origin", cache: "no-store" }).then((res) => {
+      if (res.status !== 200 || !res.headers.get("Vk-Lazy")) return failed();
+      return res.text().then((html) => {
+        if (!el.isConnected) return;
+        const p = el.parentNode;
+        quiet(() => {
+          listenIn(html);
+          el.replaceWith(fragment(html));
+          bindIn(p, html);
+        });
+        unwait(el);
+        watchShown();
+        emit("vk:region", { id });
+      });
+    }).catch(failed);
+  }
+  document.addEventListener("vk:patched", watchShown);
 
   // Checks before a submit sent without a connection: the rules a control's
   // data-vk-check lists — the field's own, in the server's order, with the
@@ -998,6 +1079,8 @@
 
   function send(msg, el, form) {
     if (!ws || !joined || nav) return; // a page on its way out sends nothing
+    const shown = shownWith();
+    if (shown.length) msg.shown = shown;
     msg.ref = ++ref;
     const f = document.activeElement;
     sentField = f && isField(f) ? { el: f, shows: fieldShows(f), ref: msg.ref } : null;
@@ -3743,6 +3826,7 @@
   bindIn(document.body, page0);
   markActive();
   watchViewport();
+  watchShown();
   // the islands mounted before this ran read their states now
   if (window.vukaComponents && window.vukaComponents.statesReady) window.vukaComponents.statesReady();
   // A link moves over the connection, or in place over HTTP on a page that
