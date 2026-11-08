@@ -63,8 +63,11 @@ func (p *vkTeleportPage) Render() ui.Node {
 <button id="show" type="button" onClick={show}>show</button>
 <vk-teleport data-vk-teleport="#layer" style="display:contents"><span id="inlayer">{count}</span></vk-teleport>
 {box}
+<vk-c style="display:contents">
+  <vk-teleport data-vk-teleport="body" style="display:contents"><div id="wrapped"><b>{count3}</b></div></vk-teleport>
+</vk-c>
 </div>
-</main>`, p.Close, p.Send, overlay, ui.JS.Show(ui.Ref("panel")), p.Show, p.Count, ui.Component("box", nil, &vkTeleportBox{}))
+</main>`, p.Close, p.Send, overlay, ui.JS.Show(ui.Ref("panel")), p.Show, p.Count, ui.Component("box", nil, &vkTeleportBox{}), p.Count)
 }
 
 // vkTeleportBox is a component that teleports itself: its markup's root is
@@ -113,7 +116,7 @@ func evalString(t *testing.T, p *chrome.Page, js string) string {
 func TestBrowserTeleport(t *testing.T) {
 	p, sent := vkTeleportServer(t)
 	where := `[...document.querySelectorAll("vk-teleport")].map((t) => (t.id || t.firstElementChild.id) + ">" + (t.parentElement.id || t.parentElement.tagName)).sort().join(" ")`
-	if got := evalString(t, p, where); got != "box>BODY inlayer>layer nested>BODY tp>BODY" {
+	if got := evalString(t, p, where); got != "box>BODY inlayer>layer nested>BODY tp>BODY wrapped>VK-C" {
 		t.Fatalf("teleports at %q", got)
 	}
 
@@ -125,7 +128,7 @@ func TestBrowserTeleport(t *testing.T) {
 	if got := evalString(t, p, `document.activeElement.id + ":" + document.activeElement.value`); got != "inner:typed" {
 		t.Fatalf("focus after the patch: %q", got)
 	}
-	if got := evalString(t, p, where); got != "box>BODY inlayer>layer nested>BODY tp>BODY" {
+	if got := evalString(t, p, where); got != "box>BODY inlayer>layer nested>BODY tp>BODY wrapped>VK-C" {
 		t.Fatalf("teleports after a patch at %q", got)
 	}
 
@@ -134,6 +137,11 @@ func TestBrowserTeleport(t *testing.T) {
 	p.WaitText("#boxn", "1")
 	if got := evalString(t, p, `document.querySelector("#box").parentElement.parentElement.tagName + ":" + document.querySelectorAll("#box").length`); got != "BODY:1" {
 		t.Fatalf("the component's content: %q", got)
+	}
+
+	// a teleport that is all of an instance's root moves with the root
+	if got := evalString(t, p, `document.querySelector("#wrapped").closest("vk-c").parentElement.tagName + ":" + document.querySelector("#wrapped").textContent`); got != "BODY:1" {
+		t.Fatalf("the instance root around a teleport: %q", got)
 	}
 
 	// a command's ref, in the instance's teleported content
@@ -157,12 +165,12 @@ func TestBrowserTeleport(t *testing.T) {
 	// on an ancestor where the overlay is written; back without moving twice
 	p.Eval(`document.querySelector("#inner").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); 0`, nil)
 	p.Wait(`document.querySelector("#count") === null`)
-	if got := evalString(t, p, `String(document.querySelectorAll("vk-teleport").length) + ":" + String(document.querySelector("#nested"))`); got != "2:null" {
+	if got := evalString(t, p, `String(document.querySelectorAll("vk-teleport").length) + ":" + String(document.querySelector("#nested"))`); got != "3:null" {
 		t.Fatalf("after close: %q", got)
 	}
 	clickJS(p, "#show")
 	p.WaitText("#count", "1")
-	if got := evalString(t, p, where); got != "box>BODY inlayer>layer nested>BODY tp>BODY" {
+	if got := evalString(t, p, where); got != "box>BODY inlayer>layer nested>BODY tp>BODY wrapped>VK-C" {
 		t.Fatalf("teleports after showing again at %q", got)
 	}
 	if got := evalString(t, p, `document.body.innerHTML`); strings.Count(got, `id="count"`) != 1 {
