@@ -103,6 +103,7 @@
           try { page(m.html); } finally { seeding = false; }
         }
         joinedOnce = true;
+        keepRemoved([document.body]);
         markActive();
         emit("vk:patched", { ids: ["c0"], join: true });
         pushed(m.js);
@@ -124,7 +125,10 @@
         }
         const done = [];
         outOfStep = false;
+        if (n && !n.patch) removed.length = 0; // another page
+        if (m.ref && !m.error) confirmRemoved(m.ref); // the push succeeded: what the server renders is the page's
         for (const u of ups) if (!done.some((el) => el && el.isConnected && inside(el, byID(u.id)))) done.push(apply(u));
+        keepRemoved(done);
         if (outOfStep && !n) { // a batch was lost: start over
           fail("live: a stream is out of step with the server");
           joined = false;
@@ -2143,7 +2147,10 @@
         }
       } else if (name === "if" || name === "else_if" || name === "else") {
         const j = name === "if" ? branch(el, ops, i) : end(ops, i);
-        if (rec && ops.slice(i + 1, j).some((o) => o[0] === "push")) rec.length = 0; // a skipped push still ends a segment
+        if (rec && ops.slice(i + 1, j).some((o) => o[0] === "push")) { // a skipped push still ends a segment
+          (rec.skipped ||= []).push(...rec.filter((o) => o.removed)); // a Before that stops puts these back
+          rec.length = 0;
+        }
         i = j;
       }
       else if (name === "debounce" || name === "throttle") {
@@ -2276,6 +2283,7 @@
     const root = el && up(el, "[data-vk-id]");
     const p = { el, a, recs, marks: marks || [], root: root && root.getAttribute("data-vk-id") };
     preds.set(id, p);
+    recs.forEach((r) => { if (r.removed) r.pending = id; });
     if (el) {
       el.removeAttribute("data-vk-failed");
       el.setAttribute("data-vk-pending", "");
@@ -2296,10 +2304,9 @@
     clearTimeout(p.timer);
     const el = p.el;
     if (el && ![...preds.values()].some((q) => q.el === el)) el.removeAttribute("data-vk-pending");
-    if (error) {
-      if (!p.a.keep) for (let i = p.recs.length; i--;) undo(p.recs[i]);
-      if (el) el.setAttribute("data-vk-failed", "");
-    }
+    if (error && !p.a.keep) for (let i = p.recs.length; i--;) undo(p.recs[i]);
+    settledRemovals(p.recs, error);
+    if (error && el) el.setAttribute("data-vk-failed", "");
     p.marks.forEach(unbusy); // usable again before its hooks run
     const into = p.into || [];
     const mine = into.filter((t) => t.vkPush === p.seq);
@@ -2432,12 +2439,67 @@
     t.dispatchEvent(new Event("input", { bubbles: true }));
     t.dispatchEvent(new Event("change", { bubbles: true }));
   }
+  // Removals (remove): an element taken off the page, with where it was and
+  // how a render shows it again (its key, else its id, else its markup).
+  // Taken by a push (track), it is that push's prediction (pending): put
+  // back if the push fails, unless keep, dropped once it succeeds — before
+  // the reply's render, which is then the page's. Until then, and for a
+  // plain removal for as long as the server renders it, a render that
+  // brings it back has it taken off again (keepRemoved).
+  const removed = [];
+  function removeEl(t) {
+    const parent = t.parentNode;
+    if (!parent || t === document.body || t === document.documentElement || t === document.head) return;
+    const r = { removed: true, el: t, parent, next: t.nextElementSibling, prev: t.previousElementSibling, key: t.getAttribute("data-vk-key"), id: t.id || null, html: t.outerHTML, pending: null };
+    quiet(() => t.remove());
+    removed.push(r);
+    if (rec) rec.push(r);
+  }
+  const unremove = (r) => { const i = removed.indexOf(r); if (i >= 0) removed.splice(i, 1); };
+  function shownAgain(r) {
+    for (const k of r.parent.children) {
+      if (k === r.el || k.tagName !== r.el.tagName) continue;
+      if (r.key != null ? k.getAttribute("data-vk-key") === r.key : r.id ? k.id === r.id : k.outerHTML === r.html) return k;
+    }
+    return null;
+  }
+  function putBack(r) {
+    unremove(r);
+    if (r.el.isConnected || !r.parent.isConnected || shownAgain(r)) return;
+    const at = r.next && r.next.parentNode === r.parent ? r.next : r.prev && r.prev.parentNode === r.parent ? r.prev.nextElementSibling : null;
+    r.parent.insertBefore(r.el, at);
+  }
+  function settledRemovals(recs, error) {
+    for (const r of recs) if (r.removed && r.pending) {
+      r.pending = null;
+      if (!error) unremove(r);
+    }
+  }
+  function confirmRemoved(id) {
+    const p = preds.get(id);
+    if (p) for (const r of p.recs) if (r.removed && r.pending === id) { r.pending = null; unremove(r); }
+  }
+  function keepRemoved(roots) {
+    for (const r of removed.slice()) {
+      if (!r.parent.isConnected) { if (!r.pending) unremove(r); continue; }
+      if (!roots.some((x) => x && (x === r.parent || x.contains(r.parent)))) continue;
+      const k = shownAgain(r);
+      if (!k) { if (!r.pending) unremove(r); continue; }
+      r.next = k.nextElementSibling;
+      r.prev = k.previousElementSibling;
+      r.el = k;
+      r.html = k.outerHTML;
+      quiet(() => k.remove());
+    }
+  }
+
   // undo puts back what a prediction changed where the server's value is
   // still the one recorded and the element still shows what it set.
   const fieldValue = (el) => checkable(el) ? el.checked : el.value;
   function undo(r) { return quiet(() => undoIn(r)); }
   function undoIn(r) {
     if (r.state) return undoState(r);
+    if (r.removed) return putBack(r);
     const el = r.el, t = running.get(el);
     if (t) t.finish();
     if (r.field) {
@@ -3205,6 +3267,7 @@
     })),
     show: each((t, a) => visibly(t, a, true)),
     hide: each((t, a) => visibly(t, a, false)),
+    remove: each((t) => removeEl(t)),
     toggle: each((t, a) => visibly(t, a, !shown(t))),
     transition: each((t, a) => animate(t, a.transition, a.time)),
     focus: (el, a) => { const t = targets(el, a.to)[0]; if (t) t.focus(); },
@@ -3316,6 +3379,11 @@
       if (done) return;
       done = true;
       if (!went && r && r.busy) r.busy.splice(0).forEach(unbusy);
+      if (!went && r) { // the push they predicted for isn't sent
+        const gone = (r.skipped || []).splice(0).concat(r.filter((o) => o.removed));
+        for (let i = gone.length; i--;) undo(gone[i]);
+        for (let i = r.length; i--;) if (r[i].removed) r.splice(i, 1);
+      }
     };
     rest.vkGo = () => { went = true; };
     const open = ops.reduce((n, o) => n + (o[0] === "if") - (o[0] === "end"), 0);
@@ -3814,7 +3882,9 @@
     if (moved) n.href = moved;
     toolbar = h("X-Vuka-Toolbar") || toolbar;
     for (const o of Array.from(frames.values())) closeFrame(o.el); // the page they were opened on leaves
+    if (!n.patch) removed.length = 0; // another page
     try { page(r.html); } catch (err) { console.error("vuka: live: " + err.message); return fail(n.href, "patch", err.message); }
+    keepRemoved([document.body]);
     arrived(n, {});
     loadParts(h("Vk-Parts-Token"));
     emit("vk:patched", { ids: ["c0"] });

@@ -1154,6 +1154,102 @@ test("lifecycle (socket): a live page not connected fails the push at once: on_e
   eq([steps, p.ws().sent.length], [["before", "error", "after"], 0], "not joined");
 });
 
+// Removal: a remove ahead of a push, or in its Before, is the push's
+// prediction: put back in its place when the push fails (unless keep),
+// before on_error; dropped when it succeeds. Over the socket and over HTTP.
+const orderRow = (id, extra = "") => `<tr id="r${id}" data-vk-key="${id}"><td>order ${id}${extra}</td></tr>`;
+const orderRows = (ids, extra = "") => `<table><tbody>${ids.map((id) => orderRow(id, id === 2 ? extra : "")).join("")}</tbody></table><p id="err"></p><i id="agree"></i>`;
+const rowIDs = (p) => p.doc.querySelectorAll("tbody tr").map((r) => r.id).join(" ");
+for (const [name, t] of Object.entries(transports)) {
+  const go = (step) => ` <button id="go" data-vk-js-click='${js(step)}'>x</button>`;
+  const open = (step) => t.open(orderRows([1, 2, 3], go(step)));
+  const errText = ["set_text", { to: { sel: "#err" }, text: { $read: { error: true } } }];
+  test(`remove (${name}): in a Before, gone at once, put back in its place when the push fails, before on_error`, async () => {
+    for (const ops of [
+      [["push", { ...t.push, before: [["remove", { to: { closest: "tr" } }]], on_error: [errText] }]],
+      [["remove", { to: { closest: "tr" } }], ["push", { ...t.push, on_error: [errText] }]],
+    ]) {
+      const p = open(ops);
+      const row = p.$("#r2");
+      p.fire("#go", "click");
+      eq([rowIDs(p), t.sent(p)], ["r1 r3", 1], "gone, sent");
+      await t.reply(p, "still shipping");
+      eq([rowIDs(p), p.$("#r2") === row, p.$("#err").textContent, p.$("#go").hasAttribute("data-vk-failed")], ["r1 r2 r3", true, "still shipping", true], "back in its place");
+    }
+  });
+  test(`remove (${name}): a push that succeeds leaves it off; keep leaves it off on an error; no reply in time puts it back`, async () => {
+    const p = open([["push", { ...t.push, before: [["remove", { to: { closest: "tr" } }]] }]]);
+    p.fire("#go", "click");
+    await t.reply(p);
+    eq(rowIDs(p), "r1 r3", "succeeded");
+    const q = open([["remove", { to: { closest: "tr" } }], ["push", { ...t.push, keep: true }]]);
+    q.fire("#go", "click");
+    await t.reply(q, "no");
+    eq(rowIDs(q), "r1 r3", "keep");
+    const r = open([["remove", { to: { closest: "tr" } }], ["push", { ...t.push, timeout: 500 }]]);
+    r.fire("#go", "click");
+    r.tick(500);
+    eq(rowIDs(r), "r1 r2 r3", "timed out");
+  });
+  test(`remove (${name}): a Before that stops puts it back and sends nothing`, () => {
+    const p = open([["push", { ...t.push, before: [["remove", { to: { closest: "tr" } }], ["if", { cond: { to: { sel: "#agree" }, attr: "data-ok" } }]] }]]);
+    p.fire("#go", "click");
+    eq([rowIDs(p), t.sent(p)], ["r1 r2 r3", 0], "not sent");
+  });
+}
+
+const liveRows = (ids, extra) => `<div data-vk-id="c1">${orderRows(ids, extra)}</div>`;
+const removeStep = (o = {}) => ` <button id="go" data-vk-js-click='${js([["push", { h: "c1:0", before: [["remove", { to: { closest: "tr" } }]], ...o }]])}'>x</button>`;
+const rowsPatch = (p, ref, ids, o = {}) => p.server({ type: "patch", ref, updates: [{ id: "c1", html: liveRows(ids, removeStep()) }], ...o });
+
+test("remove (socket): a render while the push waits leaves it off; the reply's render is the page's", () => {
+  const p = joined(liveRows([1, 2, 3], removeStep()));
+  p.fire("#go", "click");
+  const ref = p.ws().sent[p.ws().sent.length - 1].ref;
+  rowsPatch(p, 0, [1, 2, 3]); // a broadcast still showing it
+  eq(rowIDs(p), "r1 r3", "still off");
+  rowsPatch(p, ref, [1, 3]);
+  eq(rowIDs(p), "r1 r3", "deleted");
+  const q = joined(liveRows([1, 2, 3], removeStep()));
+  q.fire("#go", "click");
+  rowsPatch(q, q.ws().sent[q.ws().sent.length - 1].ref, [1, 2, 3]);
+  eq(rowIDs(q), "r1 r2 r3", "the server kept it: its render wins");
+});
+
+test("remove (socket): an error reply that renders the row puts it back once; the next render keeps it", () => {
+  const p = joined(liveRows([1, 2, 3], removeStep()));
+  p.fire("#go", "click");
+  const ref = p.ws().sent[p.ws().sent.length - 1].ref;
+  rowsPatch(p, 0, [1, 2, 3, 4]);
+  rowsPatch(p, ref, [1, 2, 3, 4], { error: "no" });
+  eq(rowIDs(p), "r1 r2 r3 r4", "back, once");
+  rowsPatch(p, 0, [1, 2, 3, 4]);
+  eq(rowIDs(p), "r1 r2 r3 r4", "kept by the next render");
+});
+
+test("remove (socket): a lost connection puts it back", () => {
+  const p = joined(liveRows([1, 2, 3], removeStep()));
+  p.fire("#go", "click");
+  p.ws().onclose({ code: 1006 });
+  eq(rowIDs(p), "r1 r2 r3", "back");
+});
+
+test("remove: outside a push, or returned by a handler, a plain removal, kept while the server renders the element", () => {
+  const body = `<div data-vk-id="c1"><p id="note">hi</p><button id="x" data-vk-js-click='${js([["remove", { to: { sel: "#note" } }]])}'>x</button><button id="y" data-vk-js-click='${js([["push", { h: "c1:1", result: true }]])}'>y</button></div>`;
+  const p = joined(body);
+  p.fire("#x", "click");
+  eq(p.$("#note"), null, "removed");
+  p.server({ type: "patch", ref: 0, updates: [{ id: "c1", html: body }] });
+  eq(p.$("#note"), null, "a render showing it again leaves it off");
+  p.server({ type: "patch", ref: 0, updates: [{ id: "c1", html: body.replace(`<p id="note">hi</p>`, "") }] });
+  p.server({ type: "patch", ref: 0, updates: [{ id: "c1", html: body }] });
+  eq(!!p.$("#note"), true, "once the server stopped rendering it, a render of it is the server's");
+  const q = joined(body);
+  q.fire("#y", "click");
+  q.server({ type: "patch", ref: q.ws().sent[q.ws().sent.length - 1].ref, updates: [], result: { js: [["remove", { to: { sel: "#note" } }]] } });
+  eq(q.$("#note"), null, "returned");
+});
+
 // A Call's open — before, the request, the component in the overlay host,
 // on_ok once it is there or on_error, after — over the socket (h) and over
 // HTTP (a page that isn't live); closing it runs its closed hooks.
