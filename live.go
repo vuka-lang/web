@@ -633,8 +633,8 @@ func (a *App) page(rq *request, n ui.Node) {
 		if partsTok != "" {
 			script = strings.Replace(script, " defer></script>", ` data-vk-parts="`+partsTok+`" defer></script>`, 1)
 		}
-		if bytes.Contains(html, []byte("[&#34;open&#34;,{")) && !bytes.Contains(html, []byte(` id="vk-overlays"`)) {
-			script += overlayHost // the components Calls open go in it (call.go)
+		if (bytes.Contains(html, []byte("[&#34;open&#34;,{")) || bytes.Contains(html, []byte("[&#34;confirm&#34;,{"))) && !bytes.Contains(html, []byte(` id="vk-overlays"`)) {
+			script += overlayHost // the components Calls open go in it, and Confirm's ConfirmBox (call.go)
 		}
 	}
 	html = withTitle(html, ui.PageTitle(rq.ctx))

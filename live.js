@@ -2160,6 +2160,14 @@
       } else if (name === "stop") {
         if (e) stopAt(el, e);
       } else if (name === "confirm") {
+        if (styled(el, a, e)) { // a ConfirmBox: the chain goes on once answered
+          const rest = ops.slice(i + 1), r = rec;
+          askConfirm(a).then((yes) => {
+            if (yes) run(el, rest, e, r);
+            else rest.forEach((o) => { if (o[0] === "vk_stopped") o[1].fn(); }); // a Before stopped
+          });
+          return;
+        }
         if (!window.confirm(a.msg)) return false;
       } else if (name === "busy") {
         busyOn(el, a, ops.slice(i + 1).some((o) => (o[0] === "push" || o[0] === "open") && ((o[1] || {}).h || (o[1] || {}).m || (o[1] || {}).t)));
@@ -2240,6 +2248,7 @@
     if (!v || typeof v !== "object" || Object.keys(v).length !== 1 || !v.$read) return v;
     const c = v.$read;
     if ("error" in c) return loadError == null ? "" : loadError;
+    if ("result" in c) return !loadResult ? null : "value" in loadResult ? loadResult.value : loadResult.fields || null;
     if (c.and || c.or || c.not) return holds(el, c);
     const t = targets(el, c.to)[0];
     if ("exists" in c) return !!t === !!c.exists;
@@ -2298,12 +2307,14 @@
     const at = el && el.isConnected ? el : p.root && byID(p.root) || document.body;
     const was = loadError;
     loadError = error ? String(msg || "the push failed") : null;
+    const wasResult = loadResult;
+    loadResult = error ? null : result || null;
     try {
       if (p.opening) opened(p.opening);
       if (into.length && !mine.length) return; // a later push into them wins: its result and hooks
       outcome(p, at, error, result, msg, mine);
     } finally {
-      try { if (p.a.after) run(at, p.a.after, null, []); } finally { loadError = was; }
+      try { if (p.a.after) run(at, p.a.after, null, []); } finally { loadError = was; loadResult = wasResult; }
     }
   }
   // outcome applies a settled push's result and runs its on_ok or on_error.
@@ -2322,6 +2333,7 @@
     if (hooks) run(at, hooks, null, []);
   }
   let loadError = null; // the failed push's message, while its on_error runs (ui.LoadError)
+  let loadResult = null; // the settled push's result, while its on_ok runs (ui.Result)
 
   // claim makes a push the one whose result its targets take — a later
   // push into a target wins over an earlier one still on its way — and
@@ -3240,7 +3252,7 @@
       const reads = {};
       for (const k of Object.keys(a.reads || {})) reads[k] = arg(el, a.reads[k]);
       const f = document.activeElement;
-      const opening = { key: "v" + (++callSeq).toString(36) + Math.random().toString(36).slice(2, 7), trigger: f && f !== document.body ? f : el, opener: el, closed: a.closed };
+      const opening = { key: a.key || "v" + (++callSeq).toString(36) + Math.random().toString(36).slice(2, 7), trigger: f && f !== document.body ? f : el, opener: el, closed: a.closed, into: a.into };
       if (!a.h) return openHTTP(el, a, recs, marks, opening, reads);
       if (!live) return warn("a Call of a component needs a live page");
       if (!joined) return settle(track(el, a, recs, 0, marks), true, null, "not connected");
@@ -3337,14 +3349,95 @@
   // opened shows the component an open opened, once its markup is in.
   function opened(o) {
     const el = document.querySelector('[data-vk-call="' + cssEscape(o.key) + '"]');
-    if (!el || frames.has(o.key)) return;
+    if (!el || frames.has(o.key) && frames.get(o.key).el === el) return; // a key's second Call: the same one, its props new
     o.el = el;
+    o.kind = el.getAttribute("data-vk-present") || "modal";
     frames.set(o.key, o);
-    if (el.tagName === "DIALOG" && !el.open && typeof el.showModal === "function") {
-      try { el.showModal(); } catch (_) { el.setAttribute("open", ""); }
+    if (el.tagName === "DIALOG" && !el.open) {
+      try {
+        if (o.kind === "modal" && typeof el.showModal === "function") el.showModal();
+        else if (o.kind === "popover" && typeof el.show === "function") el.show();
+        else el.setAttribute("open", "");
+      } catch (_) { el.setAttribute("open", ""); }
     }
+    if (o.kind === "popover") anchor(el, o.opener);
+    const ms = +el.getAttribute("data-vk-timeout");
+    if (o.kind === "toast" && ms > 0) setTimeout(() => { if (el.isConnected) closeFrame(el); }, ms);
     el.addEventListener("cancel", (e) => { e.preventDefault(); closeFrame(el); });
     el.addEventListener("close", () => { if (!o.done) closeFrame(el); });
+  }
+  // anchor puts a popover by the element that opened it, inside the window.
+  function anchor(d, by) {
+    if (!by || !by.getBoundingClientRect || !d.style) return;
+    const r = by.getBoundingClientRect(), w = d.offsetWidth || 0, h = d.offsetHeight || 0;
+    const top = r.bottom + 4 + h > window.innerHeight ? Math.max(8, r.top - h - 4) : r.bottom + 4;
+    d.style.top = top + "px";
+    d.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + "px";
+  }
+  // A popover closes on Escape and on a press elsewhere; a modal over it
+  // takes Escape first.
+  const popovers = () => [...frames.values()].filter((o) => o.kind === "popover" && !o.done);
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    let modal = false;
+    try { modal = !!document.querySelector("dialog:modal"); } catch (_) {}
+    const p = popovers().pop();
+    if (p && !modal) closeFrame(p.el);
+  });
+  document.addEventListener("pointerdown", (e) => {
+    for (const o of popovers()) if (!inside(o.el, e.target) && !(o.opener && o.opener.contains(e.target))) closeFrame(o.el);
+  }, true);
+  // styled reports whether a confirm asks in a ConfirmBox: the page has an
+  // overlay host, the step doesn't want the browser's, and nothing needs
+  // the answer at once — a submit, a link, a form's button, an element whose
+  // event the server takes too.
+  function styled(el, a, e) {
+    if (a.native || !document.getElementById("vk-overlays") || typeof Promise !== "function") return false;
+    if (!e || !el) return true; // commands the server pushed: nothing waits
+    if (e.type === "submit" || el.tagName === "A") return false;
+    if (el.tagName === "BUTTON" && el.form && el.getAttribute("type") !== "button") return false;
+    return !el.hasAttribute("data-vk-on-" + e.type);
+  }
+  // askConfirm asks a.msg in a ConfirmBox — a modal dialog in the overlay
+  // host, its words a.yes and a.no — and resolves to the answer.
+  function askConfirm(a) {
+    return new Promise((resolve) => {
+      const prev = document.activeElement, d = document.createElement("dialog");
+      d.setAttribute("class", "vk-dialog vk-dialog--sm vk-confirm");
+      d.setAttribute("data-vk-confirm", "");
+      const el = (tag, cls, text) => {
+        const n = document.createElement(tag);
+        if (cls) n.setAttribute("class", cls);
+        if (text != null) n.textContent = text;
+        return n;
+      };
+      const body = el("div", "vk-dialog__body"), foot = el("div", "vk-dialog__footer");
+      body.appendChild(el("p", "", String(a.msg)));
+      const no = el("button", "vk-btn", a.no || "Cancel"), yes = el("button", "vk-btn vk-btn--primary", a.yes || "OK");
+      no.setAttribute("type", "button");
+      yes.setAttribute("type", "button");
+      no.setAttribute("data-vk-no", "");
+      yes.setAttribute("data-vk-yes", "");
+      foot.appendChild(no);
+      foot.appendChild(yes);
+      d.appendChild(body);
+      d.appendChild(foot);
+      let done = false;
+      const end = (answer) => {
+        if (done) return;
+        done = true;
+        if (d.open && typeof d.close === "function") d.close();
+        quiet(() => d.remove());
+        if (prev && prev.isConnected && prev.focus) try { prev.focus({ preventScroll: true }); } catch (_) {}
+        resolve(answer);
+      };
+      no.addEventListener("click", () => end(false));
+      yes.addEventListener("click", () => end(true));
+      d.addEventListener("cancel", (ev) => { ev.preventDefault(); end(false); });
+      quiet(() => overlays().appendChild(d));
+      try { if (typeof d.showModal === "function") d.showModal(); else d.setAttribute("open", ""); } catch (_) { d.setAttribute("open", ""); }
+      if (yes.focus) yes.focus();
+    });
   }
   // closeFrom closes the opened component el is in (or, outside one, the
   // <dialog> around it).
@@ -3363,7 +3456,7 @@
     if (server) el.dispatchEvent(new CustomEvent("vkclose", { bubbles: true }));
     else quiet(() => el.remove());
     if (!o) return;
-    focusBack(o);
+    if (o.kind !== "toast") focusBack(o);
     if (!server) gone();
   }
   // focusBack gives the focus back to what had it when the component opened.
@@ -3379,7 +3472,7 @@
     for (const [k, o] of Array.from(frames)) {
       if (o.el.isConnected) continue;
       frames.delete(k);
-      if (!o.done) focusBack(o);
+      if (!o.done && o.kind !== "toast") focusBack(o);
       o.done = true;
       if (o.closed) run(o.opener && o.opener.isConnected ? o.opener : document.body, o.closed, null, []);
     }
@@ -3412,10 +3505,16 @@
           return go(String(b.redirect)).catch(() => {});
         }
         if (typeof b.html === "string") {
-          const host = overlays();
+          const host = opening.into && document.querySelector(opening.into) || overlays();
+          const was = frames.get(opening.key);
+          if (opening.into) for (const c of Array.from(host.querySelectorAll("[data-vk-call]"))) if (!was || c !== was.el) closeFrame(c); // a region shows one
           quiet(() => {
             listenIn(b.html);
-            host.appendChild(fragment(b.html));
+            const f = fragment(b.html);
+            if (was && was.el.isConnected) { // a key's second Call: the same one, its markup new
+              const n = f.firstElementChild;
+              if (n) { was.el.innerHTML = n.innerHTML; for (const at of Array.from(n.attributes)) was.el.setAttribute(at.name, at.value); }
+            } else host.appendChild(f);
           });
           bindIn(host, b.html);
         }
