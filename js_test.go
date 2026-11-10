@@ -112,7 +112,7 @@ func (d *jsDemo) Render() ui.Node {
 		menu = append(menu, ui.El("li", nil, ui.El("button", attrs("type", "button", "value", it,
 			"onClick", ui.On(ui.JS.AddClass(ui.Ref("menu"), "hidden").Push(d.Pick))), ui.Text(it))))
 		items = append(items, ui.El("li", attrs("id", "item-"+it), ui.Text(it), ui.El("button", attrs("class", "del", "type", "button", "value", it,
-			"onClick", ui.On(ui.JS.Confirm("Delete "+it+"?").Push(d.Delete))), ui.Text("delete"))))
+			"onClick", ui.On(ui.JS.Confirm("Delete "+it+"?", ui.NativeConfirm()).Push(d.Delete))), ui.Text("delete"))))
 	}
 	return ui.El("div", attrs("class", "demo"),
 		ui.El("button", attrs("id", "pick", "type", "button", "onClick", ui.On(ui.JS.RemoveClass(ui.Ref("menu"), "hidden"))), ui.Text("Pick")),

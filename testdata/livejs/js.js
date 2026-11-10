@@ -1180,6 +1180,57 @@ for (const [name, t] of Object.entries(opens)) {
   });
 }
 
+test("open (http): a second Call with its key gives the open one its new markup", async () => {
+  const p = open(`<button id="go" data-vk-js-click='${js([["open", { t: "tok", key: "cart" }]])}'>go</button><div id="vk-overlays" data-vk-overlays></div>`);
+  for (const n of [1, 2]) {
+    p.fire("#go", "click");
+    const f = p.fetches[p.fetches.length - 1];
+    eq(f.body.get("_vk_key"), "cart", "the key the step names");
+    p.reply(p.fetches.length - 1, { headers: { "content-type": "application/json" }, body: JSON.stringify({ html: `<dialog data-vk-call="cart"><p id="n">${n} items</p></dialog>` }) });
+    await flush(); await flush(); await flush();
+  }
+  eq([p.doc.querySelectorAll("[data-vk-call]").length, p.$("#n").textContent], [1, "2 items"], "one, updated");
+});
+
+test("open (http): Into a region, replacing what another put there", async () => {
+  const p = open(`<button id="a" data-vk-js-click='${js([["open", { t: "a", into: "#side" }]])}'>a</button><div id="side"></div><div id="vk-overlays" data-vk-overlays></div>`);
+  for (const n of [1, 2]) {
+    p.fire("#a", "click");
+    const f = p.fetches[p.fetches.length - 1];
+    p.reply(p.fetches.length - 1, { headers: { "content-type": "application/json" }, body: JSON.stringify({ html: `<section data-vk-call="${f.body.get("_vk_key")}" data-vk-present="inline"><p id="n">${n}</p></section>` }) });
+    await flush(); await flush(); await flush();
+  }
+  eq([p.doc.querySelectorAll("#side [data-vk-call]").length, p.$("#side #n").textContent], [1, "2"], "one in the region");
+});
+
+test("confirm: a ConfirmBox where the page has an overlay host, the browser's dialog without one or with native", async () => {
+  const ops = [["confirm", { msg: "Delete?", yes: "Yes", no: "No" }], ["add_class", { names: ["done"] }]];
+  const p = open(`<button id="go" data-vk-js-click='${js(ops)}'>go</button><button id="nat" data-vk-js-click='${js([["confirm", { msg: "Sure?", native: true }], ["add_class", { names: ["done"] }]])}'>n</button><div id="vk-overlays" data-vk-overlays></div>`);
+  p.fire("#go", "click");
+  const d = p.$("dialog[data-vk-confirm]");
+  eq([!!d, d && d.textContent, p.$("#go").className], [true, "Delete?NoYes", ""], "asked, waiting");
+  p.fire("[data-vk-no]", "click");
+  await flush();
+  eq([!!p.$("dialog[data-vk-confirm]"), p.$("#go").className], [false, ""], "No: stopped");
+  p.fire("#go", "click");
+  p.fire("[data-vk-yes]", "click");
+  await flush();
+  eq(p.$("#go").className, "done", "Yes: on");
+  p.fire("#nat", "click");
+  eq([p.$("#nat").className, p.confirms.length, !!p.$("dialog[data-vk-confirm]")], ["done", 1, false], "native");
+  const q = open(`<button id="go" data-vk-js-click='${js(ops)}'>go</button>`);
+  q.fire("#go", "click");
+  eq([q.$("#go").className, q.confirms.length], ["done", 1], "no host: the browser's");
+});
+
+test("result: a Success's push reads the settled push's result", async () => {
+  const p = joined(`<div data-vk-id="c1"><button id="go" data-vk-js-click='${js([["push", { h: "c1:0", result: true, on_ok: [["push", { h: "c1:1", args: [{ $read: { result: true } }] }]] }]])}'>go</button></div>`);
+  p.fire("#go", "click");
+  const m = p.ws().sent[p.ws().sent.length - 1];
+  p.server({ type: "patch", ref: m.ref, result: { value: "41" } });
+  eq(p.ws().sent[p.ws().sent.length - 1].args, ["41"], "the hook's argument");
+});
+
 // Navigation over HTTP: a page that isn't live fetches the page with
 // Vk-Navigate and patches its body in place.
 const layout = (main) => `<header><input id="q"><a id="home" href="/" data-vk-link data-vk-active="exact">home</a></header><main>${main}</main>`;

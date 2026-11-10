@@ -64,8 +64,8 @@ func (a *App) callOpen(w http.ResponseWriter, r *http.Request, s *routeSpec, gua
 	switch {
 	case errors.Is(err, ui.ErrCallToken):
 		err = &Error{Status: http.StatusForbidden, Message: "the call isn't one this page rendered for you: reload the page"}
-	case err == nil && !validCallKey(key):
-		err = BadRequest("the call has no key")
+	case err == nil && !validCallKey(key), err == nil && c.Key() != "" && c.Key() != key:
+		err = BadRequest("the call has no key, or another than its token's")
 	case err == nil && c.Stateful():
 		err = BadRequest(c.Component() + " is a live component: it opens on a live page")
 	}
@@ -81,7 +81,7 @@ func (a *App) callOpen(w http.ResponseWriter, r *http.Request, s *routeSpec, gua
 		return
 	}
 	defer a.span(rq.ctx, "render", c.Component())()
-	html, failed := ui.RenderCall(rq.ctx, key, comp)
+	html, failed := ui.RenderCall(rq.ctx, key, comp, c.Options()...)
 	if failed == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"html": html})
 		return

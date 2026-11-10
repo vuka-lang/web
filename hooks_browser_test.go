@@ -66,7 +66,7 @@ func basketMarkup(remove, slow, refresh any) ui.Node {
 	return ui.Fragment(
 		b("ok", full(1)),
 		b("bad", full(0)),
-		b("confirm", ui.JS.Busy(ui.Sel("#list")).Push(remove, int64(1)).Before(ui.JS.Confirm("Remove?").Then(hookLog("before"))).After(hookLog("after"))),
+		b("confirm", ui.JS.Busy(ui.Sel("#list")).Push(remove, int64(1)).Before(ui.JS.Confirm("Remove?", ui.NativeConfirm()).Then(hookLog("before"))).After(hookLog("after"))),
 		b("gate", ui.JS.Push(remove, int64(1)).Before(ui.JS.If(ui.Sel("#agree").Checked()).Call("log", "agreed")).After(hookLog("after"))),
 		b("slow", ui.JS.Push(slow).Timeout(300*time.Millisecond).Success(hookLog("success")).Error(hookLog("error")).After(hookLog("after"))),
 		b("boom", ui.JS.Push(remove, int64(1)).Success(ui.JS.Call("boom").Then(hookLog("success"))).Error(hookLog("error")).After(hookLog("after"))),
