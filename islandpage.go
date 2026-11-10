@@ -509,6 +509,33 @@ func withTitle(html []byte, title string) []byte {
 
 func indexFold(b []byte, s string) int { return bytes.Index(b, []byte(s)) }
 
+// documentTitle is the title of the document doc: the text of its head's
+// <title>, else page when it has a head (withTitle gives it one), else "".
+func documentTitle(doc, page string) string {
+	head := strings.Index(doc, "<head")
+	if head < 0 || head+5 >= len(doc) || doc[head+5] != '>' && doc[head+5] != ' ' {
+		return ""
+	}
+	end := strings.Index(doc[head:], "</head")
+	if end < 0 {
+		return ""
+	}
+	in := doc[head : head+end]
+	t := strings.Index(in, "<title")
+	if t < 0 {
+		return page
+	}
+	open := strings.IndexByte(in[t:], '>')
+	if open < 0 {
+		return page
+	}
+	text := in[t+open+1:]
+	if e := strings.Index(text, "</title"); e >= 0 {
+		text = text[:e]
+	}
+	return htmlpkg.UnescapeString(text)
+}
+
 func defaultLayout(title string) func(ui.Node) ui.Node {
 	return func(page ui.Node) ui.Node {
 		return ui.El("html", nil,

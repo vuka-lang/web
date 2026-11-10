@@ -3238,6 +3238,9 @@
     state_toggle: (el, a, e) => { if (!redismiss(a, e)) swrite(a, !sread(a)); },
     state_inc: (el, a) => swrite(a, (+sread(a) || 0) + (a.by || 0)),
     patch: (el, a) => { move(String(a.href), true, null, !!a.replace); },
+    // reload renders the page again at its URL: a patch of it in place of
+    // the history entry, scroll and focus kept (go, reload)
+    reload: () => { move(location.href, true, null, true, true); },
     close: (el) => closeFrom(el),
     // open opens a component (ui.JS.Call(component)): its token, and the
     // props the browser reads, read now, go over the socket to the
@@ -3524,7 +3527,7 @@
       }, (err) => settle(id, true, null, err && err.name === "AbortError" ? "no reply in time" : String(err && err.message || err)));
   }
 
-  // Navigation: a link marked data-vk-link, a patch or navigate command, and
+  // Navigation: a link marked data-vk-link, a patch, navigate or reload command, and
   // the back and forward buttons move a live page over its connection; the
   // reply is applied as any patch, then the address, scroll and focus
   // follow. What can't go that way — no connection, another origin, a URL
@@ -3621,16 +3624,19 @@
   function load(href, replace) {
     const u = httpURL(href);
     if (!u) return fail("live: refused to load a URL that isn't http or https");
+    if (u.hash && u.href === location.href) return location.reload(); // assigning it would only scroll to the #hash
     replace ? location.replace(u.href) : location.assign(u.href);
   }
   const save = () => history.replaceState({ ...history.state, x: scrollX, y: scrollY }, "");
 
   // go moves the page to href; pop is the history state back or forward
   // brought, the address being href already; replace takes the place of
-  // the current entry instead of adding one. It returns a promise settled
+  // the current entry instead of adding one; reload (a patch of href, the
+  // page's own URL) renders the page again, keeping the entry's state and
+  // not scrolling to a #hash. It returns a promise settled
   // when the move is applied: rejected for a refused URL or when another
   // move takes its place; a page load leaves it unsettled.
-  function go(href, patch, pop, replace) {
+  function go(href, patch, pop, replace, reload) {
     const u = httpURL(href);
     if (!u) {
       const msg = "live: refused to load a URL that isn't http or https";
@@ -3641,7 +3647,7 @@
     if (!pop && !patch && at !== here && !leaving && !confirmLeave()) {
       return Promise.reject(Object.assign(new Error("live: the visitor stayed, the form's changes not saved"), { name: "AbortError" }));
     }
-    if (!pop && at === here && u.hash) {
+    if (!pop && !reload && at === here && u.hash) {
       replace ? location.replace(u.href) : location.hash = u.hash;
       return Promise.resolve({ url: u.href, patch: true });
     }
@@ -3651,12 +3657,12 @@
     }
     manual();
     stopParts();
-    if (!live) return fetchGo(u, at, patch, pop, replace);
+    if (!live) return fetchGo(u, at, patch, pop, replace, reload);
     if (!pop) save();
     flush();
     supersede();
     return new Promise((resolve, reject) => {
-      nav = { ref: ++ref, href: u.href, patch, pop, replace, resolve, reject, timer: setTimeout(() => load(u.href, again), 10000) };
+      nav = { ref: ++ref, href: u.href, patch, pop, replace, reload, resolve, reject, timer: setTimeout(() => load(u.href, again), 10000) };
       document.documentElement.setAttribute("data-vk-navigating", at); // where to, for the development toolbar
       ws.send(JSON.stringify({ type: "navigate", ref: nav.ref, url: at, patch: patch || undefined }));
     });
@@ -3671,12 +3677,12 @@
   // redirect elsewhere, a file, JSON), a page whose body runs scripts of
   // its own, a route asking for it (web.FullLoad), no reply in 10s, a
   // network failure. Another move aborts the one in flight.
-  function fetched(href, ahead) {
+  function fetched(href, ahead, fresh) {
     const ctl = typeof AbortController === "function" ? new AbortController() : null;
     const headers = { "Vk-Navigate": build };
     if (document.querySelector('style[data-vk-app], link[rel="stylesheet"][href^="/_vuka/app.css"]')) headers["Vk-Styled"] = "1"; // the reply leaves the stylesheet out
     if (ahead) headers.Purpose = "prefetch"; // the server parks a live page's session as long as the runtime keeps the reply
-    const p = fetch(href, { headers, credentials: "same-origin", signal: ctl ? ctl.signal : undefined }).then(reply);
+    const p = fetch(href, { headers, credentials: "same-origin", cache: fresh ? "no-cache" : undefined, signal: ctl ? ctl.signal : undefined }).then(reply);
     p.abort = () => { if (ctl) ctl.abort(); };
     return p;
   }
@@ -3771,13 +3777,13 @@
     bindIn(p, html);
     emit("vk:part", { id });
   }
-  function fetchGo(u, at, patch, pop, replace) {
+  function fetchGo(u, at, patch, pop, replace, reload) {
     const again = !!(pop || replace);
     if (!pop) save();
     supersede();
     const key = u.href.replace(/#.*$/, "");
     return new Promise((resolve, reject) => {
-      const n = nav = { href: u.href, patch, pop, replace, resolve, reject };
+      const n = nav = { href: u.href, patch, pop, replace, reload, resolve, reject };
       const fail = (to, why, detail) => {
         if (nav !== n) return;
         clearTimeout(n.timer);
@@ -3787,9 +3793,9 @@
       };
       n.timer = setTimeout(() => { if (n.abort) n.abort(); fail(null, "timeout", "no reply in 10s"); }, 10000);
       document.documentElement.setAttribute("data-vk-navigating", at); // where to, for the development toolbar
-      let req = fetchedAhead(key);
+      let req = reload ? null : fetchedAhead(key); // a reload asks the server again
       if (!req) {
-        req = fetched(key, false);
+        req = fetched(key, false, reload);
         n.abort = req.abort;
       }
       req.then((r) => { if (nav === n) landed(n, r, fail); }, (err) => fail(null, "network", err && err.message || "the fetch failed"));
@@ -3852,7 +3858,7 @@
   window.addEventListener("pageshow", (e) => { if (e.persisted && restoring) manual(); });
 
   // move is go for the runtime's own callers, who don't wait for it.
-  const move = (href, patch, pop, replace) => { go(href, patch, pop, replace).catch(() => {}); };
+  const move = (href, patch, pop, replace, reload) => { go(href, patch, pop, replace, reload).catch(() => {}); };
   // navigate is window.vuka.navigate: go for a script or an island,
   // opts {patch, replace}.
   const navigate = (href, opts) => go(href, !!(opts && opts.patch), null, !!(opts && opts.replace));
@@ -3875,11 +3881,12 @@
       unbusyAll();
       pageID = n.pop && n.pop.vk || newPage();
     }
-    if (n.pop) history.replaceState({ ...history.state, vk: pageID }, "");
+    if (n.reload) history.replaceState({ ...history.state, vk: pageID }, "", u.href);
+    else if (n.pop) history.replaceState({ ...history.state, vk: pageID }, "");
     else if (n.replace) history.replaceState({ vk: pageID }, "", u.href);
     else history.pushState({ vk: pageID }, "", u.href);
     markActive();
-    const t = u.hash && document.getElementById(decodeURIComponent(u.hash.slice(1)));
+    const t = !n.reload && u.hash && document.getElementById(decodeURIComponent(u.hash.slice(1)));
     if (n.pop && n.pop.y != null) scrollTo(n.pop.x || 0, n.pop.y);
     else if (t) t.scrollIntoView();
     else if (!n.patch) {
@@ -3892,7 +3899,7 @@
       if (!f.matches(focusable) && !f.hasAttribute("tabindex")) touch(f, "tabindex", () => f.setAttribute("tabindex", "-1"));
       f.focus({ preventScroll: true });
     }
-    window.dispatchEvent(new CustomEvent("vk:navigate", { detail: { url: u.href, patch: !!n.patch } }));
+    window.dispatchEvent(new CustomEvent("vk:navigate", { detail: { url: u.href, patch: !!n.patch, ...(n.reload ? { reload: true } : {}) } }));
     n.resolve({ url: u.href, patch: !!n.patch });
   }
 
