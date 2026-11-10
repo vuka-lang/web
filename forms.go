@@ -149,8 +149,8 @@ func returnsNode(fn reflect.Value) bool {
 func (a *App) formOnly(s *routeSpec, h http.Handler) http.Handler {
 	limit := a.bodyLimit(s.attrs)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get(PushHeader) != "" || r.Header.Get(OptionsHeader) != "" {
-			h.ServeHTTP(w, r) // a push call: pushCalls answers it
+		if r.Header.Get(PushHeader) != "" || r.Header.Get(OptionsHeader) != "" || r.Header.Get(CallHeader) != "" {
+			h.ServeHTTP(w, r) // a push call, or a Call's open: pushCalls answers it
 			return
 		}
 		if limit > 0 && r.Body != nil && r.Body != http.NoBody {

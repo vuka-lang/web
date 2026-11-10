@@ -1728,6 +1728,7 @@
   // fields in their forms.
   function teleport(html) {
     if (!teleported.size && !/<vk-teleport\b/.test(html)) return;
+    if (html.includes('data-vk-teleport="#vk-overlays"')) overlays();
     quiet(() => {
       for (let again = true; again;) {
         again = false;
@@ -2099,7 +2100,7 @@
     let ops;
     try { ops = JSON.parse(el.getAttribute("data-vk-js-" + e.type)); } catch (_) {}
     if (!Array.isArray(ops)) return warn("bad JS commands in data-vk-js-" + e.type);
-    if (ops.some((o) => o[0] === "push")) prevent(el, e); // else a submit goes on: a plain form post
+    if (ops.some((o) => o[0] === "push" || o[0] === "open")) prevent(el, e); // else a submit goes on: a plain form post
     return run(el, ops, e);
   }
 
@@ -2161,7 +2162,7 @@
       } else if (name === "confirm") {
         if (!window.confirm(a.msg)) return false;
       } else if (name === "busy") {
-        busyOn(el, a, ops.slice(i + 1).some((o) => o[0] === "push" && ((o[1] || {}).h || (o[1] || {}).m)));
+        busyOn(el, a, ops.slice(i + 1).some((o) => (o[0] === "push" || o[0] === "open") && ((o[1] || {}).h || (o[1] || {}).m || (o[1] || {}).t)));
       } else if (name === "vk_stopped") {
         a.fn();
       } else if (name !== "end") {
@@ -2252,7 +2253,7 @@
   // the chain changed since its last push) are undone and the push fails
   // without being sent.
   function refuse(el, rest, r) {
-    const p = rest.find((o) => o[0] === "push");
+    const p = rest.find((o) => o[0] === "push" || o[0] === "open");
     if (p) settle(track(el, p[1] || {}, r ? r.splice(0) : [], 0, r && r.busy && r.busy.splice(0)), true);
   }
 
@@ -2298,6 +2299,7 @@
     const was = loadError;
     loadError = error ? String(msg || "the push failed") : null;
     try {
+      if (p.opening) opened(p.opening);
       if (into.length && !mine.length) return; // a later push into them wins: its result and hooks
       outcome(p, at, error, result, msg, mine);
     } finally {
@@ -2309,6 +2311,8 @@
     const el = p.el;
     if (!error && result && typeof result === "object") {
       try { applyResult(at, result, mine.filter((t) => t.isConnected), p.a.mode); } catch (err) { fail("vuka: a push's result: " + err.message); }
+      if (Array.isArray(result.run)) run(at, result.run, null, []); // the components its method opened (ui.Call)
+      if (result.close) closeFrom(at); // the one it came from (ui.Close)
     }
     const hooks = error ? p.a.on_error : p.a.on_ok;
     if (error && !hooks && msg) {
@@ -3222,6 +3226,31 @@
     state_toggle: (el, a, e) => { if (!redismiss(a, e)) swrite(a, !sread(a)); },
     state_inc: (el, a) => swrite(a, (+sread(a) || 0) + (a.by || 0)),
     patch: (el, a) => { move(String(a.href), true, null, !!a.replace); },
+    close: (el) => closeFrom(el),
+    // open opens a component (ui.JS.Call(component)): its token, and the
+    // props the browser reads, read now, go over the socket to the
+    // session ("h"), which mounts it and renders it into the overlay host,
+    // or over HTTP to the page's URL, which answers its markup. It is a
+    // push in all else: its predictions, Busy, Before and the hooks; it
+    // succeeds once the component is on screen.
+    open: (el, a, e) => {
+      if (a.before) return beforePush(el, a, e, "open");
+      if (a.vkGo) a.vkGo();
+      const recs = rec ? rec.splice(0) : [], marks = rec && rec.busy ? rec.busy.splice(0) : [];
+      const reads = {};
+      for (const k of Object.keys(a.reads || {})) reads[k] = arg(el, a.reads[k]);
+      const f = document.activeElement;
+      const opening = { key: "v" + (++callSeq).toString(36) + Math.random().toString(36).slice(2, 7), trigger: f && f !== document.body ? f : el, opener: el, closed: a.closed };
+      if (!a.h) return openHTTP(el, a, recs, marks, opening, reads);
+      if (!live) return warn("a Call of a component needs a live page");
+      if (!joined) return settle(track(el, a, recs, 0, marks), true, null, "not connected");
+      flush();
+      const id = send({ type: "event", target: a.h, event: "vkcall", value: a.t, data: { key: opening.key, reads } }, el, null);
+      if (!id) return marks.forEach(unbusy);
+      track(el, a, recs, id, marks);
+      preds.get(id).opening = opening;
+      if (rec) rec.sent = id;
+    },
     navigate: (el, a) => { move(String(a.href), false); },
     // push sends an event to a handler as data-vk-on-<event> would.
     // Its predictions are what the chain changed since its last push.
@@ -3265,7 +3294,7 @@
   // (a declined confirm, an if not taken) sends nothing and runs none of the
   // push's hooks, and the Busy marks waiting for the push are taken off.
   // Its changes are the push's predictions, as the steps before a push are.
-  function beforePush(el, a, e) {
+  function beforePush(el, a, e, name = "push") {
     const { before: ops, ...rest } = a, r = rec;
     let went = false, done = false;
     const stopped = () => {
@@ -3275,10 +3304,125 @@
     };
     rest.vkGo = () => { went = true; };
     const open = ops.reduce((n, o) => n + (o[0] === "if") - (o[0] === "end"), 0);
-    const tail = [["push", rest]];
+    const tail = [[name, rest]];
     for (let i = 0; i < open; i++) tail.push(["end", {}]);
     tail.push(["vk_stopped", { fn: stopped }]);
     if (run(el, ops.concat(tail), e) === false) stopped();
+  }
+
+  // Calls (ui.JS.Call(component)): an opened component is a <dialog> with
+  // data-vk-call naming it, the root of its presentation, in the overlay
+  // host (#vk-overlays, the document shell's, or one made here) — on a live
+  // page teleported there by the session's render, which renders it until
+  // it closes; on a page that isn't live put there from the reply. It shows
+  // modal (Escape, its cancel, closes the top one), and closing it — its
+  // close button, JS.Close, Escape, the server's ui.Close, the page leaving
+  // — destroys it: on a live page the session drops the instance (the
+  // dialog's vkclose handler), on one that isn't the markup goes. Then the
+  // focus goes back to what had it when it opened, and its Closed hooks run
+  // where the Call ran.
+  const frames = new Map(); // key → { key, el, trigger, opener, closed, done }
+  let callSeq = 0;
+  function overlays() {
+    let h = document.getElementById("vk-overlays");
+    if (!h) {
+      h = document.createElement("div");
+      h.setAttribute("id", "vk-overlays");
+      h.setAttribute("data-vk-overlays", "");
+      foreign.add(h);
+      document.body.appendChild(h);
+    }
+    return h;
+  }
+  // opened shows the component an open opened, once its markup is in.
+  function opened(o) {
+    const el = document.querySelector('[data-vk-call="' + cssEscape(o.key) + '"]');
+    if (!el || frames.has(o.key)) return;
+    o.el = el;
+    frames.set(o.key, o);
+    if (el.tagName === "DIALOG" && !el.open && typeof el.showModal === "function") {
+      try { el.showModal(); } catch (_) { el.setAttribute("open", ""); }
+    }
+    el.addEventListener("cancel", (e) => { e.preventDefault(); closeFrame(el); });
+    el.addEventListener("close", () => { if (!o.done) closeFrame(el); });
+  }
+  // closeFrom closes the opened component el is in (or, outside one, the
+  // <dialog> around it).
+  function closeFrom(el) {
+    const f = el && (up(el, "[data-vk-call]") || up(el, "dialog"));
+    if (!f) return;
+    if (f.hasAttribute("data-vk-call")) closeFrame(f);
+    else if (f.open && typeof f.close === "function") f.close();
+  }
+  function closeFrame(el) {
+    const o = frames.get(el.getAttribute("data-vk-call"));
+    if (o && o.done) return;
+    if (o) o.done = true;
+    const server = el.hasAttribute("data-vk-on-vkclose");
+    if (el.tagName === "DIALOG" && el.open) el.close();
+    if (server) el.dispatchEvent(new CustomEvent("vkclose", { bubbles: true }));
+    else quiet(() => el.remove());
+    if (!o) return;
+    focusBack(o);
+    if (!server) gone();
+  }
+  // focusBack gives the focus back to what had it when the component opened.
+  function focusBack(o) {
+    const f = document.activeElement;
+    if (o.trigger && o.trigger.isConnected && (!f || f === document.body || o.el.contains(f) || !f.isConnected)) {
+      try { o.trigger.focus({ preventScroll: true }); } catch (_) {}
+    }
+  }
+  // gone ends the opened components the page no longer shows — closed here,
+  // or by the server — running their Closed hooks.
+  function gone() {
+    for (const [k, o] of Array.from(frames)) {
+      if (o.el.isConnected) continue;
+      frames.delete(k);
+      if (!o.done) focusBack(o);
+      o.done = true;
+      if (o.closed) run(o.opener && o.opener.isConnected ? o.opener : document.body, o.closed, null, []);
+    }
+  }
+  document.addEventListener("vk:patched", gone);
+  // openHTTP opens a component on a page that isn't live: a POST of the
+  // page's URL with Vk-Call, the step's token, carrying the CSRF token; the
+  // page answers the component's markup ({"html"}), which goes in the
+  // overlay host, or {"error"} — with the frame's error state when its
+  // Mount failed, and its OnError's commands in "run".
+  function openHTTP(el, a, recs, marks, opening, reads) {
+    const u = httpURL(location.href);
+    if (!u) return marks.forEach(unbusy);
+    u.hash = "";
+    const id = track(el, a, recs, 0, marks), p = preds.get(id);
+    p.opening = opening;
+    if (rec) rec.sent = id;
+    const ctl = typeof AbortController === "function" ? new AbortController() : null;
+    p.timer = setTimeout(() => { if (ctl) ctl.abort(); settle(id, true, null, "no reply in time"); }, a.timeout || 10000);
+    const body = new URLSearchParams();
+    body.set("_vk_key", opening.key);
+    body.set("_vk_reads", JSON.stringify(reads));
+    const headers = { "Vk-Call": a.t };
+    if (a.csrf) headers["X-CSRF-Token"] = a.csrf;
+    fetch(u.href, { method: "POST", body, headers, credentials: "same-origin", signal: ctl ? ctl.signal : undefined })
+      .then((res) => res.json().catch(() => ({})).then((b) => ({ res, b }))).then(({ res, b }) => {
+        if (!preds.has(id)) return; // timed out
+        if (b.redirect) {
+          settle(id, false);
+          return go(String(b.redirect)).catch(() => {});
+        }
+        if (typeof b.html === "string") {
+          const host = overlays();
+          quiet(() => {
+            listenIn(b.html);
+            host.appendChild(fragment(b.html));
+          });
+          bindIn(host, b.html);
+        }
+        if (Array.isArray(b.run)) run(el && el.isConnected ? el : document.body, b.run, null, []);
+        if (!res.ok || b.error) return settle(id, true, null, b.error && b.error.message || "the page answered " + res.status);
+        settle(id, false);
+      }, (err) => settle(id, true, null, err && err.name === "AbortError" ? "no reply in time" : String(err && err.message || err)));
   }
 
   // Navigation: a link marked data-vk-link, a patch or navigate command, and
@@ -3564,6 +3708,7 @@
     if (h("Vk-Page") !== root) return fail(moved, "another root layout", (res.status >= 400 ? "the " + res.status + " error page" : "the page") + " is under " + (h("Vk-Page") === "-" ? "no root layout" : "root layout " + h("Vk-Page")) + ", this one under " + (root === "-" ? "none" : root));
     if (moved) n.href = moved;
     toolbar = h("X-Vuka-Toolbar") || toolbar;
+    for (const o of Array.from(frames.values())) closeFrame(o.el); // the page they were opened on leaves
     try { page(r.html); } catch (err) { console.error("vuka: live: " + err.message); return fail(n.href, "patch", err.message); }
     arrived(n, {});
     loadParts(h("Vk-Parts-Token"));

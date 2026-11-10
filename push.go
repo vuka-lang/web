@@ -73,6 +73,10 @@ func (a *App) pushCalls(s, page *routeSpec, h http.Handler) (http.Handler, error
 	}
 	limit := a.bodyLimit(s.attrs)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if tok := r.Header.Get(CallHeader); tok != "" {
+			a.callOpen(w, r, s, guards, pathNames, tok)
+			return
+		}
 		ref := r.Header.Get(PushHeader)
 		if ref == "" {
 			ref = r.Header.Get(OptionsHeader)
