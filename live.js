@@ -2439,6 +2439,42 @@
     t.dispatchEvent(new Event("input", { bubbles: true }));
     t.dispatchEvent(new Event("change", { bubbles: true }));
   }
+  // Region reloads (reload with sel, "#id"): the element with the id renders
+  // again, the rest of the page as it is. On a live page the instance the
+  // element is in gets a vkreload event: the session renders it and the
+  // instances it renders again, mounted as they are, and the reply is the
+  // patch of what changed. On a page that isn't live a GET of the page's
+  // URL renders it once, and the element alone takes the reply's markup of
+  // it. No element with the id is an error in development, else nothing.
+  function reloadRegion(sel) {
+    const id = sel.replace(/^#/, ""), t = document.getElementById(id);
+    const missing = (where) => { if (dev) fail('live: Reload("' + sel + '"): no element has the id' + where); };
+    if (!t) return missing("");
+    if (live) {
+      if (!joined) return void waiting.push(() => reloadRegion(sel));
+      const root = up(t, "[data-vk-id]");
+      if (!root) return;
+      flush();
+      send({ type: "event", target: root.getAttribute("data-vk-id") + ":vkreload", event: "vkreload" }, null, null);
+      return;
+    }
+    const u = httpURL(location.href);
+    if (!u || typeof fetch !== "function") return;
+    u.hash = "";
+    fetch(u.href, { credentials: "same-origin", cache: "no-cache" }).then(reply).then((r) => {
+      if (!r.res.ok || !/^text\/html/i.test(r.res.headers.get("Content-Type") || "")) return fail('live: Reload("' + sel + '"): the page answered ' + r.res.status);
+      const from = new DOMParser().parseFromString(r.html, "text/html").getElementById(id), now = document.getElementById(id);
+      if (!from || !now) return missing(from ? "" : " in the page's new render");
+      const html = from.outerHTML, next = fragment(html).firstElementChild;
+      quiet(() => {
+        listenIn(html);
+        morph(now, next);
+        bindIn(now.isConnected ? now : document.getElementById(id), html);
+      });
+      emit("vk:patched", { ids: [], region: sel });
+    }, (err) => fail('live: Reload("' + sel + '"): ' + (err && err.message || "the fetch failed")));
+  }
+
   // Removals (remove): an element taken off the page, with where it was and
   // how a render shows it again (its key, else its id, else its markup).
   // Taken by a push (track), it is that push's prediction (pending): put
@@ -3303,7 +3339,7 @@
     patch: (el, a) => { move(String(a.href), true, null, !!a.replace); },
     // reload renders the page again at its URL: a patch of it in place of
     // the history entry, scroll and focus kept (go, reload)
-    reload: () => { move(location.href, true, null, true, true); },
+    reload: (el, a) => { a.sel ? reloadRegion(String(a.sel)) : move(location.href, true, null, true, true); },
     close: (el) => closeFrom(el),
     // open opens a component (ui.JS.Call(component)): its token, and the
     // props the browser reads, read now, go over the socket to the

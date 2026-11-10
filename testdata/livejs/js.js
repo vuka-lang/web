@@ -968,6 +968,56 @@ test("reload: a live page not connected, or no reply in time, loads its URL agai
   eq(q.loads, [["replace", "http://test/shelf?page=1"]], "no reply in time");
 });
 
+// Region reload: reload with sel renders the element with that id again:
+// over the socket the instance it is in gets a vkreload event and the
+// reply patches what changed; over HTTP the page's URL is fetched and the
+// element alone takes the reply's markup.
+const regionPage = (rows, open = true) => `<div data-vk-id="c1"><input id="q"><dialog id="filter"${open ? " open" : ""}>filter</dialog>` +
+  `<div data-vk-id="c2" id="orders"><table><tbody>${rows.map((r) => `<tr data-vk-key="${r}"><td>order ${r}</td></tr>`).join("")}</tbody></table></div></div>`;
+const regionRows = (p) => p.doc.querySelectorAll("#orders tr").map((r) => r.textContent).join(",");
+
+test("region reload (socket): a vkreload event to the instance the element is in; the reply patches it, the rest stays", () => {
+  const p = joined(regionPage([1, 2]), { url: "http://test/orders?page=2" });
+  p.$("#q").value = "typed";
+  p.$("#q").focus();
+  p.window.vuka.run(p.doc.body, [["reload", { sel: "#orders" }]]);
+  const m = p.ws().sent[p.ws().sent.length - 1];
+  eq([m.type, m.target, m.event, navs(p)], ["event", "c2:vkreload", "vkreload", []], "sent, no navigation");
+  p.server({ type: "patch", ref: m.ref, updates: [{ id: "c2", html: regionPage([1, 2, 3]).match(/<div data-vk-id="c2".*<\/div>(?=<\/div>$)/)[0] }] });
+  eq([regionRows(p), p.$("#filter").hasAttribute("open"), p.$("#q").value, p.doc.activeElement.id, p.location.href], ["order 1,order 2,order 3", true, "typed", "q", "http://test/orders?page=2"], "the table's new row; the dialog, the typing, the address kept");
+  p.window.vuka.run(p.$("#q"), [["reload", { sel: "#filter" }]]);
+  eq(p.ws().sent[p.ws().sent.length - 1].target, "c1:vkreload", "an element in the page's own markup: its instance");
+});
+
+test("region reload: no element with the id is an error in development, nothing otherwise; a live page not joined yet sends it once joined", () => {
+  const p = joined(regionPage([1]), { dev: true });
+  const sent = p.ws().sent.length;
+  p.window.vuka.run(p.doc.body, [["reload", { sel: "#nope" }]]);
+  eq([p.ws().sent.length, errors(p).length && errors(p)[0].includes('Reload("#nope")')], [sent, true], "development");
+  const q = joined(regionPage([1]));
+  q.window.vuka.run(q.doc.body, [["reload", { sel: "#nope" }]]);
+  eq(errors(q), [], "production");
+  const r = open(regionPage([1]), { live: true });
+  r.window.vuka.run(r.doc.body, [["reload", { sel: "#orders" }]]);
+  r.ws().onopen();
+  r.server({ type: "render", ref: 1, html: regionPage([1]) });
+  eq(r.ws().sent.filter((x) => x.event === "vkreload").length, 1, "sent once joined");
+});
+
+test("region reload (http): the page's URL fetched, the element alone takes its markup", async () => {
+  const p = open(regionPage([1, 2]), { build: "b1", url: "http://test/orders?page=2#top", dev: true });
+  p.$("#q").value = "typed";
+  p.window.vuka.run(p.doc.body, [["reload", { sel: "#orders" }]]);
+  eq([p.fetches.length, p.fetches[0].url, p.fetches[0].cache], [1, "http://test/orders?page=2", "no-cache"], "fetched");
+  p.reply(0, { body: docOf("Orders", regionPage([1, 2, 3], false)) });
+  await flushed();
+  eq([regionRows(p), p.$("#filter").hasAttribute("open"), p.$("#q").value, p.location.href, p.loads], ["order 1,order 2,order 3", true, "typed", "http://test/orders?page=2#top", []], "the region only");
+  p.window.vuka.run(p.doc.body, [["reload", { sel: "#orders" }]]);
+  p.reply(1, { body: docOf("Orders", "<p>gone</p>") });
+  await flushed();
+  eq([regionRows(p), errors(p).some((e) => e.includes("new render"))], ["order 1,order 2,order 3", true], "missing from the reply");
+});
+
 // Only http and https URLs are loaded or navigated to: a redirect from the
 // server, a command, a fallback (an open redirect's javascript: URL).
 test("navigation: a URL that isn't http or https is refused", () => {
