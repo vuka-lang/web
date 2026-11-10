@@ -8,7 +8,7 @@ require (
 	github.com/vuka-lang/vuka/v2 v2.17.1-0.20261107123553-9156bdf7ad26
 )
 
-require github.com/vuka-lang/ui/v2 v2.17.1-0.20261110053730-8a80766e505e
+require github.com/vuka-lang/ui/v2 v2.17.1-0.20261110060301-68fa2022efcd
 
 require golang.org/x/text v0.41.0
 
