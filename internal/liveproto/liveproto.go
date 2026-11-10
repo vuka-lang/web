@@ -87,6 +87,9 @@ func Native() bool {
 
 func (x native) Event(m live.ClientMessage) any { return x.s.Handle(m) }
 
+// HTML is the page's HTML as last rendered (live.Session.HTML).
+func (x native) HTML() string { return x.s.HTML() }
+
 // Trim releases what the session can rebuild, when this Vuka's session can
 // (live.Session.Trim).
 func (x native) Trim() {

@@ -927,6 +927,47 @@ test("navigation: back and forward patch within a page, navigate across pages, r
   eq(navs(p).length, 4, "a #hash entry of the page shown: nothing");
 });
 
+// Reload: a patch of the page's own URL, query and #hash kept, in place of
+// the history entry, scroll and focus kept, the reply's title taken.
+test("reload: a patch of the page's own URL; the #hash, scroll, focus and the entry's state stay", () => {
+  const p = joined(shelf(2), { url: "http://test/shelf?page=2#at" });
+  p.history.replaceState({ ...p.history.state, tab: "open" }, "");
+  p.window.scrollY = 300;
+  p.$("#inc").focus();
+  const seen = [];
+  p.window.addEventListener("vk:navigate", (e) => seen.push(e.detail));
+  p.window.vuka.run(p.doc.body, [["reload", {}]]);
+  eq(navs(p), [{ type: "navigate", url: "/shelf?page=2", patch: true }], "sent: the path and query");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c1", html: shelf(3).slice(6, -7) }], url: "/shelf?page=2", token: "t2", title: "Shelf · Books" });
+  eq([p.$("#at").textContent, p.location.href, p.entries, p.history.state, p.scrolls, p.doc.scrolled.length, p.doc.activeElement.id, p.doc.title],
+    ["page 3", "http://test/shelf?page=2#at", [], { vk: p.history.state.vk, tab: "open", x: 0, y: 300 }, [], 0, "inc", "Shelf · Books"], "rendered again, nothing else moved");
+  eq(seen, [{ url: "http://test/shelf?page=2#at", patch: true, reload: true }], "vk:navigate");
+});
+
+test("reload: from a push's on_ok once its reply is applied, and from the commands a handler returns", () => {
+  const p = joined(`<div data-vk-id="c1"><p id="at">0</p><button id="a" data-vk-js-click='${js([["push", { h: "c1:0", on_ok: [["reload", {}]] }]])}'>a</button><button id="b" data-vk-js-click='${js([["push", { h: "c1:1", result: true }]])}'>b</button></div>`, { url: "http://test/orders?page=2" });
+  p.fire("#a", "click");
+  eq(navs(p), [], "not before the reply");
+  p.server({ type: "patch", ref: lastRef(p), updates: [] });
+  eq(navs(p), [{ type: "navigate", url: "/orders?page=2", patch: true }], "after it");
+  p.server({ type: "patch", ref: lastRef(p), updates: [{ id: "c1", html: `<div data-vk-id="c1"><p id="at">1</p></div>` }], url: "/orders?page=2" });
+  eq(p.$("#at").textContent, "1", "rendered");
+  const q = joined(`<div data-vk-id="c1"><button id="b" data-vk-js-click='${js([["push", { h: "c1:1", result: true }]])}'>b</button></div>`, { url: "http://test/orders" });
+  q.fire("#b", "click");
+  q.server({ type: "patch", ref: lastRef(q), updates: [], result: { js: [["reload", {}]] } });
+  eq(navs(q), [{ type: "navigate", url: "/orders", patch: true }], "returned");
+});
+
+test("reload: a live page not connected, or no reply in time, loads its URL again", () => {
+  const p = open(shelf(1), { live: true, url: "http://test/shelf?page=1#at" });
+  p.window.vuka.run(p.doc.body, [["reload", {}]]);
+  eq(p.loads, [["reload"]], "not joined: the #hash would only scroll");
+  const q = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  q.window.vuka.run(q.doc.body, [["reload", {}]]);
+  q.tick(10000);
+  eq(q.loads, [["replace", "http://test/shelf?page=1"]], "no reply in time");
+});
+
 // Only http and https URLs are loaded or navigated to: a redirect from the
 // server, a command, a fallback (an open redirect's javascript: URL).
 test("navigation: a URL that isn't http or https is refused", () => {
@@ -1391,6 +1432,43 @@ test("http navigation: a live page reached joins, its token from the reply", asy
   p.server({ type: "render", ref: 1, html: `<main><div data-vk-id="c1"><h1>live</h1><a id="again" href="/shelf?page=3" data-vk-link>again</a></div></main>` });
   p.fire("#again", "click");
   eq([navs(p), p.fetches.length], [[{ type: "navigate", url: "/shelf?page=3" }], 1], "then over the connection");
+});
+
+test("http reload: a page that isn't live fetches its own URL afresh and patches its body; scroll, focus and the #hash stay", async () => {
+  const p = plain({ url: "http://test/shelf?page=2#at" });
+  p.$("#q").focus();
+  p.$("#q").value = "typed";
+  p.window.vuka.run(p.doc.body, [["reload", {}]]);
+  eq([p.fetches.length, p.fetches[0].url, p.fetches[0].headers["Vk-Navigate"], p.fetches[0].cache], [1, "http://test/shelf?page=2", "b1", "no-cache"], "fetched");
+  p.reply(0, pageReply(plainShelf(3), { title: "Shelf · Books" }));
+  await flushed();
+  eq([p.$("#at").textContent, p.location.href, p.entries, p.scrolls, p.doc.scrolled.length, p.doc.activeElement.id, p.$("#q").value, p.doc.title, p.loads],
+    ["page 3", "http://test/shelf?page=2#at", [], [], 0, "q", "typed", "Shelf · Books", []], "patched in place");
+});
+
+test("http reload: from a push's on_ok and from the commands its method returns", async () => {
+  for (const [what, step, body] of [["on_ok", { on_ok: [["reload", {}]] }, {}], ["returned", { result: true }, { js: [["reload", {}]] }]]) {
+    const p = open(`<p id="at">0</p><button id="go" data-vk-js-click='${js([["push", { m: "ref1", csrf: "t", ...step }]])}'>go</button>`, { build: "b1", url: "http://test/orders?page=2" });
+    p.fire("#go", "click");
+    eq(p.fetches.length, 1, what + ": the push");
+    p.reply(0, { headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    await flushed(); await flushed();
+    eq([p.fetches.length, p.fetches[1] && p.fetches[1].url], [2, "http://test/orders?page=2"], what + ": then the page");
+    p.reply(1, pageReply(`<p id="at">1</p>`));
+    await flushed();
+    eq([p.$("#at").textContent, p.loads], ["1", []], what + ": rendered");
+  }
+});
+
+test("http reload: a reply fetched ahead isn't used", async () => {
+  const p = open(layout(`<a id="l1" href="/a" data-vk-link>a</a>`), { build: "b1", url: "http://test/" });
+  p.fire("#l1", "focusin");
+  eq(p.fetches.length, 1, "prefetched");
+  p.fire("#l1", "click");
+  p.reply(0, pageReply(layout(`<p id="at">a</p>`)));
+  await flushed();
+  p.window.vuka.run(p.doc.body, [["reload", {}]]);
+  eq([p.fetches.length, p.fetches[1].url], [2, "http://test/a"], "fetched again");
 });
 
 test("http navigation: prefetch fetches the reply a click then uses, a few at a time, for 30s", async () => {

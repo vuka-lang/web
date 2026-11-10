@@ -903,7 +903,17 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	c.uri = uri
 	c.layouts = j.layouts
 	c.setPage(j.ctx)
-	return withToken{reply, c.app.signToken(uri), ui.PageTitle(j.ctx)}, patch
+	return withToken{reply, c.app.signToken(uri), c.docTitle(ui.PageTitle(j.ctx))}, patch
+}
+
+// docTitle is the title of the document the session renders, as a load of
+// the page gives it: the <title> its head has, else the page's (withTitle).
+func (c *conn) docTitle(page string) string {
+	h, ok := c.s.(interface{ HTML() string })
+	if !ok {
+		return page
+	}
+	return documentTitle(h.HTML(), page)
 }
 
 // run runs the route of uri on behalf of the connection: a GET carrying the
