@@ -1019,6 +1019,100 @@ test("navigate: a URL that isn't http or https is refused and rejects", async ()
   }
 });
 
+// A push's lifecycle — before, the request, on_ok or on_error, after — the
+// same over the socket (h) and over HTTP (m, a page that isn't live).
+const log = (s) => ["call", { fn: "log", args: [s] }];
+const transports = {
+  socket: {
+    open: (body, o = {}) => joined(`<div data-vk-id="c1">${body}</div>`, o),
+    push: { h: "c1:0" },
+    sent: (p) => p.ws().sent.length - 1,
+    reply: async (p, error) => {
+      const m = p.ws().sent[p.ws().sent.length - 1];
+      p.server({ type: "patch", ref: m.ref, updates: [], ...(error ? { error } : {}) });
+    },
+  },
+  http: {
+    open: (body, o = {}) => open(`<div>${body}</div>`, o),
+    push: { m: "ref1", csrf: "t" },
+    sent: (p) => p.fetches.length,
+    reply: async (p, error) => {
+      p.reply(p.fetches.length - 1, { status: error ? 422 : 200, headers: { "content-type": "application/json" }, body: JSON.stringify(error ? { error: { message: error } } : {}) });
+      await flush(); await flush(); await flush();
+    },
+  },
+};
+function lifecycle(t, ops, o) {
+  const p = t.open(`<button id="go" data-vk-js-click='${js(ops)}'>go</button><ul id="list"></ul><p id="err"></p><i id="agree"></i>`, o);
+  const steps = [];
+  p.window.vuka.register("log", (ctx, s) => { steps.push(s); });
+  p.window.vuka.register("boom", () => { throw new Error("boom"); });
+  return { p, steps };
+}
+for (const [name, t] of Object.entries(transports)) {
+  const push = (hooks) => ["push", { ...t.push, ...hooks }];
+  test(`lifecycle (${name}): before, the request, on_ok or on_error, after`, async () => {
+    for (const error of [undefined, "nope"]) {
+      const { p, steps } = lifecycle(t, [push({ before: [log("before")], on_ok: [log("success")],
+        on_error: [["set_text", { to: { sel: "#err" }, text: { $read: { error: true } } }], log("error")], after: [log("after")] })]);
+      p.fire("#go", "click");
+      eq([steps, t.sent(p)], [["before"], 1], "before, then sent");
+      await t.reply(p, error);
+      eq(steps, error ? ["before", "error", "after"] : ["before", "success", "after"], error ? "an error" : "a success");
+      if (error) eq(p.$("#err").textContent, "nope", "ui.LoadError in on_error");
+    }
+  });
+  test(`lifecycle (${name}): a before that stops sends nothing, runs no hook and takes its busy marks off`, async () => {
+    const ops = [["busy", { to: { sel: "#list" } }], push({ before: [["confirm", { msg: "Sure?" }], log("before")], on_ok: [log("success")], on_error: [log("error")], after: [log("after")] }), log("at once")];
+    const no = lifecycle(t, ops, { confirm: false });
+    no.p.fire("#go", "click");
+    await flush();
+    eq([no.steps, t.sent(no.p), no.p.$("#list").getAttribute("aria-busy")], [["at once"], 0, null], "declined");
+    const gate = lifecycle(t, [push({ before: [["if", { cond: { to: { sel: "#agree" }, attr: "data-ok" } }], log("agreed")], after: [log("after")] })]);
+    gate.p.fire("#go", "click");
+    eq([gate.steps, t.sent(gate.p)], [[], 0], "an if not taken");
+    gate.p.$("#agree").setAttribute("data-ok", "");
+    gate.p.fire("#go", "click");
+    eq([gate.steps, t.sent(gate.p)], [["agreed"], 1], "an if taken");
+    await t.reply(gate.p);
+    eq(gate.steps, ["agreed", "after"], "then after");
+  });
+  test(`lifecycle (${name}): busy from before stays until the reply, then after runs`, async () => {
+    const { p, steps } = lifecycle(t, [push({ before: [["busy", { to: { sel: "#list" } }]], after: [log("after")] })]);
+    p.fire("#go", "click");
+    eq(p.$("#list").getAttribute("aria-busy"), "true", "busy while waiting");
+    await t.reply(p, "nope");
+    eq([p.$("#list").getAttribute("aria-busy"), steps], [null, ["after"]], "off on the error, then after");
+  });
+  test(`lifecycle (${name}): no reply in time is an error, then after`, async () => {
+    const { p, steps } = lifecycle(t, [push({ timeout: 500, on_ok: [log("success")], on_error: [log("error")], after: [log("after")] })]);
+    p.fire("#go", "click");
+    p.tick(500);
+    await flush();
+    eq(steps, ["error", "after"], "timed out");
+  });
+  test(`lifecycle (${name}): a failing on_ok runs no on_error; after runs`, async () => {
+    const { p, steps } = lifecycle(t, [push({ on_ok: [["call", { fn: "boom" }], log("success")], on_error: [log("error")], after: [log("after")] })]);
+    p.fire("#go", "click");
+    await t.reply(p);
+    eq(steps, ["after"], "after only");
+  });
+  test(`lifecycle (${name}): the steps after a push run at once`, async () => {
+    const { p, steps } = lifecycle(t, [push({ on_ok: [log("success")] }), log("at once")]);
+    p.fire("#go", "click");
+    eq(steps, ["at once"], "before the reply");
+    await t.reply(p);
+    eq(steps, ["at once", "success"], "after it");
+  });
+}
+test("lifecycle (socket): a live page not connected fails the push at once: on_error, then after", () => {
+  const p = open(`<div data-vk-id="c1"><button id="go" data-vk-js-click='${js([["push", { h: "c1:0", before: [log("before")], on_error: [log("error")], after: [log("after")] }]])}'>go</button></div>`, { live: true });
+  const steps = [];
+  p.window.vuka.register("log", (ctx, s) => { steps.push(s); });
+  p.fire("#go", "click");
+  eq([steps, p.ws().sent.length], [["before", "error", "after"], 0], "not joined");
+});
+
 // Navigation over HTTP: a page that isn't live fetches the page with
 // Vk-Navigate and patches its body in place.
 const layout = (main) => `<header><input id="q"><a id="home" href="/" data-vk-link data-vk-active="exact">home</a></header><main>${main}</main>`;

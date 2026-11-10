@@ -475,7 +475,7 @@ function page(file, body, options = {}) {
     const hs = { "content-type": "text/html; charset=utf-8" };
     for (const k in r.headers || {}) hs[k.toLowerCase()] = r.headers[k];
     const url = r.url ? new URL(r.url, at.href).href : f.url;
-    const res = { status: r.status || 200, url, redirected: url !== f.url, headers: { get: (k) => k.toLowerCase() in hs ? hs[k.toLowerCase()] : null }, text: () => Promise.resolve(r.body || "") };
+    const res = { status: r.status || 200, ok: (r.status || 200) >= 200 && (r.status || 200) < 300, url, redirected: url !== f.url, headers: { get: (k) => k.toLowerCase() in hs ? hs[k.toLowerCase()] : null }, text: () => Promise.resolve(r.body || ""), json: () => Promise.resolve().then(() => JSON.parse(r.body || "")) };
     if (!r.stream) return f.resolve(res);
     const pieces = [], waiting = [];
     let ended = false;
@@ -494,7 +494,7 @@ function page(file, body, options = {}) {
   class DOMParser { parseFromString(html) { return parseDocument(html); } }
   Object.defineProperty(doc, "currentScript", { value: script, configurable: true });
   const ctx = {
-    document: doc, Element, Node, Event, CustomEvent, KeyboardEvent, URL, FormData, WebSocket, fetch, AbortController, DOMParser, TextDecoder, TextEncoder,
+    document: doc, Element, Node, Event, CustomEvent, KeyboardEvent, URL, URLSearchParams, FormData, WebSocket, fetch, AbortController, DOMParser, TextDecoder, TextEncoder,
     setTimeout, clearTimeout, requestAnimationFrame: (fn) => setTimeout(fn, 16),
     location, history, scrollX: 0, scrollY: 0, scrollTo: (x, y) => scrolls.push([x, y]),
     sessionStorage: { getItem: () => null, setItem() {} },

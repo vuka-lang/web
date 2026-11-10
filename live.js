@@ -2162,6 +2162,8 @@
         if (!window.confirm(a.msg)) return false;
       } else if (name === "busy") {
         busyOn(el, a, ops.slice(i + 1).some((o) => o[0] === "push" && ((o[1] || {}).h || (o[1] || {}).m)));
+      } else if (name === "vk_stopped") {
+        a.fn();
       } else if (name !== "end") {
         if (jsOps[name]) jsOps[name](el, a, e);
         else warn("unknown JS command " + name);
@@ -2292,8 +2294,19 @@
     const into = p.into || [];
     const mine = into.filter((t) => t.vkPush === p.seq);
     mine.forEach((t) => { if (t.vkPush === p.seq) delete t.vkPush; t.removeAttribute("aria-busy"); });
-    if (into.length && !mine.length) return; // a later push into them wins
     const at = el && el.isConnected ? el : p.root && byID(p.root) || document.body;
+    const was = loadError;
+    loadError = error ? String(msg || "the push failed") : null;
+    try {
+      if (into.length && !mine.length) return; // a later push into them wins: its result and hooks
+      outcome(p, at, error, result, msg, mine);
+    } finally {
+      try { if (p.a.after) run(at, p.a.after, null, []); } finally { loadError = was; }
+    }
+  }
+  // outcome applies a settled push's result and runs its on_ok or on_error.
+  function outcome(p, at, error, result, msg, mine) {
+    const el = p.el;
     if (!error && result && typeof result === "object") {
       try { applyResult(at, result, mine.filter((t) => t.isConnected), p.a.mode); } catch (err) { fail("vuka: a push's result: " + err.message); }
     }
@@ -2302,10 +2315,7 @@
       console.error("vuka: push: " + msg);
       (el && el.isConnected ? el : document).dispatchEvent(new CustomEvent("vk:error", { bubbles: true, detail: { error: String(msg), fn: "push" } }));
     }
-    if (!hooks) return;
-    const was = loadError;
-    loadError = error ? String(msg || "the push failed") : null;
-    try { run(at, hooks, null, []); } finally { loadError = was; }
+    if (hooks) run(at, hooks, null, []);
   }
   let loadError = null; // the failed push's message, while its on_error runs (ui.LoadError)
 
@@ -3220,6 +3230,8 @@
     // page that isn't live, or a read). Its arguments are read now; its
     // result goes into its targets when the reply comes (settle).
     push: (el, a, e) => {
+      if (a.before) return beforePush(el, a, e);
+      if (a.vkGo) a.vkGo();
       const recs = rec ? rec.splice(0) : [];
       if (a.m) return pushHTTP(el, a, e, recs, rec && rec.busy ? rec.busy.splice(0) : []);
       if (!a.h) return; // rendered without a session, and no method to call over HTTP
@@ -3247,6 +3259,27 @@
       } else marks.forEach(unbusy);
     },
   };
+
+  // beforePush runs a push's Before chain (a.before), then the push, over the
+  // socket or HTTP alike, when the chain gets to its end: a chain that stops
+  // (a declined confirm, an if not taken) sends nothing and runs none of the
+  // push's hooks, and the Busy marks waiting for the push are taken off.
+  // Its changes are the push's predictions, as the steps before a push are.
+  function beforePush(el, a, e) {
+    const { before: ops, ...rest } = a, r = rec;
+    let went = false, done = false;
+    const stopped = () => {
+      if (done) return;
+      done = true;
+      if (!went && r && r.busy) r.busy.splice(0).forEach(unbusy);
+    };
+    rest.vkGo = () => { went = true; };
+    const open = ops.reduce((n, o) => n + (o[0] === "if") - (o[0] === "end"), 0);
+    const tail = [["push", rest]];
+    for (let i = 0; i < open; i++) tail.push(["end", {}]);
+    tail.push(["vk_stopped", { fn: stopped }]);
+    if (run(el, ops.concat(tail), e) === false) stopped();
+  }
 
   // Navigation: a link marked data-vk-link, a patch or navigate command, and
   // the back and forward buttons move a live page over its connection; the
