@@ -40,6 +40,18 @@ class Node {
     const p = this.parentNode;
     return p ? p.childNodes[p.childNodes.indexOf(this) + 1] || null : null;
   }
+  get previousSibling() {
+    const p = this.parentNode;
+    return p ? p.childNodes[p.childNodes.indexOf(this) - 1] || null : null;
+  }
+  get nextElementSibling() {
+    const p = this.parentNode;
+    return p ? p.children[p.children.indexOf(this) + 1] || null : null;
+  }
+  get previousElementSibling() {
+    const p = this.parentNode;
+    return p ? p.children[p.children.indexOf(this) - 1] || null : null;
+  }
   get isConnected() {
     let n = this;
     while (n.parentNode) n = n.parentNode;
