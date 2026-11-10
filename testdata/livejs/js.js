@@ -1113,6 +1113,73 @@ test("lifecycle (socket): a live page not connected fails the push at once: on_e
   eq([steps, p.ws().sent.length], [["before", "error", "after"], 0], "not joined");
 });
 
+// A Call's open — before, the request, the component in the overlay host,
+// on_ok once it is there or on_error, after — over the socket (h) and over
+// HTTP (a page that isn't live); closing it runs its closed hooks.
+const opens = {
+  socket: {
+    open: (body) => joined(`<div data-vk-id="c1">${body}</div>`),
+    step: { t: "tok", h: "c0:vkcall" },
+    key: (p) => p.ws().sent[p.ws().sent.length - 1].data.key,
+    sent: (p) => p.ws().sent.filter((m) => m.event === "vkcall").length,
+    reply: async (p, body, error) => {
+      const m = p.ws().sent[p.ws().sent.length - 1];
+      const frame = error ? "" : `<vk-teleport data-vk-teleport="#vk-overlays" style="display: contents"><dialog data-vk-call="${m.data.key}" data-vk-on-vkclose="c2:0"><button id="x" data-vk-js-click='${js([["close", {}]])}'>x</button></dialog></vk-teleport>`;
+      p.server({ type: "patch", ref: m.ref, updates: [{ id: "c1", html: `<div data-vk-id="c1">${body}${frame}</div>` }], ...(error ? { error } : {}) });
+    },
+  },
+  http: {
+    open: (body) => open(`<div>${body}</div><div id="vk-overlays" data-vk-overlays></div>`),
+    step: { t: "tok", csrf: "c" },
+    key: (p) => p.fetches[p.fetches.length - 1].body.get("_vk_key"),
+    sent: (p) => p.fetches.length,
+    reply: async (p, body, error) => {
+      const f = p.fetches[p.fetches.length - 1], key = f.body.get("_vk_key");
+      eq([f.headers["Vk-Call"], f.headers["X-CSRF-Token"], f.body.get("_vk_reads")], ["tok", "c", `{"q":"red"}`], "the open's request");
+      p.reply(p.fetches.length - 1, { status: error ? 403 : 200, headers: { "content-type": "application/json" },
+        body: JSON.stringify(error ? { error: { message: error } } : { html: `<dialog data-vk-call="${key}"><button id="x" data-vk-js-click='${js([["close", {}]])}'>x</button></dialog>` }) });
+      await flush(); await flush(); await flush();
+    },
+  },
+};
+for (const [name, t] of Object.entries(opens)) {
+  const body = (step) => `<input id="q" value="red"><button id="go" data-vk-js-click='${js([["open", { ...t.step, reads: { q: { $read: { to: { sel: "#q" }, value: true } } }, ...step }]])}'>go</button>`;
+  const start = (step) => {
+    const p = t.open(body(step));
+    const steps = [];
+    p.window.vuka.register("log", (ctx, s) => { steps.push(s + (p.doc.querySelector("[data-vk-call]") ? "+" : "-")); });
+    return { p, steps };
+  };
+  test(`open (${name}): before, the request, on_ok once the component is in, after; closing it runs closed`, async () => {
+    const { p, steps } = start({ before: [log("before")], on_ok: [log("success")], on_error: [log("error")], after: [log("after")], closed: [log("closed")] });
+    p.fire("#go", "click");
+    eq([steps, t.sent(p)], [["before-"], 1], "before, then sent");
+    await t.reply(p, body({}));
+    eq(steps, ["before-", "success+", "after+"], "on screen before on_ok");
+    eq(!!p.doc.querySelector("#vk-overlays [data-vk-call]"), true, "in the overlay host");
+    p.fire("#x", "click");
+    if (name === "socket") {
+      const m = p.ws().sent[p.ws().sent.length - 1];
+      eq([m.event, m.target], ["vkclose", "c2:0"], "the session drops it");
+      p.server({ type: "patch", ref: m.ref, updates: [{ id: "c1", html: `<div data-vk-id="c1">${body({})}</div>` }] });
+    }
+    eq([steps.slice(3), !!p.doc.querySelector("[data-vk-call]")], [["closed-"], false], "closed, then gone");
+  });
+  test(`open (${name}): a refused open runs on_error, then after, and shows nothing`, async () => {
+    const { p, steps } = start({ on_ok: [log("success")], on_error: [log("error")], after: [log("after")] });
+    p.fire("#go", "click");
+    await t.reply(p, body({}), "refused");
+    eq(steps, ["error-", "after-"], "an error");
+  });
+  test(`open (${name}): a before that stops sends nothing`, async () => {
+    const { p, steps } = start({ before: [["confirm", { msg: "Open?" }]], after: [log("after")] });
+    p.window.confirm = () => false;
+    p.fire("#go", "click");
+    await flush();
+    eq([steps, t.sent(p)], [[], 0], "declined");
+  });
+}
+
 // Navigation over HTTP: a page that isn't live fetches the page with
 // Vk-Navigate and patches its body in place.
 const layout = (main) => `<header><input id="q"><a id="home" href="/" data-vk-link data-vk-active="exact">home</a></header><main>${main}</main>`;

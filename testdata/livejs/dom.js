@@ -465,7 +465,7 @@ function page(file, body, options = {}) {
     constructor() { const s = this.signal = { aborted: false, fns: [] }; this.abort = () => { if (!s.aborted) { s.aborted = true; s.fns.forEach((f) => f()); } }; }
   }
   const fetch = (url, init = {}) => new Promise((resolve, reject) => {
-    const f = { url: new URL(url, at.href).href, headers: init.headers || {}, aborted: false, resolve, reject };
+    const f = { url: new URL(url, at.href).href, headers: init.headers || {}, body: init.body, aborted: false, resolve, reject };
     fetches.push(f);
     if (init.signal) init.signal.fns.push(() => { f.aborted = true; reject(Object.assign(new Error("aborted"), { name: "AbortError" })); });
   });

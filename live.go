@@ -633,6 +633,9 @@ func (a *App) page(rq *request, n ui.Node) {
 		if partsTok != "" {
 			script = strings.Replace(script, " defer></script>", ` data-vk-parts="`+partsTok+`" defer></script>`, 1)
 		}
+		if bytes.Contains(html, []byte("[&#34;open&#34;,{")) && !bytes.Contains(html, []byte(` id="vk-overlays"`)) {
+			script += overlayHost // the components Calls open go in it (call.go)
+		}
 	}
 	html = withTitle(html, ui.PageTitle(rq.ctx))
 	head := a.headTags(r, html)
@@ -673,10 +676,12 @@ func prefetching(r *http.Request) bool {
 }
 
 // pageLive reports whether a page's HTML is live: it holds stateful
-// components, event handlers or a JS command's push to a handler.
+// components, event handlers, a JS command's push to a handler, or a Call
+// the session opens (a stateful component's, or one given a closure).
 func pageLive(html []byte) bool {
 	return bytes.Contains(html, []byte(" data-vk-id=")) || bytes.Contains(html, []byte(" data-vk-on-")) ||
-		bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) // a JS command's push to a handler
+		bytes.Contains(html, []byte("[&#34;push&#34;,{&#34;h&#34;:")) || // a JS command's push to a handler
+		bytes.Contains(html, []byte("&#34;h&#34;:&#34;c0:vkcall&#34;")) // a Call the session opens
 }
 
 // writePage writes html with script (the runtime's tag, if any) before its
