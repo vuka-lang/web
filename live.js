@@ -4104,6 +4104,78 @@
     });
   }
 
+  // Client tables: a ui.DataTable with Client (data-vk-table="client")
+  // renders every row; the browser searches and pages them, with no
+  // request. A row (data-vk-table-row) is found by its data-vk-text, else
+  // by what it shows; the search box (data-vk-table-search), the size
+  // select (data-vk-table-size) and the pager's buttons
+  // (data-vk-table-go="first|prev|next|last") change what shows, and the
+  // counters (data-vk-table-from, -to, -total, -page, -pages) follow. With
+  // rows but none found, the table gives way to data-vk-table-empty="match",
+  // whose data-vk-table-clear empties the search. Applied as the page loads
+  // and after every render, which keeps the page a table was on.
+  const tables = new WeakMap();
+  function clientTables() {
+    if (!document.querySelectorAll) return;
+    document.querySelectorAll('[data-vk-table="client"]').forEach((root) => tableShow(root));
+  }
+  function tableShow(root, page) {
+    let t = tables.get(root);
+    if (!t) tables.set(root, (t = { page: 1 }));
+    if (page) t.page = page(t.page);
+    const own = (sel) => [...root.querySelectorAll(sel)].filter((e) => e.closest("[data-vk-table]") === root);
+    const rows = own("[data-vk-table-row]"), search = own("[data-vk-table-search]")[0], sizer = own("[data-vk-table-size]")[0];
+    const term = (search && search.value || "").trim().toLowerCase();
+    const text = (r) => r.hasAttribute("data-vk-text") ? r.getAttribute("data-vk-text") : (r.textContent || "").toLowerCase();
+    const found = term ? rows.filter((r) => text(r).includes(term)) : rows;
+    const size = Math.max(1, +(sizer && sizer.value) || 10);
+    const pages = Math.max(1, Math.ceil(found.length / size));
+    if (t.page === Infinity || t.page > pages) t.page = pages;
+    if (!(t.page >= 1)) t.page = 1;
+    const start = (t.page - 1) * size, shown = new Set(found.slice(start, start + size));
+    rows.forEach((r) => { if (r.hidden !== !shown.has(r)) r.hidden = !shown.has(r); });
+    const set = (name, v) => own("[data-vk-table-" + name + "]").forEach((e) => { if (e.textContent !== String(v)) e.textContent = String(v); });
+    set("from", found.length ? start + 1 : 0);
+    set("to", start + shown.size);
+    set("total", found.length);
+    set("page", t.page);
+    set("pages", pages);
+    own("[data-vk-table-go]").forEach((b) => {
+      const go = b.getAttribute("data-vk-table-go");
+      b.disabled = go === "first" || go === "prev" ? t.page <= 1 : t.page >= pages;
+    });
+    const none = rows.length > 0 && found.length === 0;
+    own('[data-vk-table-empty="match"]').forEach((e) => { if (e.hidden === none) e.hidden = !none; });
+    const wrap = own(".vk-table-wrap")[0];
+    if (wrap && wrap.hidden !== none) wrap.hidden = none;
+  }
+  const tableOf = (el, sel) => {
+    const c = el && el.closest && el.closest(sel);
+    const root = c && c.closest("[data-vk-table]");
+    return root && root.getAttribute("data-vk-table") === "client" ? [c, root] : null;
+  };
+  document.addEventListener("input", (e) => {
+    const t = tableOf(e.target, "[data-vk-table-search]");
+    if (t) tableShow(t[1], () => 1);
+  });
+  document.addEventListener("change", (e) => {
+    const t = tableOf(e.target, "[data-vk-table-size]");
+    if (t) tableShow(t[1], () => 1);
+  });
+  document.addEventListener("click", (e) => {
+    let t = tableOf(e.target, "[data-vk-table-clear]");
+    if (t) {
+      const s = [...t[1].querySelectorAll("[data-vk-table-search]")].find((x) => x.closest("[data-vk-table]") === t[1]);
+      if (s) { s.value = ""; s.focus(); }
+      return tableShow(t[1], () => 1);
+    }
+    t = tableOf(e.target, "[data-vk-table-go]");
+    if (!t || t[0].disabled) return;
+    const go = t[0].getAttribute("data-vk-table-go");
+    tableShow(t[1], (p) => go === "first" ? 1 : go === "prev" ? p - 1 : go === "next" ? p + 1 : Infinity);
+  });
+  document.addEventListener("vk:patched", clientTables);
+
   // openKept: a <details> the visitor opens or closes stays so through the
   // morphs that render it as before, as an attribute a command changed
   // does; a render changing its open is the server's.
@@ -4215,6 +4287,7 @@
   listenIn(page0);
   bindIn(document.body, page0);
   markActive();
+  clientTables();
   watchViewport();
   watchShown();
   // the islands mounted before this ran read their states now
