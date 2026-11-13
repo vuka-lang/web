@@ -1252,7 +1252,22 @@
     const kept = (c) => foreign.has(c) || beside && added.has(c);
     const skip = (c) => { while (c && kept(c)) c = c.nextSibling; return c; };
     const outs = awayFrom(el), used = new Set();
-    let cur = skip(el.firstChild), last = null, nextKeys = null;
+    let cur = skip(el.firstChild), last = null, nextKeys = null, byKey = null;
+    // keyed is el's child of key k and tag: the first in el's order. The
+    // children's keys are read once; a key held once there is found at once,
+    // anything else (a key held twice, one not there at first) by a search.
+    const keyed = (k, tag) => {
+      if (!byKey) {
+        byKey = new Map();
+        for (const c of el.children) {
+          const ck = keyOf(c);
+          if (ck) byKey.set(ck, byKey.has(ck) ? null : c);
+        }
+      }
+      const c = byKey.get(k);
+      if (c && c.parentNode === el && !foreign.has(c) && keyOf(c) === k && c.tagName === tag) return c;
+      return Array.from(el.children).find((c) => !foreign.has(c) && keyOf(c) === k && c.tagName === tag) || null;
+    };
     for (const n of Array.from(next.childNodes)) {
       let match = null;
       const k = keyOf(n);
@@ -1276,7 +1291,7 @@
       // form's error summary) never pairs with its unkeyed neighbour,
       // shifting the elements after it — fields keeping what was typed — by one.
       if (k) {
-        match = Array.from(el.children).find((c) => !foreign.has(c) && keyOf(c) === k && c.tagName === n.tagName) || null;
+        match = keyed(k, n.tagName);
         if (!match && cur && same(cur, n) && keyOf(cur) && !(nextKeys || (nextKeys = keysOf(next))).has(keyOf(cur))) match = cur;
       } else if (cur) {
         let at = cur; // past the keyed elements here: matched by their keys, or gone
