@@ -46,6 +46,7 @@ type scopedPage struct {
 	groups []scopedGroup
 	comps  []int
 	plain  []int
+	framed []int
 	items  ui.Stream[scopedRow]
 	next   int
 	n      int
@@ -63,6 +64,7 @@ func (p *scopedPage) StreamTop() {
 }
 func (p *scopedPage) StreamEdit() { p.items.Insert(scopedRow{ID: 2, N: 7}) }
 func (p *scopedPage) PlainBump()  { p.plain[2]++ }
+func (p *scopedPage) FramedBump() { p.framed[2]++ }
 
 func newScopedPage(log *scopedLog) *scopedPage {
 	p := &scopedPage{Log: log}
@@ -74,6 +76,7 @@ func newScopedPage(log *scopedLog) *scopedPage {
 	}
 	p.comps = []int{1, 2, 3, 4}
 	p.plain = []int{0, 0, 0, 0, 0}
+	p.framed = []int{0, 0, 0, 0, 0}
 	return p
 }
 
@@ -106,7 +109,11 @@ func (p *scopedPage) Render() ui.Node {
 		}
 		groups = append(groups, ui.HTML(`<section key={gk} class="g"><h2>{gname}</h2><ul class="inner">{inner}</ul></section>`, gi, g.Name, inner))
 	}
-	var plain, items []ui.Node
+	var plain, items, framed, bound []ui.Node
+	for k, v := range p.framed {
+		framed = append(framed, ui.HTML(`<li key={fk}>{fv}</li>`, k, v))
+		bound = append(bound, ui.HTML(`<li key={bk} title="hi" data-vk-b-title='"hi"'><i>{bv}</i></li>`, k, v))
+	}
 	for _, v := range p.plain {
 		plain = append(plain, ui.HTML(`<li><i>{pv}</i></li>`, v))
 	}
@@ -124,6 +131,7 @@ func (p *scopedPage) Render() ui.Node {
 <button id="insert" onClick={insert}>insert</button>
 <button id="rekey" onClick={rekey}>rekey</button>
 <button id="plainbump" onClick={plainbump}>plain</button>
+<button id="fbump" onClick={fbump}>framed</button>
 <button id="stop" onClick={stop}>stream top</button>
 <button id="sedit" onClick={sedit}>stream edit</button>
 <input id="outside" name="outside"/>
@@ -131,8 +139,14 @@ func (p *scopedPage) Render() ui.Node {
 <div id="groups">{groups}</div>
 <ol id="comps">{comps}</ol>
 <ol id="plain">{plain}</ol>
+<ul id="framed">
+  <li class="first">first</li>
+  {framed}
+  <li class="last">last</li>
+</ul>
+<ol id="bound">{bound}</ol>
 <ul id="items" {attrs...}>{block}</ul>
-</main>`, p.n, p.Inc, p.Bump, p.Deep, p.Insert, p.Rekey, p.PlainBump, p.StreamTop, p.StreamEdit, rows, groups, comps, plain, block.Attrs(), block)
+</main>`, p.n, p.Inc, p.Bump, p.Deep, p.Insert, p.Rekey, p.PlainBump, p.FramedBump, p.StreamTop, p.StreamEdit, rows, groups, comps, plain, framed, bound, block.Attrs(), block)
 }
 
 // scopedBox is a stateful component in each row of a loop.
@@ -429,5 +443,49 @@ func TestScopedIndeterminate(t *testing.T) {
 	p.Eval(`document.querySelector('#rows li[data-id="1"] .c').indeterminate`, &ind)
 	if ind {
 		t.Fatal("the checkbox stayed indeterminate")
+	}
+}
+
+// TestScopedFramed: a loop between fixed siblings (and the whitespace
+// around them) morphs row by row, the siblings and rows staying the
+// elements they were; a script's change to a fixed sibling has the next
+// patch morph the container whole, which keeps it.
+func TestScopedFramed(t *testing.T) {
+	p, _ := scopedServer(t)
+	tagRows(p, "#framed > li")
+	before := scopedRuns(p, "framed")
+	clickWait(t, p, "#fbump", `document.querySelectorAll("#framed > li")[3].textContent === "1"`)
+	clickWait(t, p, "#inc", `document.querySelector("#count").textContent === "2"`)
+	if scopedRuns(p, "framed")-before < 2 {
+		t.Fatal("the patches didn't morph row by row")
+	}
+	untagged(t, p, "#framed > li")
+	p.Eval(`document.querySelector("#framed .first").textContent = "changed"; 0`, nil)
+	before = scopedRuns(p, "framed")
+	clickWait(t, p, "#fbump", `document.querySelectorAll("#framed > li")[3].textContent === "2"`)
+	if scopedRuns(p, "framed") != before {
+		t.Fatal("a container whose fixed sibling a script changed was morphed row by row")
+	}
+	if got := p.Text("#framed .first"); got != "changed" {
+		t.Fatalf("the fixed sibling shows %q, want the script's (a morph keeps it while the server renders the same)", got)
+	}
+}
+
+// TestScopedBindings: rows with bindings, left alone by a row-by-row
+// morph, aren't bound again, and show what a whole morph and bind leave
+// (verify mode checks both); a row whose bound attribute a script changed
+// is morphed and bound again.
+func TestScopedBindings(t *testing.T) {
+	p, _ := scopedServer(t)
+	p.Eval(`document.querySelectorAll("#bound > li")[1].setAttribute("title", "script"); 0`, nil)
+	before := scopedRuns(p, "bound")
+	clickWait(t, p, "#fbump", `document.querySelectorAll("#bound i")[2].textContent === "1"`)
+	if scopedRuns(p, "bound") == before {
+		t.Fatal("the patch didn't morph row by row")
+	}
+	var titles string
+	p.Eval(`Array.from(document.querySelectorAll("#bound > li"), (l) => l.title).join(",")`, &titles)
+	if titles != "hi,hi,hi,hi,hi" {
+		t.Fatalf("titles %s", titles)
 	}
 }

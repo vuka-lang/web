@@ -1977,6 +1977,7 @@
   const rowAt = new WeakMap(); // a mapped row → its index
   const heldEls = new Set(), homeEls = new Set(); // heldServer's fields and homes' elements, to look for inside a container
   let scopedRuns = 0, fastEls = []; // containers morphed row by row, for the verify mode
+  let fastRows = new Map(); // this apply's containers morphed row by row → the rows morphed: what bindIn reads
   const loopWatch = typeof MutationObserver === "function" ? new MutationObserver(stir) : null;
   const scopes = () => !!loopWatch && !window.__vkNoScope;
   function stir(records) {
@@ -2008,12 +2009,31 @@
   // starts after; null when it is anything else.
   const loopTags = { tbody: "table", thead: "table", tfoot: "table", tr: "row", ul: "list", ol: "list", div: "block",
     section: "block", article: "block", aside: "block", nav: "block", main: "block", header: "block", footer: "block" };
-  function loopShape(out, after) {
-    if (out[out.length - 1] !== ">") return null;
-    const st = out.slice(out.lastIndexOf("<")), m = /^<([a-z][a-z0-9]*)[\t\n\f\r >]/.exec(st);
-    if (!m || !loopTags[m[1]] || st.indexOf(">") !== st.length - 1 || !after.startsWith("</" + m[1] + ">")) return null;
-    if (/[\t\n\f\r ]data-vk-(stream|island|ignore|loop)[\t\n\f\r =>]/.test(st)) return null;
-    return { tag: m[1], cat: loopTags[m[1]] };
+  // A loop may also sit between fixed siblings (a header row, an empty
+  // state): the frame's statics around it, before (whose start tag must be
+  // all in before) and after, holding nothing but whole elements and text
+  // (rowScan's multi), counted as lead and trail. at is the index in out of
+  // the container's start tag's >.
+  const alone = { ok: true, nodes: 0, els: 0 };
+  function loopShape(out, before, after) {
+    if (out[out.length - 1] === ">") {
+      const st = out.slice(out.lastIndexOf("<")), m = /^<([a-z][a-z0-9]*)[\t\n\f\r >]/.exec(st);
+      if (m && loopTags[m[1]] && st.indexOf(">") === st.length - 1 && after.startsWith("</" + m[1] + ">"))
+        return /[\t\n\f\r ]data-vk-(stream|island|ignore|loop)[\t\n\f\r =>]/.test(st) ? null :
+          { tag: m[1], cat: loopTags[m[1]], lead: alone, trail: alone, at: out.length - 1 };
+    }
+    for (let k = before.lastIndexOf("<"); k >= 0; k = k ? before.lastIndexOf("<", k - 1) : -1) {
+      const m = /^<([a-z][a-z0-9]*)(?:[\t\n\f\r ][^<>]*)?>/.exec(before.slice(k, k + 512));
+      if (!m || !loopTags[m[1]] || /data-vk-(stream|island|ignore|loop)/.test(m[0])) continue;
+      const tag = m[1], lead = rowScan(before.slice(k + m[0].length), tag, true);
+      if (!lead.ok) continue;
+      for (let e = after.indexOf("</" + tag + ">"); e >= 0; e = after.indexOf("</" + tag + ">", e + 1)) {
+        const trail = rowScan(after.slice(0, e), tag, true);
+        if (trail.ok) return { tag, cat: loopTags[tag], lead, trail, at: out.length - before.length + k + m[0].length - 1 };
+      }
+      return null;
+    }
+    return null;
   }
 
   // rowScan reads a row's markup as the parser will inside a container of
@@ -2038,11 +2058,11 @@
   const PARENT = { caption: ["table"], colgroup: ["table"], tbody: ["table"], thead: ["table"], tfoot: ["table"],
     tr: ["tbody", "thead", "tfoot"], td: ["tr"], th: ["tr"], col: ["colgroup"] };
   const blank = /^[\t\n\f\r ]*$/;
-  function rowScan(h, container) {
+  function rowScan(h, container, multi) {
     const no = { ok: false };
-    if (h === null || !h.startsWith("<")) return no;
+    if (h === null || !multi && !h.startsWith("<")) return no;
     const st = [container], len = h.length;
-    let i = 0, svg = 0, root = "", mask = 0;
+    let i = 0, svg = 0, root = "", mask = 0, nodes = 0, els = 0; // multi: the top-level nodes and elements
     const on = (t) => st.lastIndexOf(t) > 0;
     // tag reads the attributes of the tag whose name ended at i: the index
     // after its >, and whether it ended with />; -1 when the markup ends first
@@ -2068,10 +2088,14 @@
     while (i < len) {
       const lt = h.indexOf("<", i), text = h.slice(i, lt < 0 ? len : lt);
       if (text) {
-        if (st.length === 1 || text.includes("\0")) return no; // outside the row
+        if (st.length === 1 && !multi || text.includes("\0")) return no; // outside the row
         if (!svg && TABLEKIDS[st[st.length - 1]] && !blank.test(text)) return no; // fostered
+        if (st.length === 1) nodes++;
       }
-      if (lt < 0) return no; // the row isn't closed
+      if (lt < 0) {
+        if (multi && st.length === 1) break;
+        return no; // the row isn't closed
+      }
       i = lt;
       const c = h[i + 1];
       if (c === "!") {
@@ -2100,10 +2124,11 @@
         if (st.length === 1 || st[st.length - 1] !== name) return no;
         st.pop();
         if (svg && name === "svg") svg--;
-        if (st.length === 1 && i !== len) return no; // a second root
+        if (st.length === 1 && i !== len && !multi) return no; // a second root
         continue;
       }
-      if (st.length === 1 && lt !== 0) return no;
+      if (st.length === 1 && lt !== 0 && !multi) return no;
+      if (st.length === 1) { nodes++; els++; }
       const top = st[st.length - 1];
       if (svg) {
         if (!SVGTAGS.has(name)) return no;
@@ -2137,10 +2162,12 @@
           }
         }
       }
+      if (multi) continue;
       if (st.length === 1 && root) return no;
       if (!root) root = name;
       if (st.length === 1 && i !== len) return no; // a void root, and more after it
     }
+    if (multi) return st.length === 1 ? { ok: true, nodes, els, mask } : no;
     return st.length === 1 && root ? { ok: true, root: root.toUpperCase(), mask } : no;
   }
 
@@ -2180,8 +2207,8 @@
         const n = +c.getAttribute("data-vk-loop"), mk = sk.marks[n];
         if (!mk || got.has(n) || c.namespaceURI !== XHTML || c.tagName !== mk.shape.tag.toUpperCase()) return null;
         got.set(n, c);
-        const want = mk.rows ? mk.rows.length : mk.block.c.length;
-        if (c.childNodes.length !== want || c.children.length !== want) return null;
+        const { lead, trail } = mk.shape, rows = mk.rows ? mk.rows.length : mk.block.c.length;
+        if (c.childNodes.length !== lead.nodes + rows + trail.nodes || c.children.length !== lead.els + rows + trail.els) return null;
         if (mk.rows && !fillSafe(c, mk)) { keep.add(n); again = true; }
       }
       if (again) { sk = trees.scoped(id, keep); continue; }
@@ -2202,7 +2229,9 @@
     if (!mk.rows) return;
     const t = document.createElement("template");
     t.innerHTML = mk.infos.map((x) => x.h).join("");
-    c.replaceChildren(t.content);
+    const off = mk.shape.lead.nodes;
+    for (let k = 0; k < mk.rows.length; k++) c.removeChild(c.childNodes[off]);
+    c.insertBefore(t.content, c.childNodes[off] || null);
     mk.rows = null;
   }
 
@@ -2213,7 +2242,7 @@
     const at = mk.block.at;
     if (mk.rows && unreached.get(next) === mk && rowsStill(el, next, mk, at)) { // the rows the last morph left: only the changed ones
       unreached.delete(next);
-      const pairs = mk.rows.map((i, j) => [el.childNodes[i], next.childNodes[j]]), was = loopKeys;
+      const off = mk.shape.lead.nodes, pairs = mk.rows.map((i, j) => [el.childNodes[off + i], next.childNodes[off + j]]), was = loopKeys;
       loopKeys = at.unique;
       try { for (const [a, b] of pairs) morph(a, b); } finally { loopKeys = was; }
       // a morph sets every checkbox's indeterminate from the server's markup
@@ -2221,6 +2250,7 @@
       if (inputs) for (const c of el.querySelectorAll("input")) if (checkable(c)) c.indeterminate = c.hasAttribute("data-vk-mixed");
       scopedRuns++;
       fastEls.push(el);
+      fastRows.set(el, mk.rows.map((i) => off + i));
       if (window.__vkVerify) { const by = window.__vkScoped ||= {}; by[el.id] = (by[el.id] || 0) + 1; } // for the tests: each container's row-by-row morphs
       return settled(el, mk, { keys: at.keys, unique: at.unique, inputs });
     }
@@ -2235,14 +2265,15 @@
     const s = stirred.get(el);
     if (!at || at.el !== el || seeding || regen && regen.contains(el) || !el.isConnected || !loops.has(el) || s === true) return false;
     if (s) for (const i of s) if (!mk.rows.includes(i)) return false;
-    if (el.childNodes.length !== at.items.length || awayFrom(el).length) return false;
+    const off = mk.shape.lead.nodes;
+    if (el.childNodes.length !== off + at.items.length + mk.shape.trail.nodes || awayFrom(el).length) return false;
     for (const h of heldEls) if (!h.isConnected) heldEls.delete(h); else if (el.contains(h)) return false;
     for (const m of homeEls) { const h = homes.get(m); if (h && h.parent && el.contains(h.parent)) return false; }
     const was = loopKeys;
     loopKeys = at.unique;
     try {
       for (let j = 0; j < mk.rows.length; j++) {
-        const i = mk.rows[j], live = el.childNodes[i], n = next.childNodes[j];
+        const i = mk.rows[j], live = el.childNodes[off + i], n = next.childNodes[off + j];
         if (!live || live.nodeType !== 1 || n.nodeType !== 1 || live.tagName !== n.tagName || foreign.has(live) || added.has(live) ||
           keyOf(live) !== at.keys[i] || keyOf(n) !== at.keys[i]) return false;
       }
@@ -2253,22 +2284,25 @@
   // settled maps a morphed container's rows to its items, when they are
   // one element each, in order, the server's; else it forgets them.
   function settled(el, mk, kept) {
-    const b = mk.block, n = b.c.length;
+    const b = mk.block, n = b.c.length, off = mk.shape.lead.nodes, all = el.childNodes;
     b.at = null;
-    if (!loopWatch || el.childNodes.length !== n || ownedKids.has(el) || awayFrom(el).length) return;
+    if (!loopWatch || all.length !== off + n + mk.shape.trail.nodes || ownedKids.has(el) || awayFrom(el).length) return;
     // row by row (kept), the rows are the ones checked last time: a row's morph keeps its element
-    if (!kept) for (let i = 0; i < n; i++) {
-      const c = el.childNodes[i];
-      if (c.nodeType !== 1 || c.tagName !== mk.scans[i].root || foreign.has(c) || added.has(c)) return;
+    if (!kept) {
+      for (let i = 0; i < n; i++) {
+        const c = all[off + i];
+        if (c.nodeType !== 1 || c.tagName !== mk.scans[i].root || foreign.has(c) || added.has(c)) return;
+      }
+      for (let i = 0; i < all.length; i++) if (foreign.has(all[i]) || added.has(all[i])) return; // the fixed siblings too
     }
     let at = kept;
     if (!at) {
       const unique = uniqueLoopKeys(el), was = loopKeys;
       loopKeys = unique;
-      try { at = { keys: Array.from(el.childNodes, keyOf), unique, inputs: !!el.querySelector("input") }; } finally { loopKeys = was; }
+      try { at = { keys: Array.from({ length: n }, (_, i) => keyOf(all[off + i])), unique, inputs: !!el.querySelector("input") }; } finally { loopKeys = was; }
     }
     b.at = { el, items: b.c, keys: at.keys, unique: at.unique, inputs: at.inputs };
-    if (!kept) for (let i = 0; i < n; i++) rowAt.set(el.childNodes[i], i);
+    if (!kept) for (let i = 0; i < n; i++) rowAt.set(all[off + i], i);
     if (!loops.has(el)) { loops.add(el); loopWatch.observe(el, { subtree: true, childList: true, attributes: true, characterData: true }); }
     stirred.delete(el);
   }
@@ -2281,11 +2315,16 @@
     if (!p) { unreached.clear(); return applyIn({ id: u.id, html: trees.html(u.id) }); }
     const runs = scopedRuns;
     fastEls = [];
+    fastRows = new Map();
     listenIn(p.html);
     try { if (el && p.next) morph(el, p.next); } finally { unreached.clear(); loopWatch.takeRecords(); }
     const now = el && el.isConnected ? el : byID(u.id);
-    if (scopedRuns !== runs && window.__vkVerify && now) verify(u.id, now, () => morph(now, parse(trees.html(u.id)).next));
-    bindIn(now, p.html + (p.bind ? " data-vk-b" : ""));
+    bindIn(now, p.html + (p.bind ? " data-vk-b" : ""), fastRows);
+    if (scopedRuns !== runs && window.__vkVerify && now) verify(u.id, now, () => {
+      const html = trees.html(u.id);
+      morph(now, parse(html).next);
+      bindIn(now, html);
+    });
     return now;
   }
   function pageScoped(sk) {
@@ -2299,11 +2338,16 @@
     if (!p) { unreached.clear(); return pageIn(trees.html("c0")); }
     const runs = scopedRuns;
     fastEls = [];
+    fastRows = new Map();
     if (p.doc) head(p.doc);
     listenIn(p.html);
     try { children(document.body, p.next); } finally { unreached.clear(); loopWatch.takeRecords(); }
-    if (scopedRuns !== runs && window.__vkVerify) verify("c0", document.body, () => children(document.body, parse(trees.html("c0")).next));
-    bindIn(document.body, p.html + (p.bind ? " data-vk-b" : ""));
+    bindIn(document.body, p.html + (p.bind ? " data-vk-b" : ""), fastRows);
+    if (scopedRuns !== runs && window.__vkVerify) verify("c0", document.body, () => {
+      const html = trees.html("c0");
+      children(document.body, parse(html).next);
+      bindIn(document.body, html);
+    });
   }
 
   // verify (window.__vkVerify, which the browser tests set) morphs what a
@@ -2505,7 +2549,7 @@
         f.d.forEach((d, i) => {
           if (typeof d === "string") out += d;
           else if (d.c) {
-            const shape = d.c.length ? loopShape(out, s[i + 1]) : null;
+            const shape = d.c.length ? loopShape(out, s[i], s[i + 1]) : null;
             const infos = shape && d.c.map(item);
             const scans = infos && !infos.some((x) => x.h === null) && infos.map((x) => scanOf(x, shape.tag));
             if (!scans || scans.some((x) => !x.ok)) {
@@ -2515,7 +2559,7 @@
               const touched = !keep.has(n) && (d.g !== gen || d.dirty) && at && at.items.length === d.c.length &&
                 d.c.every((x, k) => x === at.items[k]) ? loopTouched(at.el) : null;
               const rows = touched && [...new Set([...(d.g === gen ? d.dirty : []), ...touched])].sort((a, b) => a - b);
-              out = out.slice(0, -1) + ' data-vk-loop="' + n + '">';
+              out = out.slice(0, shape.at) + ' data-vk-loop="' + n + '"' + out.slice(shape.at);
               if (rows) rows.forEach((k) => { out += infos[k].h; });
               else infos.forEach((x) => { out += x.h; });
               if (rows) bind = bind || infos.some((x) => x.bind);
@@ -3512,14 +3556,28 @@
   const unsub = (b) => b.deps.forEach((d) => { const s = subs.get(d[0]); if (s) s.delete(b); });
   // bindIn binds every element in root, whose HTML is html, that has
   // bindings, and unbinds those that lost theirs.
-  function bindIn(root, html) {
-    for (const r of root ? rootsOf(root) : []) bindOne(r, html);
+  // scoped, a frame-scoped morph's containers and the rows it morphed
+  // (fastRows): the rows it left are as the last bindIn left them, and are
+  // skipped.
+  function bindIn(root, html, scoped) {
+    for (const r of root ? rootsOf(root) : []) bindOne(r, html, r === root ? scoped : null);
     teleport(html || "");
   }
-  function bindOne(root, html) {
-    for (const el of root.querySelectorAll("input[data-vk-mixed]")) el.indeterminate = true;
+  function bindOne(root, html, scoped) {
+    let els;
+    if (scoped && scoped.size) {
+      els = [];
+      const walk = (el) => {
+        els.push(el);
+        const rows = scoped.get(el);
+        if (!rows) for (let c = el.firstElementChild; c; c = c.nextElementSibling) walk(c);
+        else for (const i of rows) { const c = el.childNodes[i]; if (c && c.nodeType === 1) els.push(c, ...c.querySelectorAll("*")); }
+      };
+      walk(root);
+      for (const el of els) if (el.tagName === "INPUT" && el.hasAttribute("data-vk-mixed")) el.indeterminate = true;
+    } else for (const el of root.querySelectorAll("input[data-vk-mixed]")) el.indeterminate = true;
     if (!subs.size && !/ data-vk-(b|show|v)/.test(html)) return;
-    for (const el of [root, ...root.querySelectorAll("*")]) if (bound.has(el) || Array.from(el.attributes).some((a) => /^data-vk-(b|show|v)(-|$)/.test(a.name))) bind(el);
+    for (const el of els || [root, ...root.querySelectorAll("*")]) if (bound.has(el) || Array.from(el.attributes).some((a) => /^data-vk-(b|show|v)(-|$)/.test(a.name))) bind(el);
   }
   function bind(el) {
     const old = bound.get(el) || [], list = [];
