@@ -147,13 +147,33 @@ const (
 	liveScript = livePrefix + "live.js"
 )
 
+// The runtime: live.js as written, served in development, and live.min.js,
+// its minified copy (internal/minjs), served otherwise. TestLiveMinFresh
+// fails when the copy is stale.
+//
+//go:generate go run -C internal/minjs . ../../live.js ../../live.min.js
+
 //go:embed live.js
 var liveJS []byte
 
-var liveJSTag = func() string {
-	sum := sha256.Sum256(liveJS)
+//go:embed live.min.js
+var liveMinJS []byte
+
+var liveJSTag, liveMinJSTag = contentTag(liveJS), contentTag(liveMinJS)
+
+func contentTag(b []byte) string {
+	sum := sha256.Sum256(b)
 	return base64.RawURLEncoding.EncodeToString(sum[:6])
-}()
+}
+
+// runtime is the live runtime the app serves, and its tag: readable in
+// development, minified otherwise.
+func (a *App) runtime() ([]byte, string) {
+	if a.dev {
+		return liveJS, liveJSTag
+	}
+	return liveMinJS, liveMinJSTag
+}
 
 var statefulType = typeOf[ui.Stateful]()
 
@@ -761,8 +781,9 @@ func (a *App) scriptTag(r *http.Request, token string) string {
 	if a.dev {
 		build += ` data-vk-dev` // the runtime says in the console why a navigation loads in full
 	}
+	_, tag := a.runtime()
 	if token == "" {
-		return `<script src="` + liveScript + `?v=` + liveJSTag + `"` + root + build + ` defer></script>`
+		return `<script src="` + liveScript + `?v=` + tag + `"` + root + build + ` defer></script>`
 	}
 	var tb string
 	if a.tb != nil {
@@ -770,7 +791,7 @@ func (a *App) scriptTag(r *http.Request, token string) string {
 			tb = ` data-vk-toolbar="` + e.ID + `"` // the socket's messages join the page's record
 		}
 	}
-	return `<script src="` + liveScript + `?v=` + liveJSTag + `" data-vk-token="` + token + `"` + root + tb + build + ` defer></script>`
+	return `<script src="` + liveScript + `?v=` + tag + `" data-vk-token="` + token + `"` + root + tb + build + ` defer></script>`
 }
 
 // A join token names the page a live connection rebuilds: its URI, when the

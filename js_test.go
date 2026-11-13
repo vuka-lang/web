@@ -256,7 +256,7 @@ func pushingServer(t *testing.T, v int) http.Handler {
 		return statics[0] + cls + statics[1] + text + statics[2]
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/_vuka/live.js", serveLiveJS)
+	mux.HandleFunc("/_vuka/live.js", (&App{}).serveLiveJS)
 	mux.HandleFunc("/_vuka/live", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -374,7 +374,7 @@ func optimisticServer(v int) http.Handler {
 			op{"call", map[string]any{"fn": "slow"}}, op{"add_class", map[string]any{"names": []string{"after"}}}) + `'>call</button></div>`
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/_vuka/live.js", serveLiveJS)
+	mux.HandleFunc("/_vuka/live.js", (&App{}).serveLiveJS)
 	mux.HandleFunc("/_vuka/live", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := websocket.Accept(w, r, nil)
 		if err != nil {

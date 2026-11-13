@@ -499,7 +499,7 @@ func (a *App) build() (http.Handler, error) {
 		f()
 	}
 	lastApp.Store(a)
-	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(serveLiveJS))
+	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(a.serveLiveJS))
 	a.router.Handle(http.MethodGet, liveSocket, http.HandlerFunc(a.serveLive))
 	a.router.Handle(http.MethodPost, uploadPath, http.HandlerFunc(a.serveUpload))
 	a.routeCSS()

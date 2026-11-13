@@ -40,11 +40,13 @@ func TestLiveJSIslands(t *testing.T) {
 	if err != nil {
 		testenv.Needs(t, "no node")
 	}
-	out, err := exec.Command(node, "testdata/livejs/islands.js", "live.js", "loader.js").CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s", out)
+	for _, runtime := range []string{"live.js", "live.min.js"} { // as written (development) and as served
+		out, err := exec.Command(node, "testdata/livejs/islands.js", runtime, "loader.js").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %s", runtime, out)
+		}
+		t.Logf("%s: %s", runtime, strings.TrimSpace(string(out)))
 	}
-	t.Logf("%s", strings.TrimSpace(string(out)))
 }
 
 // The loader with live.js, in node over a small DOM: hooks on load, join,
@@ -54,11 +56,13 @@ func TestLoaderJS(t *testing.T) {
 	if err != nil {
 		testenv.Needs(t, "no node")
 	}
-	out, err := exec.Command(node, "testdata/livejs/loader.js", "live.js", "loader.js").CombinedOutput()
-	if err != nil {
-		t.Fatalf("%s", out)
+	for _, runtime := range []string{"live.js", "live.min.js"} { // as written (development) and as served
+		out, err := exec.Command(node, "testdata/livejs/loader.js", runtime, "loader.js").CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s: %s", runtime, out)
+		}
+		t.Logf("%s: %s", runtime, strings.TrimSpace(string(out)))
 	}
-	t.Logf("%s", strings.TrimSpace(string(out)))
 }
 
 // The development toolbar's build state, in node over a small DOM: an
