@@ -101,7 +101,7 @@ func TestLiveDataTablePaging(t *testing.T) {
 	if !strings.Contains(firstHTML, "Book 01") || !strings.Contains(firstHTML, "Book 05") || strings.Contains(firstHTML, "Book 06") {
 		t.Fatalf("page 1 should show the first five: %s", firstHTML)
 	}
-	if !strings.Contains(firstHTML, "of 12") {
+	if !strings.Contains(firstHTML, "of <b>12</b>") {
 		t.Fatalf("count missing: %s", firstHTML)
 	}
 
@@ -121,7 +121,7 @@ func TestLiveDataTablePaging(t *testing.T) {
 	send(t, c, map[string]any{"type": "event", "ref": 3, "target": sid, "event": "input", "value": "Book 1"})
 	m = must(t, c)
 	// "Book 1" matches Book 10, 11, 12 — three rows.
-	if !strings.Contains(m.Updates[0].HTML, "of 3") || !strings.Contains(m.Updates[0].HTML, "Book 10") {
+	if !strings.Contains(m.Updates[0].HTML, "of <b>3</b>") || !strings.Contains(m.Updates[0].HTML, "Book 10") {
 		t.Fatalf("search did not filter to 3: %s", m.Updates[0].HTML)
 	}
 }
