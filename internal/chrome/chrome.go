@@ -61,6 +61,7 @@ type Browser struct {
 	next    int
 	pending map[int]chan message
 	front   *Page // the tab in front
+	done    bool  // closing: no more failures reported
 }
 
 type message struct {
@@ -144,6 +145,10 @@ func (b *Browser) read() {
 			return
 		}
 		var m message
+		if json.Unmarshal(data, &m) == nil && m.Method == "Runtime.bindingCalled" {
+			b.bindingCalled(m.Params)
+			continue
+		}
 		if json.Unmarshal(data, &m) == nil && m.ID != 0 {
 			b.mu.Lock()
 			if ch := b.pending[m.ID]; ch != nil {
@@ -190,7 +195,30 @@ func (b *Browser) callWithin(d time.Duration, session, method string, params, ou
 	}
 }
 
+// bindingCalled fails the test on a page's report that its frame-scoped
+// morph differs from the whole one (live.js's verify mode).
+func (b *Browser) bindingCalled(params any) {
+	p, _ := params.(map[string]any)
+	if p == nil || p["name"] != verifyBinding {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.done {
+		b.t.Errorf("chrome: live.js verify: %v", p["payload"])
+	}
+}
+
+// verifyBinding is the function live.js's verify mode calls with what a
+// frame-scoped morph got wrong; VUKA_MORPH_VERIFY=0 turns the mode off.
+const verifyBinding = "__vkVerifyFail"
+
+const verifyMode = `window.__vkVerify = true`
+
 func (b *Browser) close() {
+	b.mu.Lock()
+	b.done = true
+	b.mu.Unlock()
 	if b.ws != nil {
 		b.call("", "Browser.close", nil, nil)
 		b.ws.CloseNow()
@@ -259,6 +287,11 @@ func (b *Browser) open(url, ready string, scripts ...string) *Page {
 	p := &Page{b, attached.SessionID, target.TargetID}
 	p.must("Page.enable", nil, nil)
 	p.must("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": wireCounter}, nil)
+	if os.Getenv("VUKA_MORPH_VERIFY") != "0" {
+		p.must("Runtime.enable", nil, nil)
+		p.must("Runtime.addBinding", map[string]any{"name": verifyBinding}, nil)
+		p.must("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": verifyMode}, nil)
+	}
 	for _, s := range scripts {
 		p.must("Page.addScriptToEvaluateOnNewDocument", map[string]any{"source": s}, nil)
 	}
