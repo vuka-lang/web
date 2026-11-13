@@ -1178,6 +1178,7 @@ func (r *recorder) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func serveLiveJS(w http.ResponseWriter, r *http.Request) {
-	serveTagged(w, r, "text/javascript; charset=utf-8", liveJSTag, liveJS)
+func (a *App) serveLiveJS(w http.ResponseWriter, r *http.Request) {
+	js, tag := a.runtime()
+	serveTagged(w, r, "text/javascript; charset=utf-8", tag, js)
 }

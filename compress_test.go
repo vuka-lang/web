@@ -327,15 +327,15 @@ func TestCompressLeavesUpgradesAndStreams(t *testing.T) {
 // revalidations with a 304.
 func TestFixedAssetsEncoded(t *testing.T) {
 	h := compressApp()
-	path := liveScript + "?v=" + liveJSTag
+	path := liveScript + "?v=" + liveMinJSTag
 	tags := map[string]string{}
 	for _, enc := range []string{"br", "gzip", ""} {
 		rec := get(h, "GET", path, "Accept-Encoding", enc)
 		if got := rec.Header().Get("Content-Encoding"); got != enc {
 			t.Fatalf("live.js with %q: Content-Encoding %q", enc, got)
 		}
-		if decode(t, enc, rec.Body.Bytes()) != string(liveJS) {
-			t.Errorf("live.js in %q differs from the source", enc)
+		if decode(t, enc, rec.Body.Bytes()) != string(liveMinJS) {
+			t.Errorf("live.js in %q differs from the minified runtime", enc)
 		}
 		if cc := rec.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
 			t.Errorf("live.js: Cache-Control %q", cc)
@@ -348,7 +348,7 @@ func TestFixedAssetsEncoded(t *testing.T) {
 		}
 		tags[enc] = rec.Header().Get("ETag")
 	}
-	if tags["br"] == tags["gzip"] || tags["br"] == tags[""] || tags[""] != `"`+liveJSTag+`"` {
+	if tags["br"] == tags["gzip"] || tags["br"] == tags[""] || tags[""] != `"`+liveMinJSTag+`"` {
 		t.Errorf("one ETag per encoding: %v", tags)
 	}
 	for enc, tag := range tags {
@@ -360,7 +360,7 @@ func TestFixedAssetsEncoded(t *testing.T) {
 	if rec := get(h, "GET", path, "Accept-Encoding", "gzip", "If-None-Match", tags["br"]); rec.Code != http.StatusOK {
 		t.Errorf("the brotli ETag matched a gzip request: %d", rec.Code)
 	}
-	if rec := get(h, "GET", path, "Accept-Encoding", "br", "Range", "bytes=0-9"); rec.Code != http.StatusPartialContent || rec.Header().Get("Content-Encoding") != "" || rec.Body.String() != string(liveJS[:10]) {
+	if rec := get(h, "GET", path, "Accept-Encoding", "br", "Range", "bytes=0-9"); rec.Code != http.StatusPartialContent || rec.Header().Get("Content-Encoding") != "" || rec.Body.String() != string(liveMinJS[:10]) {
 		t.Errorf("a Range of live.js: %d %q", rec.Code, rec.Header().Get("Content-Encoding"))
 	}
 }
