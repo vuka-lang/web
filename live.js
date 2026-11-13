@@ -193,6 +193,7 @@
   }
 
   function pageIn(html) {
+    if (typeof html !== "string") return pageScoped(html.sk);
     let next;
     if (/<(html|body)[\s>]/i.test(html)) {
       const doc = new DOMParser().parseFromString(html, "text/html");
@@ -233,6 +234,7 @@
 
   function applyIn(u) {
     const el = byID(u.id);
+    if (typeof u.html !== "string") return applyScoped(u, el);
     const next = fragment(u.html).firstElementChild;
     listenIn(u.html);
     if (el && next) morph(el, next);
@@ -1143,14 +1145,14 @@
   // is typing.
   function morph(el, next) {
     placed.add(el);
-    if (el.tagName !== next.tagName) return el.replaceWith(place(document.importNode(next, true)));
+    if (el.tagName !== next.tagName) return el.replaceWith(place(document.importNode(whole(next), true)));
     if (el.hasAttribute("data-vk-ignore") && el.id && el.id === next.id) return;
     // An island host owns its children (the client-mounted component). Update
     // its attributes — a changed data-vk-props drives the island's update() —
     // but never morph into its subtree.
     if (el.hasAttribute("data-vk-island")) return attrs(el, next);
     // A stream's container owns its rows: it applies each batch once.
-    if (el.hasAttribute("data-vk-stream") && next.hasAttribute("data-vk-stream")) return stream(el, next);
+    if (el.hasAttribute("data-vk-stream") && next.hasAttribute("data-vk-stream")) return stream(el, whole(next));
     if (!isField(el)) {
       if (el.tagName === "FORM" && next.hasAttribute("data-vk-gen") && el.getAttribute("data-vk-gen") !== next.getAttribute("data-vk-gen")) {
         // the form was loaded or reset: its fields take the server's values
@@ -1162,6 +1164,8 @@
         } finally { regen = was; }
       }
       attrs(el, next);
+      const mk = unreached.get(next);
+      if (mk) return loop(el, next, mk);
       return keptText(el, next) || keptKids(el, next) || children(el, next);
     }
     const seen = fieldState(el), before = serverValue(el), fresh = regen && regen.contains(el);
@@ -1178,11 +1182,12 @@
       restore(el, seen);
       // a value the server changed before it had the field's event: taken
       // with the answer, if the field still shows what it sent
-      if (unanswered && serverValue(el) !== before) heldServer.add(el);
-      else if (!unanswered) heldServer.delete(el);
+      if (unanswered && serverValue(el) !== before) { heldServer.add(el); heldEls.add(el); }
+      else if (!unanswered) unhold(el);
     } else if (fresh || serverValue(el) !== before || heldServer.has(el)) takeServer(el);
-    if (!typing) heldServer.delete(el);
+    if (!typing) unhold(el);
   }
+  const unhold = (el) => { heldServer.delete(el); heldEls.delete(el); };
   const heldServer = new WeakSet(); // fields whose server value changed while their event was unanswered
 
   // regen is a form being morphed whose generation changed.
@@ -1326,14 +1331,14 @@
         last = match;
         continue;
       }
-      const moved = elsewhere(n);
+      const moved = elsewhere(whole(n));
       if (moved) {
         home(moved, el, last);
         used.add(moved);
         morph(moved, n);
         continue;
       }
-      last = place(document.importNode(n, true));
+      last = place(document.importNode(whole(n), true));
       el.insertBefore(last, cur);
     }
     while (cur) {
@@ -1679,6 +1684,7 @@
   }
 
   function home(n, parent, prev) {
+    homeEls.add(n);
     homes.set(n, { parent, prev });
     let s = away.get(parent);
     if (!s) away.set(parent, (s = new Set()));
@@ -1690,6 +1696,7 @@
     const h = homes.get(n);
     if (h && away.has(h.parent)) away.get(h.parent).delete(n);
     homes.delete(n);
+    homeEls.delete(n);
     foreign.delete(n);
   }
 
@@ -1880,7 +1887,7 @@
   function keptKids(el, next) {
     const was = ownedKids.get(el);
     if (was === undefined) return false;
-    if (next.innerHTML === was) return true;
+    if (whole(next).innerHTML === was) return true;
     ownedKids.delete(el);
     return false;
   }
@@ -1951,6 +1958,400 @@
     }
   }
 
+  // Frame-scoped morph. A v2 patch names what changed in an instance's
+  // tree; a loop that is all of its container's content (a tbody of rows,
+  // a ul of items) and whose rows were mapped to their items by the last
+  // morph needs only its changed rows parsed and morphed: the rest stand
+  // as that morph left them, which a morph of the same markup leaves alone.
+  // The instance's markup goes out with such loops' unchanged rows left out
+  // and the container marked; the morph reaching the container morphs the
+  // changed rows into theirs. Anything it can't be sure of — the container
+  // or its rows changed by anyone but a morph since (loopWatch), rows come,
+  // gone or moved, a key that changed, a field holding a server value, a
+  // form being reset, a moved element homed inside — morphs the whole
+  // container, its left-out rows parsed back in (whole), as before.
+  const XHTML = "http://www.w3.org/1999/xhtml";
+  const unreached = new Map(); // a parsed container → its loop (scoped's mark), until the morph reaches it
+  const loops = new WeakSet(); // containers whose rows a morph mapped to their items, watched
+  const stirred = new WeakMap(); // of those, the ones a mutation reached since → the rows it reached, or true: the container itself
+  const rowAt = new WeakMap(); // a mapped row → its index
+  const heldEls = new Set(), homeEls = new Set(); // heldServer's fields and homes' elements, to look for inside a container
+  let scopedRuns = 0, fastEls = []; // containers morphed row by row, for the verify mode
+  const loopWatch = typeof MutationObserver === "function" ? new MutationObserver(stir) : null;
+  const scopes = () => !!loopWatch && !window.__vkNoScope;
+  function stir(records) {
+    for (const r of records) {
+      for (let n = r.target, row = null; n; row = n, n = n.parentNode) {
+        if (!loops.has(n)) continue;
+        const s = stirred.get(n), i = row ? rowAt.get(row) : undefined;
+        if (s === true) break;
+        if (i === undefined || row.parentNode !== n) stirred.set(n, true);
+        else if (s) s.add(i);
+        else stirred.set(n, new Set([i]));
+        break;
+      }
+    }
+  }
+  // loopTouched is the rows of a mapped container something changed since
+  // the last morph, which a morph puts back as it would whole; null when it
+  // changed the container itself (rows came or went), or isn't mapped.
+  const none = new Set();
+  function loopTouched(el) {
+    if (!el.isConnected || !loops.has(el)) return null;
+    stir(loopWatch.takeRecords());
+    const s = stirred.get(el);
+    return s === true ? null : s || none;
+  }
+
+  // loopShape is the container of a loop between markup out and after: an
+  // element of one of these whose start tag ends out and whose end tag
+  // starts after; null when it is anything else.
+  const loopTags = { tbody: "table", thead: "table", tfoot: "table", tr: "row", ul: "list", ol: "list", div: "block",
+    section: "block", article: "block", aside: "block", nav: "block", main: "block", header: "block", footer: "block" };
+  function loopShape(out, after) {
+    if (out[out.length - 1] !== ">") return null;
+    const st = out.slice(out.lastIndexOf("<")), m = /^<([a-z][a-z0-9]*)[\t\n\f\r >]/.exec(st);
+    if (!m || !loopTags[m[1]] || st.indexOf(">") !== st.length - 1 || !after.startsWith("</" + m[1] + ">")) return null;
+    if (/[\t\n\f\r ]data-vk-(stream|island|ignore|loop)[\t\n\f\r =>]/.test(st)) return null;
+    return { tag: m[1], cat: loopTags[m[1]] };
+  }
+
+  // rowScan reads a row's markup as the parser will inside a container of
+  // the tag: ok when it is one element, written whole, that parses the same
+  // apart as in place — no tag the parser closes, moves or reopens by what
+  // is around it. mask names the tags whose parse an ancestor of the
+  // container could change (fillSafe). Anything it doesn't know is not ok.
+  const M = { a: 1, button: 2, form: 4, list: 8, table: 16 };
+  const VOID = new Set("area base br col embed hr img input link meta source track wbr".split(" "));
+  const RAWTEXT = new Set("script style textarea title iframe noembed noframes".split(" "));
+  const HTMLTAGS = new Set(("a abbr address area article aside audio b bdi bdo blockquote br button canvas caption cite code col colgroup " +
+    "data dd del details dfn dialog div dl dt em embed fieldset figcaption figure footer form h1 h2 h3 h4 h5 h6 header hgroup hr i " +
+    "iframe img input ins kbd label legend li link main map mark menu meta meter nav ol output p picture pre progress q s samp " +
+    "script search section slot small source span strong style sub summary sup table tbody td textarea tfoot th thead time title " +
+    "tr track u ul var video wbr").split(" "));
+  const SVGTAGS = new Set(("svg g path circle rect line polyline polygon ellipse use defs symbol text tspan lineargradient " +
+    "radialgradient stop clippath mask pattern image marker").split(" "));
+  const PCLOSE = new Set(("address article aside blockquote details dialog div dl fieldset figcaption figure footer form h1 h2 h3 " +
+    "h4 h5 h6 header hgroup hr main menu nav ol p pre search section summary table ul li dd dt").split(" "));
+  const TABLEKIDS = { table: ["caption", "colgroup", "tbody", "thead", "tfoot", "script", "style"], tbody: ["tr", "script", "style"],
+    thead: ["tr", "script", "style"], tfoot: ["tr", "script", "style"], tr: ["td", "th", "script", "style"], colgroup: ["col"] };
+  const PARENT = { caption: ["table"], colgroup: ["table"], tbody: ["table"], thead: ["table"], tfoot: ["table"],
+    tr: ["tbody", "thead", "tfoot"], td: ["tr"], th: ["tr"], col: ["colgroup"] };
+  const blank = /^[\t\n\f\r ]*$/;
+  function rowScan(h, container) {
+    const no = { ok: false };
+    if (h === null || !h.startsWith("<")) return no;
+    const st = [container], len = h.length;
+    let i = 0, svg = 0, root = "", mask = 0;
+    const on = (t) => st.lastIndexOf(t) > 0;
+    // tag reads the attributes of the tag whose name ended at i: the index
+    // after its >, and whether it ended with />; -1 when the markup ends first
+    const tag = () => {
+      for (;;) {
+        while (i < len && " \t\n\f\r".includes(h[i])) i++;
+        if (i >= len) return -1;
+        if (h[i] === ">") return i++, 0;
+        if (h[i] === "/") { if (h[i + 1] === ">") return i += 2, 1; i++; continue; }
+        i++; // an attribute's name: its first character may be anything
+        while (i < len && !" \t\n\f\r/>=".includes(h[i])) i++;
+        while (i < len && " \t\n\f\r".includes(h[i])) i++;
+        if (h[i] !== "=") continue;
+        i++;
+        while (i < len && " \t\n\f\r".includes(h[i])) i++;
+        if (h[i] === '"' || h[i] === "'") {
+          const e = h.indexOf(h[i], i + 1);
+          if (e < 0) return -1;
+          i = e + 1;
+        } else while (i < len && !" \t\n\f\r>".includes(h[i])) i++;
+      }
+    };
+    while (i < len) {
+      const lt = h.indexOf("<", i), text = h.slice(i, lt < 0 ? len : lt);
+      if (text) {
+        if (st.length === 1 || text.includes("\0")) return no; // outside the row
+        if (!svg && TABLEKIDS[st[st.length - 1]] && !blank.test(text)) return no; // fostered
+      }
+      if (lt < 0) return no; // the row isn't closed
+      i = lt;
+      const c = h[i + 1];
+      if (c === "!") {
+        if (!h.startsWith("<!--", i) || h.startsWith("<!-->", i) || h.startsWith("<!--->", i)) return no;
+        const e = h.indexOf("-->", i + 4);
+        if (e < 0 || h.slice(i + 4, e).includes("--!>")) return no;
+        if (st.length === 1) return no;
+        i = e + 3;
+        continue;
+      }
+      const end = c === "/", n0 = i + (end ? 2 : 1);
+      if (!/[a-zA-Z]/.test(h[n0] || "")) {
+        if (end || c === "?") return no;
+        i++; // a < of text
+        if (st.length === 1) return no;
+        if (!svg && TABLEKIDS[st[st.length - 1]]) return no;
+        continue;
+      }
+      i = n0;
+      while (i < len && !" \t\n\f\r/>".includes(h[i])) i++;
+      const name = h.slice(n0, i).toLowerCase();
+      if (!/^[a-z][a-z0-9]*$/.test(name)) return no;
+      const self = tag();
+      if (self < 0) return no;
+      if (end) {
+        if (st.length === 1 || st[st.length - 1] !== name) return no;
+        st.pop();
+        if (svg && name === "svg") svg--;
+        if (st.length === 1 && i !== len) return no; // a second root
+        continue;
+      }
+      if (st.length === 1 && lt !== 0) return no;
+      const top = st[st.length - 1];
+      if (svg) {
+        if (!SVGTAGS.has(name)) return no;
+        if (!self) st.push(name);
+        if (name === "svg" && !self) svg++;
+      } else {
+        if (!HTMLTAGS.has(name) && name !== "svg") return no;
+        if (TABLEKIDS[top] && !TABLEKIDS[top].includes(name)) return no;
+        if (PARENT[name] && !PARENT[name].includes(top)) return no;
+        if (PCLOSE.has(name) && on("p")) return no;
+        if (/^h[1-6]$/.test(name) && /^h[1-6]$/.test(top)) return no;
+        if ((name === "a" || name === "button" || name === "form") && on(name)) return no;
+        if (name === "li") for (let k = st.length - 1; k > 0; k--) { if (st[k] === "li") return no; if (/^(ul|ol|menu)$/.test(st[k])) break; }
+        if (name === "dd" || name === "dt") for (let k = st.length - 1; k > 0; k--) { if (st[k] === "dd" || st[k] === "dt") return no; if (st[k] === "dl") break; }
+        if (name === "a") mask |= M.a;
+        else if (name === "button") mask |= M.button;
+        else if (name === "form") mask |= M.form;
+        else if (name === "li" || name === "dd" || name === "dt") mask |= M.list;
+        else if (PARENT[name]) mask |= M.table;
+        if (name === "svg") { if (self) return no; svg++; st.push(name); }
+        else if (VOID.has(name)) { /* no end tag */ }
+        else if (self) return no; // /> doesn't end an HTML element
+        else {
+          st.push(name);
+          if (RAWTEXT.has(name)) {
+            const re = new RegExp("</" + name + "[\\t\\n\\f\\r />]", "ig");
+            re.lastIndex = i;
+            const m = re.exec(h);
+            if (!m || name === "script" && h.slice(i, m.index).includes("<!--")) return no;
+            i = m.index;
+          }
+        }
+      }
+      if (st.length === 1 && root) return no;
+      if (!root) root = name;
+      if (st.length === 1 && i !== len) return no; // a void root, and more after it
+    }
+    return st.length === 1 && root ? { ok: true, root: root.toUpperCase(), mask } : no;
+  }
+
+  // fillSafe: a container's left-out rows can be parsed apart (whole) and
+  // come out as in place: nothing above it in the instance's markup changes
+  // how they parse.
+  function fillSafe(c, mk) {
+    const cat = mk.shape.cat, m = mk.mask;
+    let divs = c.tagName === "DIV";
+    for (let a = c.parentNode; a && a.nodeType === 1; a = a.parentNode) {
+      const t = a.tagName;
+      if (a.namespaceURI !== XHTML || /^(SELECT|OPTION|OPTGROUP|DATALIST|TEMPLATE|OBJECT|APPLET|MARQUEE|TEXTAREA|NOSCRIPT|P)$/.test(t)) return false;
+      if (t === "FORM" && m & M.form) return false;
+      if (cat === "list" || cat === "block") {
+        if (t === "A" && m & M.a || t === "BUTTON" && m & M.button || t === "NOBR") return false;
+        if (/^(TD|TH|CAPTION)$/.test(t) && m & M.table) return false;
+        if (divs && /^(LI|DD|DT)$/.test(t) && m & M.list) return false;
+        if (!/^(DIV|ADDRESS)$/.test(t)) divs = false;
+      }
+    }
+    return true;
+  }
+
+  // scopedNext parses scoped markup and registers its containers; null
+  // when the parse isn't what the markup promised, for the whole markup.
+  function scopedNext(id, sk, parse) {
+    const keep = new Set();
+    for (let tries = 0; sk && tries < 3; tries++) {
+      const p = parse(sk.html), root = p.next;
+      if (!root) return null;
+      const nodes = Array.from(root.querySelectorAll("[data-vk-loop]"));
+      if (root.nodeType === 1 && root.hasAttribute("data-vk-loop")) nodes.unshift(root);
+      if (nodes.length !== sk.marks.length) return null;
+      const got = new Map();
+      let again = false;
+      for (const c of nodes) {
+        const n = +c.getAttribute("data-vk-loop"), mk = sk.marks[n];
+        if (!mk || got.has(n) || c.namespaceURI !== XHTML || c.tagName !== mk.shape.tag.toUpperCase()) return null;
+        got.set(n, c);
+        const want = mk.rows ? mk.rows.length : mk.block.c.length;
+        if (c.childNodes.length !== want || c.children.length !== want) return null;
+        if (mk.rows && !fillSafe(c, mk)) { keep.add(n); again = true; }
+      }
+      if (again) { sk = trees.scoped(id, keep); continue; }
+      for (const [n, c] of got) { c.removeAttribute("data-vk-loop"); unreached.set(c, sk.marks[n]); }
+      return { html: sk.html, bind: sk.bind, next: root, doc: p.doc };
+    }
+    return null;
+  }
+
+  // whole puts back the left-out rows of the scoped containers in n: what
+  // copies or reads n's markup sees all of it.
+  function whole(n) {
+    if (unreached.size) for (const [c, mk] of unreached) if (n === c || n.contains(c)) fill(c, mk);
+    return n;
+  }
+  function fill(c, mk) {
+    unreached.delete(c);
+    if (!mk.rows) return;
+    const t = document.createElement("template");
+    t.innerHTML = mk.infos.map((x) => x.h).join("");
+    c.replaceChildren(t.content);
+    mk.rows = null;
+  }
+
+  // loop morphs a scoped container: row by row when its rows stand as the
+  // last morph left them, else whole.
+  function loop(el, next, mk) {
+    if (keptText(el, next) || keptKids(el, next)) return void (mk.block.at = null);
+    const at = mk.block.at;
+    if (mk.rows && unreached.get(next) === mk && rowsStill(el, next, mk, at)) { // the rows the last morph left: only the changed ones
+      unreached.delete(next);
+      const pairs = mk.rows.map((i, j) => [el.childNodes[i], next.childNodes[j]]), was = loopKeys;
+      loopKeys = at.unique;
+      try { for (const [a, b] of pairs) morph(a, b); } finally { loopKeys = was; }
+      // a morph sets every checkbox's indeterminate from the server's markup
+      const inputs = at.inputs || pairs.some(([a]) => a.querySelector("input"));
+      if (inputs) for (const c of el.querySelectorAll("input")) if (checkable(c)) c.indeterminate = c.hasAttribute("data-vk-mixed");
+      scopedRuns++;
+      fastEls.push(el);
+      if (window.__vkVerify) { const by = window.__vkScoped ||= {}; by[el.id] = (by[el.id] || 0) + 1; } // for the tests: each container's row-by-row morphs
+      return settled(el, mk, { keys: at.keys, unique: at.unique, inputs });
+    }
+    whole(next);
+    children(el, next);
+    settled(el, mk, null);
+  }
+
+  function rowsStill(el, next, mk, at) {
+    // what is waiting to be noted now is this morph's own: the scripts' was noted before it began
+    loopWatch.takeRecords();
+    const s = stirred.get(el);
+    if (!at || at.el !== el || seeding || regen && regen.contains(el) || !el.isConnected || !loops.has(el) || s === true) return false;
+    if (s) for (const i of s) if (!mk.rows.includes(i)) return false;
+    if (el.childNodes.length !== at.items.length || awayFrom(el).length) return false;
+    for (const h of heldEls) if (!h.isConnected) heldEls.delete(h); else if (el.contains(h)) return false;
+    for (const m of homeEls) { const h = homes.get(m); if (h && h.parent && el.contains(h.parent)) return false; }
+    const was = loopKeys;
+    loopKeys = at.unique;
+    try {
+      for (let j = 0; j < mk.rows.length; j++) {
+        const i = mk.rows[j], live = el.childNodes[i], n = next.childNodes[j];
+        if (!live || live.nodeType !== 1 || n.nodeType !== 1 || live.tagName !== n.tagName || foreign.has(live) || added.has(live) ||
+          keyOf(live) !== at.keys[i] || keyOf(n) !== at.keys[i]) return false;
+      }
+    } finally { loopKeys = was; }
+    return true;
+  }
+
+  // settled maps a morphed container's rows to its items, when they are
+  // one element each, in order, the server's; else it forgets them.
+  function settled(el, mk, kept) {
+    const b = mk.block, n = b.c.length;
+    b.at = null;
+    if (!loopWatch || el.childNodes.length !== n || ownedKids.has(el) || awayFrom(el).length) return;
+    // row by row (kept), the rows are the ones checked last time: a row's morph keeps its element
+    if (!kept) for (let i = 0; i < n; i++) {
+      const c = el.childNodes[i];
+      if (c.nodeType !== 1 || c.tagName !== mk.scans[i].root || foreign.has(c) || added.has(c)) return;
+    }
+    let at = kept;
+    if (!at) {
+      const unique = uniqueLoopKeys(el), was = loopKeys;
+      loopKeys = unique;
+      try { at = { keys: Array.from(el.childNodes, keyOf), unique, inputs: !!el.querySelector("input") }; } finally { loopKeys = was; }
+    }
+    b.at = { el, items: b.c, keys: at.keys, unique: at.unique, inputs: at.inputs };
+    if (!kept) for (let i = 0; i < n; i++) rowAt.set(el.childNodes[i], i);
+    if (!loops.has(el)) { loops.add(el); loopWatch.observe(el, { subtree: true, childList: true, attributes: true, characterData: true }); }
+    stirred.delete(el);
+  }
+
+  // applyScoped is applyIn for scoped markup, pageScoped pageIn's.
+  function applyScoped(u, el) {
+    stir(loopWatch.takeRecords());
+    const parse = (h) => ({ next: fragment(h).firstElementChild });
+    const p = scopedNext(u.id, u.html.sk, parse);
+    if (!p) { unreached.clear(); return applyIn({ id: u.id, html: trees.html(u.id) }); }
+    const runs = scopedRuns;
+    fastEls = [];
+    listenIn(p.html);
+    try { if (el && p.next) morph(el, p.next); } finally { unreached.clear(); loopWatch.takeRecords(); }
+    const now = el && el.isConnected ? el : byID(u.id);
+    if (scopedRuns !== runs && window.__vkVerify && now) verify(u.id, now, () => morph(now, parse(trees.html(u.id)).next));
+    bindIn(now, p.html + (p.bind ? " data-vk-b" : ""));
+    return now;
+  }
+  function pageScoped(sk) {
+    stir(loopWatch.takeRecords());
+    const parse = (h) => {
+      if (!/<(html|body)[\s>]/i.test(h)) return { next: fragment(h) };
+      const doc = new DOMParser().parseFromString(h, "text/html");
+      return { doc, next: doc.body };
+    };
+    const p = scopedNext("c0", sk, parse);
+    if (!p) { unreached.clear(); return pageIn(trees.html("c0")); }
+    const runs = scopedRuns;
+    fastEls = [];
+    if (p.doc) head(p.doc);
+    listenIn(p.html);
+    try { children(document.body, p.next); } finally { unreached.clear(); loopWatch.takeRecords(); }
+    if (scopedRuns !== runs && window.__vkVerify) verify("c0", document.body, () => children(document.body, parse(trees.html("c0")).next));
+    bindIn(document.body, p.html + (p.bind ? " data-vk-b" : ""));
+  }
+
+  // verify (window.__vkVerify, which the browser tests set) morphs what a
+  // frame-scoped morph left with the whole markup: a morph that changes
+  // anything — an attribute or a text it leaves other than it was, a node
+  // it puts in or takes out, nodes in another order — means the two
+  // differ. (A morph may take an attribute off and the runtime put it
+  // back, a stream's row count: that is no change.)
+  function verify(id, root, again) {
+    // what differs can only be in the containers morphed row by row: the
+    // rest went the same way (and a whole morph isn't always idempotent: a
+    // script's moved elements)
+    const fast = fastEls.filter((e) => e.isConnected), within = (n) => fast.some((e) => e === n || e.contains(n));
+    const nodes = () => { const out = []; for (const e of fast) { const w = document.createTreeWalker(e); while (w.nextNode()) out.push(w.currentNode); } return out; };
+    const rec = new MutationObserver(() => {}), before = nodes();
+    rec.observe(root, { subtree: true, childList: true, attributes: true, characterData: true, attributeOldValue: true, characterDataOldValue: true });
+    try { again(); } finally { loopWatch.takeRecords(); }
+    const rs = rec.takeRecords();
+    rec.disconnect();
+    const where = (n) => { const out = []; for (; n && n.nodeType === 1 && n !== document.body; n = n.parentNode) out.unshift(n.tagName.toLowerCase() + (n.id ? "#" + n.id : "")); return out.join(">") || "body"; };
+    const first = new Map(), gone = new Set(), came = new Set(), what = [];
+    for (const r of rs) {
+      if (!within(r.target)) continue;
+      if (r.type === "childList") {
+        r.removedNodes.forEach((n) => { if (came.has(n)) came.delete(n); else gone.add(n); });
+        r.addedNodes.forEach((n) => { if (gone.has(n)) gone.delete(n); else came.add(n); });
+        continue;
+      }
+      const k = r.type === "attributes" ? r.attributeName : "";
+      let m = first.get(r.target);
+      if (!m) first.set(r.target, (m = new Map()));
+      if (!m.has(k)) m.set(k, r.oldValue);
+    }
+    first.forEach((m, t) => m.forEach((old, k) => {
+      const now = k ? t.getAttribute(k) : t.nodeValue;
+      if (now !== old) what.push((k ? "attribute " + k + " of " + where(t) : "text in " + where(t.parentNode)) + ": " + JSON.stringify(old) + " → " + JSON.stringify(now));
+    }));
+    gone.forEach((n) => what.push("took out " + (n.nodeType === 1 ? where(n) || n.tagName : JSON.stringify(n.nodeValue))));
+    came.forEach((n) => what.push("put in " + (n.nodeType === 1 ? n.tagName.toLowerCase() + " in " + where(n.parentNode) : JSON.stringify(n.nodeValue))));
+    const after = nodes();
+    if (!what.length && (after.length !== before.length || after.some((n, i) => n !== before[i]))) what.push("nodes moved");
+    if (!what.length) return;
+    const msg = "frame-scoped morph of " + id + " differs from the whole morph: " + what.slice(0, 5).join("; ");
+    console.error("vuka: " + msg);
+    (window.__vkDiverged ||= []).push(msg);
+    if (typeof window.__vkVerifyFail === "function") window.__vkVerifyFail(msg);
+  }
+
   // Protocol v2: the server sends each instance's render tree, frames of
   // statics (sent once per connection, by id) around dynamics (markup,
   // nested frames, blocks of item frames, instance references), then only
@@ -1958,6 +2359,7 @@
   // into each changed instance's HTML for morph, as nexus and LiveView do.
   function tree() {
     const statics = new Map(), strs = new Map(), held = new Map(); // id → frame, or {html}
+    let gen = 0; // the apply running: a block made or stepped by it has its g
     const bad = (what) => { throw new Error("bad tree: " + what); };
     const frame = (o) => {
       if (o.s) statics.set(o.t, o.s);
@@ -1975,7 +2377,7 @@
         if (v.v !== undefined) strs.set(v.r, v.v);
         return strs.has(v.r) ? strs.get(v.r) : bad("string " + v.r);
       }
-      if (v.c) return { c: v.c.map(frame) };
+      if (v.c) return { c: v.c.map(frame), g: gen };
       if (v.id !== undefined) return { id: v.id };
       if (v.st) { carried.add(v.st.b); return streamAttrs(v.st); }
       return frame(v);
@@ -1986,29 +2388,33 @@
         if (!(+k < f.d.length)) bad("dynamic " + k);
         f.d[+k] = change(f.d[+k], u[k]);
       }
+      f.info = undefined; // its markup changed
       return f;
     };
     const change = (old, x) => {
       if (x && x.u) return update(old, x.u);
       if (x && x.k) {
         if (!old || !old.c) bad("steps on a non-block");
-        const out = [];
-        let i = 0;
+        const out = [], dirty = [];
+        let i = 0, inPlace = true; // only items changed where they are: no item came, went or moved
         for (const st of x.k) {
           if (typeof st === "number") {
             if (st > 0) {
               if (i + st > old.c.length) bad("past the items");
               for (let n = 0; n < st; n++) out.push(old.c[i++]);
-            } else i -= st;
+            } else { i -= st; inPlace = false; }
           } else if (st.m !== undefined) {
             if (!old.c[st.m]) bad("item " + st.m);
             out.push(st.u ? update(old.c[st.m], st.u) : old.c[st.m]);
+            inPlace = false;
           } else if (st.u) {
             if (i >= old.c.length) bad("past the items");
+            dirty.push(out.length);
             out.push(update(old.c[i++], st.u));
-          } else out.push(frame(st));
+          } else { out.push(frame(st)); inPlace = false; }
         }
-        return { c: out };
+        if (i !== old.c.length) inPlace = false;
+        return inPlace ? { c: out, g: gen, dirty, at: old.at } : { c: out, g: gen };
       }
       if (x && x.p) {
         if (typeof old !== "string") bad("token patch of a non-string");
@@ -2040,6 +2446,7 @@
     // apply takes a message's entries and returns the new HTML of each
     // instance they name; render (true) starts over.
     const apply = (entries, render) => {
+      gen++;
       if (render) { statics.clear(); strs.clear(); held.clear(); }
       for (const e of entries) {
         if (e.html !== undefined) held.set(e.id, { html: e.html });
@@ -2048,7 +2455,10 @@
         else bad("change of instance " + e.id);
       }
       const out = {};
-      for (const e of entries) out[e.id] = html(e.id, new Set());
+      for (const e of entries) {
+        const sk = scopes() ? scoped(e.id, new Set()) : null;
+        out[e.id] = sk ? { sk } : html(e.id, new Set());
+      }
       if (render || entries.some((e) => e.full)) prune();
       return out;
     };
@@ -2063,7 +2473,64 @@
       walk(held.get("c0"));
       for (const id of held.keys()) if (!keep.has(id)) held.delete(id);
     };
-    return { apply, page: () => html("c0", new Set()) };
+    // item is what a loop's item frame renders, kept until the item
+    // changes: its markup (none when it shows another instance, which can
+    // change without it) and, per container, how it parses (rowScan).
+    const item = (f) => {
+      if (f.info) return f.info;
+      let refs = false;
+      const walk = (x) => {
+        if (!x || typeof x !== "object") return;
+        if (x.id !== undefined) refs = true;
+        else (x.c || x.d || []).forEach(walk);
+      };
+      walk(f);
+      const h = refs ? null : frameHTML(f, new Set());
+      return (f.info = { h, scans: {}, bind: h !== null && / data-vk-(b|show|v)/.test(h) });
+    };
+    const scanOf = (inf, tag) => inf.scans[tag] || (inf.scans[tag] = rowScan(inf.h, tag));
+    // scoped is an instance's markup for a frame-scoped morph: each loop
+    // that is all of its container's content marks the container
+    // (data-vk-loop); a loop whose rows still stand as the last morph left
+    // them is left out but for its changed rows (omit). keep holds the
+    // loops not to leave out. null when there is no loop to mark.
+    const scoped = (id, keep) => {
+      const h = held.get(id);
+      if (!h || h.html !== undefined) return null;
+      const marks = [], seen = new Set([id]);
+      let bind = false;
+      const fr = (f) => {
+        const s = statics.get(f.t);
+        let out = s[0];
+        f.d.forEach((d, i) => {
+          if (typeof d === "string") out += d;
+          else if (d.c) {
+            const shape = d.c.length ? loopShape(out, s[i + 1]) : null;
+            const infos = shape && d.c.map(item);
+            const scans = infos && !infos.some((x) => x.h === null) && infos.map((x) => scanOf(x, shape.tag));
+            if (!scans || scans.some((x) => !x.ok)) {
+              d.c.forEach((it) => { out += frameHTML(it, seen); });
+            } else {
+              const n = marks.length, at = d.at;
+              const touched = !keep.has(n) && (d.g !== gen || d.dirty) && at && at.items.length === d.c.length &&
+                d.c.every((x, k) => x === at.items[k]) ? loopTouched(at.el) : null;
+              const rows = touched && [...new Set([...(d.g === gen ? d.dirty : []), ...touched])].sort((a, b) => a - b);
+              out = out.slice(0, -1) + ' data-vk-loop="' + n + '">';
+              if (rows) rows.forEach((k) => { out += infos[k].h; });
+              else infos.forEach((x) => { out += x.h; });
+              if (rows) bind = bind || infos.some((x) => x.bind);
+              marks.push({ block: d, shape, scans, mask: scans.reduce((m, x) => m | x.mask, 0), rows, infos });
+            }
+          } else if (d.id !== undefined) out += html(d.id, seen);
+          else out += fr(d);
+          out += s[i + 1];
+        });
+        return out;
+      };
+      const out = fr(h);
+      return marks.length ? { html: out, marks, bind } : null;
+    };
+    return { apply, page: () => html("c0", new Set()), html: (id) => html(id, new Set()), scoped };
   }
 
   // streamAttrs writes a stream container's attributes back from their
@@ -2770,7 +3237,7 @@
   function keptText(el, next) {
     const m = touched.get(el), r = m && m.get(TEXT);
     if (!r) return false;
-    if (next.textContent === r.server) {
+    if (whole(next).textContent === r.server) {
       if (el.textContent !== r.value) el.textContent = r.value;
       return true;
     }
