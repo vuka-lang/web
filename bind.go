@@ -319,16 +319,23 @@ func redirect(w http.ResponseWriter, r *http.Request, to Redirect) {
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		status = http.StatusFound
 	}
-	loc := string(to)
-	// A root-absolute in-app path carries the mount prefix, so a redirect to
-	// /admin under a /gateway mount stays under it. Relative, absolute-URL and
-	// scheme-relative (//host) locations are left as they are.
-	if strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") {
-		if p := basePrefix(r); p != "" {
-			loc = p + loc
-		}
+	http.Redirect(w, r, mountLocation(r, string(to)), status)
+}
+
+// mountLocation carries the app's mount prefix on a root-absolute in-app
+// location, so a redirect or form answer pointing at /admin under a /gateway
+// mount stays under it. Relative, absolute-URL and scheme-relative (//host)
+// locations are left as they are, and one already under the prefix is not
+// prefixed twice (a handler may return web.Redirect of an already-prefixed URL).
+func mountLocation(r *http.Request, loc string) string {
+	if !strings.HasPrefix(loc, "/") || strings.HasPrefix(loc, "//") {
+		return loc
 	}
-	http.Redirect(w, r, loc, status)
+	p := basePrefix(r)
+	if p == "" || loc == p || strings.HasPrefix(loc, p+"/") {
+		return loc
+	}
+	return p + loc
 }
 
 // shape is how a handler's results become a value and an error.

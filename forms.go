@@ -268,11 +268,11 @@ func (a *App) formAnswer(rq *request, id string, err error) {
 	w, r := rq.w, rq.r
 	w.Header().Set("Cache-Control", "no-store")
 	if to, ok := ui.RedirectOf(err); ok {
-		writeJSON(w, http.StatusOK, formAnswer{Location: to})
+		writeJSON(w, http.StatusOK, formAnswer{Location: mountLocation(r, to)})
 		return
 	}
 	if err == nil {
-		writeJSON(w, http.StatusOK, formAnswer{Location: r.URL.RequestURI()})
+		writeJSON(w, http.StatusOK, formAnswer{Location: mountLocation(r, r.URL.RequestURI())})
 		return
 	}
 	if !ui.QuietError(err) || errors.Is(err, ui.ErrFormIntent) {

@@ -33,6 +33,33 @@ func TestBasePrefix(t *testing.T) {
 	}
 }
 
+// TestMountLocation covers the mount prefix on an HTTP redirect / form-answer
+// location (redirect(), formAnswer): a ui.Form's post-submit web.Redirect.
+func TestMountLocation(t *testing.T) {
+	mounted := httptest.NewRequest("POST", "/admin/login", nil)
+	mounted.RequestURI = "/gateway/admin/login"
+	cases := map[string]string{
+		"/admin":          "/gateway/admin",  // the login handler's HomePath
+		"/admin/users":    "/gateway/admin/users",
+		"/gateway/admin":  "/gateway/admin",  // already prefixed: not doubled
+		"/gateway":        "/gateway",        // the bare prefix: not doubled
+		"./y":             "./y",             // relative: untouched
+		"//host/z":        "//host/z",        // scheme-relative: untouched
+		"https://x/z":     "https://x/z",     // absolute URL: untouched
+	}
+	for in, want := range cases {
+		if got := mountLocation(mounted, in); got != want {
+			t.Errorf("mountLocation(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// At the root (no mount), locations are unchanged.
+	root := httptest.NewRequest("POST", "/admin/login", nil)
+	root.RequestURI = "/admin/login"
+	if got := mountLocation(root, "/admin"); got != "/admin" {
+		t.Errorf("root mountLocation = %q, want /admin", got)
+	}
+}
+
 // TestConnPrefixLoc covers the mount prefix on a live redirect location the
 // server sets (web.Redirect from a live handler).
 func TestConnPrefixLoc(t *testing.T) {
