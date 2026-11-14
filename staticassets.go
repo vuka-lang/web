@@ -85,6 +85,18 @@ func Asset(ctx context.Context, p string) string {
 	return prefix + assetPath(ctx, a, p)
 }
 
+// MountPath carries the app's mount prefix on an in-app route path, so a link
+// or form action — e.g. from the generated urls package — stays within the
+// mount (basePrefix: X-Forwarded-Prefix from a trusted proxy, else what
+// http.StripPrefix removed). At the root the path is unchanged. In markup the
+// context is implicit: {urls.Admin.Users.Sync.URL(ctx)}.
+func MountPath(ctx context.Context, p string) string {
+	if r := Request(ctx); r != nil {
+		return basePrefix(r) + p
+	}
+	return p
+}
+
 // AssetURL is Asset's path as an absolute URL, for an email or a feed: the
 // scheme and host the request came to, or, without one (a cron, a job),
 // the app's BaseURL. Without either it is Asset's path, and a warning is
