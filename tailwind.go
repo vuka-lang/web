@@ -145,13 +145,13 @@ func serveTagged(w http.ResponseWriter, r *http.Request, ctype, tag string, cont
 // in a <style> so a full reload never flashes unstyled while the stylesheet
 // (served no-cache so it stays fresh) revalidates, and adds the hot-reload
 // script; the build links it, which the browser caches across loads.
-func (s *stylesheet) headTags() string {
+func (s *stylesheet) headTags(prefix string) string {
 	css, tag, _ := s.current()
 	if s.dev {
 		return `<style ` + cssInlineMark + `>` + string(css) + `</style>` +
-			`<script src="` + cssWatch + `" defer></script>`
+			`<script src="` + prefix + cssWatch + `" defer></script>`
 	}
-	return `<link rel="stylesheet" href="` + cssPath + `?v=` + tag + `">`
+	return `<link rel="stylesheet" href="` + prefix + cssPath + `?v=` + tag + `">`
 }
 
 // present reports whether html already carries the stylesheet, so linkCSS
@@ -180,12 +180,13 @@ func (a *App) linkCSS(r *http.Request, html []byte) []byte {
 
 // headTags is what linkCSS adds to html.
 func (a *App) headTags(r *http.Request, html []byte) string {
+	prefix := basePrefix(r) // mounted-under path, so the runtime tags carry it
 	var tags string
 	if a.css != nil && !a.css.present(html) && !styled(r) {
-		tags = a.css.headTags()
+		tags = a.css.headTags(prefix)
 	}
 	if a.assets != nil && !bytes.Contains(html, []byte(loaderPath)) {
-		tags += a.assets.headTag()
+		tags += a.assets.headTag(prefix)
 	}
 	if a.tb != nil {
 		tags += a.tb.tag(r)

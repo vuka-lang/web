@@ -782,8 +782,9 @@ func (a *App) scriptTag(r *http.Request, token string) string {
 		build += ` data-vk-dev` // the runtime says in the console why a navigation loads in full
 	}
 	_, tag := a.runtime()
+	live := basePrefix(r) + liveScript // mounted-under path, so the client derives its socket from it
 	if token == "" {
-		return `<script src="` + liveScript + `?v=` + tag + `"` + root + build + ` defer></script>`
+		return `<script src="` + live + `?v=` + tag + `"` + root + build + ` defer></script>`
 	}
 	var tb string
 	if a.tb != nil {
@@ -791,7 +792,7 @@ func (a *App) scriptTag(r *http.Request, token string) string {
 			tb = ` data-vk-toolbar="` + e.ID + `"` // the socket's messages join the page's record
 		}
 	}
-	return `<script src="` + liveScript + `?v=` + tag + `" data-vk-token="` + token + `"` + root + tb + build + ` defer></script>`
+	return `<script src="` + live + `?v=` + tag + `" data-vk-token="` + token + `"` + root + tb + build + ` defer></script>`
 }
 
 // A join token names the page a live connection rebuilds: its URI, when the
