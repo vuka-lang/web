@@ -32,3 +32,30 @@ func TestBasePrefix(t *testing.T) {
 		t.Errorf("untrusted X-Forwarded-Prefix honoured: %q", got)
 	}
 }
+
+// TestConnPrefixLoc covers the mount prefix on a live redirect location the
+// server sets (web.Redirect from a live handler).
+func TestConnPrefixLoc(t *testing.T) {
+	mounted := httptest.NewRequest("GET", "/_vuka/live", nil)
+	mounted.RequestURI = "/gateway/_vuka/live"
+	c := &conn{r: mounted}
+	cases := map[string]string{
+		"/admin/systems": "/gateway/admin/systems", // root-absolute: prefixed
+		"/":              "/gateway/",              // home, too
+		"systems/x":      "systems/x",              // relative: untouched
+		"//evil/x":       "//evil/x",               // scheme-relative: untouched
+		"":               "",                       // no redirect
+	}
+	for in, want := range cases {
+		if got := c.prefixLoc(in); got != want {
+			t.Errorf("prefixLoc(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	// At the root (no mount), locations are unchanged.
+	root := httptest.NewRequest("GET", "/_vuka/live", nil)
+	root.RequestURI = "/_vuka/live"
+	if got := (&conn{r: root}).prefixLoc("/admin"); got != "/admin" {
+		t.Errorf("root prefixLoc = %q, want /admin", got)
+	}
+}
