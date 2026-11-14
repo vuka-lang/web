@@ -1,8 +1,12 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/vuka-lang/ui/v2/live"
 )
 
 // TestBasePrefix covers the mount-prefix the framework prepends to the
@@ -57,6 +61,42 @@ func TestMountLocation(t *testing.T) {
 	root.RequestURI = "/admin/login"
 	if got := mountLocation(root, "/admin"); got != "/admin" {
 		t.Errorf("root mountLocation = %q, want /admin", got)
+	}
+}
+
+// TestPrefixJS covers the mount prefix on a navigate/patch command the server
+// pushes over the live socket — a live form's web.Redirect, or PushNavigate —
+// which the client runs as an absolute in-app path.
+func TestPrefixJS(t *testing.T) {
+	mounted := httptest.NewRequest("GET", "/_vuka/live", nil)
+	mounted.RequestURI = "/gateway/_vuka/live"
+	c := &conn{r: mounted}
+	pushes := []live.JSPush{{Ops: json.RawMessage(
+		`[["navigate",{"href":"/admin/systems/records"}],` +
+			`["patch",{"href":"/gateway/admin/users?q=x"}],` + // already prefixed: left alone
+			`["addClass",{"name":"on"}]]`)}}
+	c.prefixJS(pushes)
+	got := string(pushes[0].Ops)
+	for _, want := range []string{
+		`["navigate",{"href":"/gateway/admin/systems/records"}]`,
+		`["patch",{"href":"/gateway/admin/users?q=x"}]`, // unchanged, not doubled
+		`["addClass",{"name":"on"}]`,                     // untouched
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prefixJS missing %s\n got %s", want, got)
+		}
+	}
+	if strings.Contains(got, "/gateway/gateway") {
+		t.Errorf("prefixJS doubled a prefix: %s", got)
+	}
+
+	// At the root (no mount), commands are unchanged.
+	root := httptest.NewRequest("GET", "/_vuka/live", nil)
+	root.RequestURI = "/_vuka/live"
+	rp := []live.JSPush{{Ops: json.RawMessage(`[["navigate",{"href":"/admin"}]]`)}}
+	(&conn{r: root}).prefixJS(rp)
+	if got := string(rp[0].Ops); !strings.Contains(got, `"href":"/admin"`) {
+		t.Errorf("root prefixJS changed the href: %s", got)
 	}
 }
 

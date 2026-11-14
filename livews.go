@@ -679,7 +679,69 @@ func (c *conn) event(m live.ClientMessage) any {
 	if ev.refused != nil {
 		return withError{reply, c.errorText(ev.refused)}
 	}
+	// A handler that returns web.Redirect moves the page to a root-absolute
+	// in-app path; carry the connection's mount prefix on it, as the join and
+	// navigate replies do, so a /admin redirect under a /gateway mount stays
+	// under it.
+	// A handler that returns web.Redirect, or calls PushNavigate/PushPatch,
+	// moves the page to a root-absolute in-app path; carry the connection's
+	// mount prefix on it (as the join and navigate replies do) so /admin under
+	// a /gateway mount stays under it. A form's redirect arrives as a navigate
+	// command in the patch's js, not as a Redirect message.
+	if sm, ok := reply.(live.ServerMessage); ok {
+		if sm.Type == live.Redirect {
+			sm.URL = c.prefixLoc(sm.URL)
+		}
+		c.prefixJS(sm.JS)
+		reply = sm
+	}
 	return reply
+}
+
+// prefixJS carries the connection's mount prefix on the href of navigate and
+// patch commands the server pushes (a form's redirect, PushNavigate), which the
+// client runs as absolute in-app paths. Client-initiated navigations use the
+// page's own rendered (already-prefixed) URLs, so they never reach here.
+func (c *conn) prefixJS(pushes []live.JSPush) {
+	if basePrefix(c.r) == "" {
+		return
+	}
+	for i := range pushes {
+		var ops []json.RawMessage
+		if json.Unmarshal(pushes[i].Ops, &ops) != nil {
+			continue
+		}
+		changed := false
+		for j, raw := range ops {
+			var pair []json.RawMessage
+			if json.Unmarshal(raw, &pair) != nil || len(pair) != 2 {
+				continue
+			}
+			var name string
+			if json.Unmarshal(pair[0], &name) != nil || (name != "navigate" && name != "patch") {
+				continue
+			}
+			var args map[string]json.RawMessage
+			if json.Unmarshal(pair[1], &args) != nil {
+				continue
+			}
+			var href string
+			if json.Unmarshal(args["href"], &href) != nil {
+				continue
+			}
+			loc := c.prefixLoc(href)
+			if loc == href {
+				continue
+			}
+			args["href"], _ = json.Marshal(loc)
+			pair[1], _ = json.Marshal(args)
+			ops[j], _ = json.Marshal(pair)
+			changed = true
+		}
+		if changed {
+			pushes[i].Ops, _ = json.Marshal(ops)
+		}
+	}
 }
 
 // render is the session's render function for page: the session calls it
@@ -870,12 +932,14 @@ func (a *App) liveErrorText(err error) (string, bool) {
 // client already resolves its own navigations against the page URL, so this
 // is only for server-emitted locations.
 func (c *conn) prefixLoc(loc string) string {
-	if strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") {
-		if p := basePrefix(c.r); p != "" {
-			return p + loc
-		}
+	if !strings.HasPrefix(loc, "/") || strings.HasPrefix(loc, "//") {
+		return loc
 	}
-	return loc
+	p := basePrefix(c.r)
+	if p == "" || loc == p || strings.HasPrefix(loc, p+"/") {
+		return loc
+	}
+	return p + loc
 }
 
 func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
