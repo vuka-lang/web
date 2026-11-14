@@ -735,7 +735,7 @@ func (c *conn) join(ctx context.Context, ref, v int, ext []string) (any, websock
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: errBadToken.Error()}, closeReload
 	}
 	if j.page == nil {
-		if loc := rec.location(); loc != "" {
+		if loc := c.prefixLoc(rec.location()); loc != "" {
 			if !ui.LoadableURL(loc) {
 				return live.ServerMessage{Type: live.Error, Ref: ref, Error: errRedirectScheme.Error()}, closeRefused
 			}
@@ -863,6 +863,21 @@ func (a *App) liveErrorText(err error) (string, bool) {
 // it. A navigation whose Mount, Update or render fails
 // replies with the error and leaves nothing mounted; the runtime loads the
 // URL, getting the route's own answer.
+// prefixLoc carries the live connection's mount prefix on a root-absolute
+// redirect location the server set (web.Redirect from a live handler), so a
+// redirect to /admin under a /gateway mount stays under it. Relative,
+// absolute-URL, scheme-relative and empty locations are left as they are. The
+// client already resolves its own navigations against the page URL, so this
+// is only for server-emitted locations.
+func (c *conn) prefixLoc(loc string) string {
+	if strings.HasPrefix(loc, "/") && !strings.HasPrefix(loc, "//") {
+		if p := basePrefix(c.r); p != "" {
+			return p + loc
+		}
+	}
+	return loc
+}
+
 func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	uri, _, _ := strings.Cut(m.URL, "#")
 	load := live.ServerMessage{Type: live.Redirect, Ref: m.Ref, URL: m.URL}
@@ -881,7 +896,7 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		return redirect(), false
 	}
 	if j.page == nil {
-		load.URL = cmp.Or(rec.location(), m.URL)
+		load.URL = cmp.Or(c.prefixLoc(rec.location()), m.URL)
 		return redirect(), false
 	}
 	if j.root != c.root {
