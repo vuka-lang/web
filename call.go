@@ -77,7 +77,7 @@ func (a *App) callOpen(w http.ResponseWriter, r *http.Request, s *routeSpec, gua
 		comp, err = c.Value(nil)
 	}
 	if err != nil {
-		a.callError(w, r, err)
+		a.callError(w, r2, err)
 		return
 	}
 	defer a.span(rq.ctx, "render", c.Component())()
@@ -130,7 +130,7 @@ func (a *App) callError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	e := a.publicError(err)
 	if e.Status >= 500 {
-		log.Printf("web: %d %s %s call: %v", e.Status, r.Method, r.URL.Path, err)
+		log.Printf("web: %d %s %s call%s: %v", e.Status, r.Method, r.URL.Path, a.whereTag(r), err)
 	}
 	writeJSON(w, e.Status, map[string]any{"error": e})
 }
