@@ -391,7 +391,7 @@ func (s *assetSet) loaderJS() ([]byte, string) {
 
 // headTag is the loader's script tag, for a full page of an app with
 // component scripts.
-func (s *assetSet) headTag() string {
+func (s *assetSet) headTag(prefix string) string {
 	m, _, tag := s.current()
 	s.mu.Lock()
 	failed := s.fail != nil
@@ -399,7 +399,7 @@ func (s *assetSet) headTag() string {
 	if !m.scripted() && !failed && !s.always {
 		return ""
 	}
-	return `<script src="` + loaderPath + `?v=` + tag + `" defer></script>`
+	return `<script src="` + prefix + loaderPath + `?v=` + tag + `" defer></script>`
 }
 
 func (s *assetSet) serveLoader(w http.ResponseWriter, r *http.Request) {

@@ -191,6 +191,23 @@ func mountPrefix(r *http.Request) string {
 	return strings.TrimSuffix(uri[:len(uri)-len(p)], "/")
 }
 
+// basePrefix is the path the app is mounted under, for the root-absolute URLs
+// it writes into responses (runtime tags, redirects). A proxy that strips the
+// prefix advertises it with X-Forwarded-Prefix (honoured only from a trusted
+// proxy); otherwise it is what http.StripPrefix took off — mountPrefix. Empty
+// when the app serves at the root.
+func basePrefix(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if fromTrustedProxy(r) {
+		if p := strings.TrimRight(strings.TrimSpace(lastValue(r.Header.Values("X-Forwarded-Prefix"))), "/"); p != "" && strings.HasPrefix(p, "/") {
+			return p
+		}
+	}
+	return mountPrefix(r)
+}
+
 // cssURL is a url(…) in a stylesheet, quoted or not.
 var cssURL = regexp.MustCompile(`url\(\s*(["']?)([^"')\s]+)(["']?)\s*\)`)
 

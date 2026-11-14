@@ -266,7 +266,7 @@ func TestDevCSSEventsShutdown(t *testing.T) {
 
 func TestCSSLinkedInBuild(t *testing.T) {
 	s := newStylesheet([]byte(".x{color:red}"))
-	tags := s.headTags()
+	tags := s.headTags("")
 	if !strings.Contains(tags, `<link rel="stylesheet"`) || strings.Contains(tags, "<style") {
 		t.Fatalf("the build should link the stylesheet: %s", tags)
 	}
@@ -279,7 +279,7 @@ func TestCSSInlinedInDev(t *testing.T) {
 	const css = ".x{color:red}"
 	s := newStylesheet([]byte(css))
 	s.dev = true
-	tags := s.headTags()
+	tags := s.headTags("")
 	if !strings.Contains(tags, `<style `+cssInlineMark+`>`+css+`</style>`) {
 		t.Fatalf("dev should inline the stylesheet: %s", tags)
 	}
