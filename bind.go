@@ -67,6 +67,7 @@ func (a *App) newRequest(w http.ResponseWriter, r *http.Request, s *routeSpec) *
 			rq.ctx = forms.WithLocale(rq.ctx, forms.ParseAcceptLanguage(h)...)
 		}
 	}
+	*r = *r.WithContext(rq.ctx) // the serving request carries the handling context, so a 500's log can name the route
 	a.withVars(rq)
 	return rq
 }

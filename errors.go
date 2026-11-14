@@ -103,6 +103,22 @@ func (r Redirect) Render(context.Context, io.Writer) error { return nil }
 // moves the page there (ui.RedirectOf).
 func (r Redirect) RedirectLocation() string { return string(r) }
 
+// whereTag is " [Name at file.vuka:line]" (or a page/live view's name) for the
+// route serving r, to append to a dev 500 log so the failure is self-locating.
+// Empty outside dev, or when the request carries no route (an error before
+// dispatch). The location is the handler's registration site, not the exact
+// line the error came from — a returned error carries no stack — but it names
+// the page/handler, which is the slow part to find in a .vuka app.
+func (a *App) whereTag(r *http.Request) string {
+	if !a.dev {
+		return ""
+	}
+	if rq, _ := r.Context().Value(ctxKey{}).(*request); rq != nil && rq.route != nil && rq.route.where != "" {
+		return " [" + rq.route.where + "]"
+	}
+	return ""
+}
+
 func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, htmlPage bool) {
 	// A redirect returned anywhere — a page handler, a live view's Mount or
 	// render — redirects, rather than becoming a 500. The request path handles
@@ -126,8 +142,9 @@ func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, html
 	}
 	if e.Status >= 500 {
 		// Server errors go to the console, not only the response: one
-		// clean line with the method, path and error.
-		log.Printf("web: %d %s %s: %v", e.Status, r.Method, r.URL.Path, err)
+		// clean line with the method, path and error — plus, in dev, the
+		// handler's source location so the failure is self-locating.
+		log.Printf("web: %d %s %s%s: %v", e.Status, r.Method, r.URL.Path, a.whereTag(r), err)
 	}
 	if a.onError != nil {
 		a.onError(w, r, e, htmlPage)
