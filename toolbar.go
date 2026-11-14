@@ -805,7 +805,7 @@ func (tb *toolbar) tag(r *http.Request) string {
 	default:
 		return "" // a fetch of a page, not one the browser shows
 	}
-	t := `<script src="` + toolbarJS + `?v=` + toolbarTag + `" data-vk-toolbar="` + e.ID + `"`
+	t := `<script src="` + basePrefix(r) + toolbarJS + `?v=` + toolbarTag + `" data-vk-toolbar="` + e.ID + `"`
 	if tb.dir != "" {
 		t += ` data-vk-build`
 	}
