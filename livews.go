@@ -936,7 +936,23 @@ func (c *conn) docTitle(page string) string {
 // rendered, nil when it answered something else (rec has its status and
 // headers).
 func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, error) {
-	u, err := url.ParseRequestURI(uri)
+	// The socket's runs don't pass through http.StripPrefix, so make the
+	// synthetic request mirror it under a mount prefix: route on the path with
+	// the prefix removed (routes are registered without it), but keep the
+	// prefix on RequestURI so mountPrefix/basePrefix return it and the render
+	// emits prefixed URLs. A navigate's uri arrives prefixed (the client's
+	// URL); a join's arrives already a route path — both end up the same.
+	route, full := uri, uri
+	if p := basePrefix(c.r); p != "" {
+		switch {
+		case uri == p:
+			route = "/"
+		case strings.HasPrefix(uri, p+"/"):
+			route = strings.TrimPrefix(uri, p)
+		}
+		full = p + route
+	}
+	u, err := url.ParseRequestURI(route)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -952,7 +968,7 @@ func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, erro
 		ctx = context.WithValue(ctx, histKey{}, c.vars)
 	}
 	req := c.r.Clone(context.WithValue(ctx, joinKey{}, j))
-	req.Method, req.URL, req.RequestURI = http.MethodGet, u, uri
+	req.Method, req.URL, req.RequestURI = http.MethodGet, u, full
 	req.Body, req.ContentLength = http.NoBody, 0
 	for _, h := range upgradeHeaders {
 		req.Header.Del(h)
