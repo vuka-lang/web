@@ -197,6 +197,7 @@ type hub struct {
 	open     int            // the sockets admitted, open or opening
 	perIP    map[string]int // of them, by client address
 	perToken map[string]int // by page token
+	streams  sync.Map       // the event-stream connections, by id (livesse.go)
 
 	joinTimeout, idleTimeout, checkEvery, trimAfter time.Duration
 	maxConns, maxPerIP, maxPerTok                   int
@@ -306,7 +307,7 @@ func (h *hub) closeAll() {
 // broadcasts are answered in order.
 type conn struct {
 	app    *App
-	ws     *websocket.Conn
+	ws     liveTransport // its socket, or its event stream (livesse.go)
 	r      *http.Request // the upgrade request
 	uri    string        // the page, from its token
 	tok    string        // the page's join token, the key its render parked a session under
@@ -381,16 +382,26 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: a.liveOrigins, CompressionMode: a.liveDeflate.mode(), CompressionThreshold: liveDeflateThreshold})
-	if err != nil {
-		return // Accept answered: 403 for another origin
+	var ws liveTransport
+	if r.URL.Query().Get("transport") == "sse" {
+		s, sr := a.acceptStream(w, r) // livesse.go
+		if s == nil {
+			return
+		}
+		ws, r = s, sr
+	} else {
+		wc, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: a.liveOrigins, CompressionMode: a.liveDeflate.mode(), CompressionThreshold: liveDeflateThreshold})
+		if err != nil {
+			return // Accept answered: 403 for another origin
+		}
+		wc.SetReadLimit(1 << 20)
+		ws = wc
 	}
 	if terr != nil {
 		ws.Close(closeReload, terr.Error())
 		return
 	}
 	defer ws.CloseNow()
-	ws.SetReadLimit(1 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer a.recoverSocket(ws, r)

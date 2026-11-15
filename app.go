@@ -501,6 +501,7 @@ func (a *App) build() (http.Handler, error) {
 	lastApp.Store(a)
 	a.router.Handle(http.MethodGet, liveScript, http.HandlerFunc(a.serveLiveJS))
 	a.router.Handle(http.MethodGet, liveSocket, http.HandlerFunc(a.serveLive))
+	a.router.Handle(http.MethodPost, liveSocket, http.HandlerFunc(a.serveLiveSend)) // a stream's messages (livesse.go)
 	a.router.Handle(http.MethodPost, uploadPath, http.HandlerFunc(a.serveUpload))
 	a.routeCSS()
 	if a.assets == nil {

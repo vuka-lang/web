@@ -1,5 +1,6 @@
 // The Vuka live runtime: it connects a page rendered with stateful components
-// to its session over a WebSocket, sends the events its elements declare
+// to its session over a WebSocket (or, where none opens, an event stream and
+// POSTs: openStream), sends the events its elements declare
 // (data-vk-on-<event>), and morphs the page into what the server sends back,
 // keeping focus, selection and what the user is typing. It also runs JS
 // commands (data-vk-js-<event>): changes to the page made in the browser,
@@ -13,6 +14,7 @@
   let live = script.hasAttribute("data-vk-token"); // a page with no live parts has none, until a navigation reaches one
   const src = new URL(script.src, location.href);
   const url = (src.protocol === "https:" ? "wss://" : "ws://") + src.host + src.pathname.replace(/\.js$/, "") + "?t=";
+  const httpLive = src.origin + src.pathname.replace(/\.js$/, ""); // the stream's and its POSTs' (openStream)
   let token = script.dataset.vkToken || ""; // the page's: a navigation brings the next one
   let toolbar = script.dataset.vkToolbar; // development: the page's toolbar record, which the socket's messages join
   const build = script.dataset.vkBuildId || ""; // the build that rendered the page: a navigation over HTTP names it
@@ -32,10 +34,18 @@
   function connect() {
     clearTimeout(timer);
     state("connecting");
-    ws = new WebSocket(url + encodeURIComponent(token) + (toolbar ? "&tb=" + toolbar : ""));
-    ws.onopen = join;
+    const q = encodeURIComponent(token) + (toolbar ? "&tb=" + toolbar : "");
+    const viaStream = streamNext();
+    let opened = false, slow = 0;
+    const sock = ws = viaStream ? openStream(q) : new WebSocket(url + q);
+    // a socket a proxy holds without answering counts as failed after 5s,
+    // when the stream is there to fall back on
+    if (!viaStream && canStream) slow = setTimeout(() => { if (!opened) sock.close(); }, 5000);
+    ws.onopen = () => { opened = true; clearTimeout(slow); if (!viaStream) socketOpened(); join(); };
     ws.onmessage = (e) => incoming(JSON.parse(e.data));
     ws.onclose = (e) => {
+      clearTimeout(slow);
+      if (!opened) connectFailed(viaStream);
       ws = null;
       joined = false;
       if (nav) return load(nav.href, nav.pop || nav.replace); // the page it was going to, the long way
@@ -60,6 +70,89 @@
   // ext: the v2 extensions the runtime speaks — "stream", a stream
   // container's attributes as one compact dynamic (tree, streamAttrs).
   const join = () => ws.send(JSON.stringify({ type: "join", ref: ++ref, v: 2, ext: ["stream"] }));
+
+  // The fallback transport (livesse.go): server-sent events down and fetch
+  // POSTs up, carrying the socket's messages, for a network whose proxies
+  // refuse WebSocket upgrades. The runtime takes it when the browser has no
+  // WebSocket, and after 3 sockets in a row failed to open: one failure is a
+  // server restarting or a network blip, which the socket's backoff rides
+  // out, while three (about two seconds of backoff, or a proxy holding each
+  // upgrade 5s) point at something on the way refusing the upgrade. Once on
+  // the stream it tries a socket again at a reconnect 5 minutes after the
+  // switch, and after a stream that failed to open too (the server was down,
+  // not the upgrade refused); one more failed socket goes back to the
+  // stream. The switch is remembered in the tab for those 5 minutes, so the
+  // pages loaded after it don't each wait through three failed sockets. A
+  // live navigation keeps its connection, whichever it is.
+  const canStream = typeof EventSource === "function" && typeof fetch === "function";
+  const streamFor = 300000;
+  let wsFails = 0, streamAt = 0;
+  if (canStream) {
+    try { streamAt = +sessionStorage.getItem("vk-stream") || 0; } catch (_) {}
+    if (Date.now() - streamAt < streamFor) wsFails = 3;
+  }
+  function streamNext() {
+    if (!canStream) return false;
+    if (typeof WebSocket !== "function") return true;
+    if (wsFails < 3) return false;
+    if (Date.now() - streamAt < streamFor) return true;
+    wsFails = 2; // a socket again: one more failure goes back
+    return false;
+  }
+  function connectFailed(viaStream) {
+    if (!canStream) return;
+    if (viaStream) return void (wsFails = 2);
+    if (++wsFails < 3) return;
+    streamAt = Date.now();
+    try { sessionStorage.setItem("vk-stream", streamAt); } catch (_) {}
+  }
+  function socketOpened() {
+    wsFails = 0;
+    if (!streamAt) return;
+    streamAt = 0;
+    try { sessionStorage.removeItem("vk-stream"); } catch (_) {}
+  }
+
+  // openStream opens the fallback transport behind the part of a socket's
+  // interface connect uses: onopen, onmessage, onclose with a code and a
+  // reason, send and close. EventSource parses the stream, and every browser
+  // with fetch ships it; it would reconnect by itself, which the runtime stops
+  // at the first error so that its own backoff decides, as for a socket. The
+  // server's close event carries the code a socket's close would (4001
+  // reload, 4002 idle, …); a stream that ends without one, or a POST that
+  // fails (409: the server no longer has the connection), closes as a lost
+  // socket does (1006). Messages are POSTed one at a time, in order, which
+  // keeps them in order on the server.
+  function openStream(q) {
+    const t = { onopen: null, onmessage: null, onclose: null };
+    const es = new EventSource(httpLive + "?transport=sse&t=" + q);
+    const queue = [];
+    let id = "", sending = false, done = false;
+    const end = (code, reason) => {
+      if (done) return;
+      done = true;
+      es.close();
+      queue.length = 0;
+      if (t.onclose) t.onclose({ code, reason: reason || "" });
+    };
+    const pump = () => {
+      if (sending || done || !queue.length) return;
+      sending = true;
+      fetch(httpLive + "?c=" + encodeURIComponent(id), { method: "POST", body: queue[0], headers: { "Content-Type": "text/plain;charset=UTF-8" }, credentials: "same-origin", cache: "no-store" }).then((r) => {
+        sending = false;
+        if (r.status !== 204) return end(1006, "");
+        queue.shift();
+        pump();
+      }, () => { sending = false; end(1006, ""); });
+    };
+    es.addEventListener("ready", (e) => { id = JSON.parse(e.data).id; if (t.onopen) t.onopen(); });
+    es.addEventListener("close", (e) => { const c = JSON.parse(e.data); end(c.code, c.reason); });
+    es.onmessage = (e) => { if (!done && t.onmessage) t.onmessage(e); };
+    es.onerror = () => end(1006, "");
+    t.send = (s) => { if (!done) { queue.push(s); pump(); } };
+    t.close = () => end(1006, "");
+    return t;
+  }
 
   // idle follows the server closing a page that sat idle (dropping its
   // session): it connects again at once when the page is in view, else
