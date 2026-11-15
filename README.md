@@ -488,8 +488,10 @@ elements are matched by `id`, else `data-vk-id`, else position and tag; a
 focused field keeps its value and caret; another field takes the server's
 value when it changed. Give list rows an `id` for stable identity across
 inserts and removals. `data-vk-ignore` (with an `id`) leaves an element as the
-browser has it. A whole-document `c0` patch morphs the `<body>` and sets the
-title.
+browser has it. A value shown once (`ui.ShowOnce`, `data-vk-once` with an
+`id`) stays as the browser has it while the page renders its place empty or
+with the same key, takes a value with another key, and goes when the page is
+left. A whole-document `c0` patch morphs the `<body>` and sets the title.
 
 **Browser hooks.** `<html data-vk-state>` is `connecting`, `connected`,
 `disconnected`, `idle` or `closed` (style a banner on it). The document receives
