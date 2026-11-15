@@ -2250,10 +2250,10 @@
   // whole puts back the left-out rows of the scoped containers in n: what
   // copies or reads n's markup sees all of it.
   function whole(n) {
-    if (unreached.size) for (const [c, mk] of unreached) if (n === c || n.contains(c)) fill(c, mk);
+    if (unreached.size) for (const [c, mk] of unreached) if (n === c || n.contains(c)) fillRows(c, mk);
     return n;
   }
-  function fill(c, mk) {
+  function fillRows(c, mk) {
     unreached.delete(c);
     if (!mk.rows) return;
     const t = document.createElement("template");
@@ -2269,7 +2269,7 @@
   function loop(el, next, mk) {
     if (keptText(el, next) || keptKids(el, next)) return void (mk.block.at = null);
     const at = mk.block.at;
-    if (mk.rows && unreached.get(next) === mk && rowsStill(el, next, mk, at)) { // the rows the last morph left: only the changed ones
+    if (mk.rows && unreached.get(next) === mk && rowsStill(el, next, mk, at) && (!mk.perm || arrange(el, mk))) { // the rows the last morph left: only the changed ones
       unreached.delete(next);
       const off = mk.shape.lead.nodes, pairs = mk.rows.map((i, j) => [el.childNodes[off + i], next.childNodes[off + j]]), was = loopKeys;
       loopKeys = at.unique;
@@ -2281,7 +2281,8 @@
       fastEls.push(el);
       fastRows.set(el, mk.rows.map((i) => off + i));
       if (window.__vkVerify) { const by = window.__vkScoped ||= {}; by[el.id] = (by[el.id] || 0) + 1; } // for the tests: each container's row-by-row morphs
-      return settled(el, mk, { keys: at.keys, unique: at.unique, inputs });
+      if (mk.perm) for (let j = 0; j < mk.perm.length; j++) rowAt.set(el.childNodes[off + j], j);
+      return settled(el, mk, { keys: mk.perm ? mk.perm.map((i) => at.keys[i]) : at.keys, unique: at.unique, inputs });
     }
     whole(next);
     children(el, next);
@@ -2291,9 +2292,9 @@
   function rowsStill(el, next, mk, at) {
     // what is waiting to be noted now is this morph's own: the scripts' was noted before it began
     loopWatch.takeRecords();
-    const s = stirred.get(el);
+    const s = stirred.get(el), perm = mk.perm, inv = perm && invert(perm);
     if (!at || at.el !== el || seeding || regen && regen.contains(el) || !el.isConnected || !loops.has(el) || s === true) return false;
-    if (s) for (const i of s) if (!mk.rows.includes(i)) return false;
+    if (s) for (const i of s) if (!mk.rows.includes(inv ? inv[i] : i)) return false;
     const off = mk.shape.lead.nodes;
     if (el.childNodes.length !== off + at.items.length + mk.shape.trail.nodes || awayFrom(el).length) return false;
     for (const h of heldEls) if (!h.isConnected) heldEls.delete(h); else if (el.contains(h)) return false;
@@ -2302,12 +2303,38 @@
     loopKeys = at.unique;
     try {
       for (let j = 0; j < mk.rows.length; j++) {
-        const i = mk.rows[j], live = el.childNodes[off + i], n = next.childNodes[off + j];
+        const i = perm ? perm[mk.rows[j]] : mk.rows[j], live = el.childNodes[off + i], n = next.childNodes[off + j];
         if (!live || live.nodeType !== 1 || n.nodeType !== 1 || live.tagName !== n.tagName || foreign.has(live) || added.has(live) ||
           keyOf(live) !== at.keys[i] || keyOf(n) !== at.keys[i]) return false;
       }
     } finally { loopKeys = was; }
     return true;
+  }
+
+  // arrange puts a reordered loop's rows, as the last morph left them, in
+  // the new order (perm: each row's old index), moving the fewest: the rows
+  // of a longest run already in order stay. false, moving none, when a row
+  // that would move holds the focus, which a move would blur.
+  function arrange(el, mk) {
+    const off = mk.shape.lead.nodes, perm = mk.perm, rows = perm.map((i) => el.childNodes[off + i]), stay = increasing(perm);
+    const f = document.activeElement;
+    if (f && f !== document.body && rows.some((r, j) => !stay[j] && r.contains(f))) return false;
+    for (let j = perm.length - 1, ref = el.childNodes[off + perm.length] || null; j >= 0; ref = rows[j--]) if (!stay[j]) el.insertBefore(rows[j], ref);
+    return true;
+  }
+  const invert = (perm) => { const inv = []; perm.forEach((i, j) => { inv[i] = j; }); return inv; };
+  // increasing marks a longest increasing run of xs.
+  function increasing(xs) {
+    const tails = [], prev = [];
+    xs.forEach((x, j) => {
+      let lo = 0, hi = tails.length;
+      while (lo < hi) { const m = (lo + hi) >> 1; if (xs[tails[m]] < x) lo = m + 1; else hi = m; }
+      prev[j] = lo ? tails[lo - 1] : -1;
+      tails[lo] = j;
+    });
+    const out = xs.map(() => false);
+    for (let j = tails.length ? tails[tails.length - 1] : -1; j >= 0; j = prev[j]) out[j] = true;
+    return out;
   }
 
   // settled maps a morphed container's rows to its items, when they are
@@ -2469,25 +2496,33 @@
       if (x && x.k) {
         if (!old || !old.c) bad("steps on a non-block");
         const out = [], dirty = [];
-        let i = 0, inPlace = true; // only items changed where they are: no item came, went or moved
+        // inPlace: only items changed where they are, no item came, went or
+        // moved; perm: each new item's old index, while every item is an old
+        // one, taken once (a reorder)
+        let i = 0, inPlace = true, perm = [];
         for (const st of x.k) {
           if (typeof st === "number") {
             if (st > 0) {
               if (i + st > old.c.length) bad("past the items");
-              for (let n = 0; n < st; n++) out.push(old.c[i++]);
+              for (let n = 0; n < st; n++) { if (perm) perm.push(i); out.push(old.c[i++]); }
             } else { i -= st; inPlace = false; }
           } else if (st.m !== undefined) {
             if (!old.c[st.m]) bad("item " + st.m);
+            if (st.u) dirty.push(out.length);
+            if (perm) perm.push(st.m);
             out.push(st.u ? update(old.c[st.m], st.u) : old.c[st.m]);
             inPlace = false;
           } else if (st.u) {
             if (i >= old.c.length) bad("past the items");
             dirty.push(out.length);
+            if (perm) perm.push(i);
             out.push(update(old.c[i++], st.u));
-          } else { out.push(frame(st)); inPlace = false; }
+          } else { out.push(frame(st)); inPlace = false; perm = null; }
         }
         if (i !== old.c.length) inPlace = false;
-        return inPlace ? { c: out, g: gen, dirty, at: old.at } : { c: out, g: gen };
+        if (inPlace) return { c: out, g: gen, dirty, at: old.at };
+        if (perm && perm.length === old.c.length && new Set(perm).size === perm.length) return { c: out, g: gen, dirty, at: old.at, perm };
+        return { c: out, g: gen };
       }
       if (x && x.p) {
         if (typeof old !== "string") bad("token patch of a non-string");
@@ -2584,15 +2619,18 @@
             if (!scans || scans.some((x) => !x.ok)) {
               d.c.forEach((it) => { out += frameHTML(it, seen); });
             } else {
-              const n = marks.length, at = d.at;
+              // a reorder (perm) leaves out its rows too: the morph moves
+              // the rows the last morph left into the new order
+              const n = marks.length, at = d.at, perm = d.g === gen && d.perm || null;
               const touched = !keep.has(n) && (d.g !== gen || d.dirty) && at && at.items.length === d.c.length &&
-                d.c.every((x, k) => x === at.items[k]) ? loopTouched(at.el) : null;
-              const rows = touched && [...new Set([...(d.g === gen ? d.dirty : []), ...touched])].sort((a, b) => a - b);
+                d.c.every((x, k) => x === at.items[perm ? perm[k] : k]) ? loopTouched(at.el) : null;
+              const inv = perm && touched && touched.size ? invert(perm) : null;
+              const rows = touched && [...new Set([...(d.g === gen ? d.dirty : []), ...(inv ? [...touched].map((i) => inv[i]) : touched)])].sort((a, b) => a - b);
               out = out.slice(0, shape.at) + ' data-vk-loop="' + n + '"' + out.slice(shape.at);
               if (rows) rows.forEach((k) => { out += infos[k].h; });
               else infos.forEach((x) => { out += x.h; });
               if (rows) bind = bind || infos.some((x) => x.bind);
-              marks.push({ block: d, shape, scans, mask: scans.reduce((m, x) => m | x.mask, 0), rows, infos });
+              marks.push({ block: d, shape, scans, mask: scans.reduce((m, x) => m | x.mask, 0), rows, infos, perm: rows ? perm : null });
             }
           } else if (d.id !== undefined) out += html(d.id, seen);
           else out += fr(d);
