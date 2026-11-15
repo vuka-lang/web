@@ -33,8 +33,12 @@ type panelView struct {
 
 // summary is what the handle shows of a record.
 func summary(r tbRecord) map[string]any {
-	return map[string]any{"id": r.ID, "method": r.Method, "uri": r.URI, "status": r.Status, "ms": ms(r.Dur),
+	out := map[string]any{"id": r.ID, "method": r.Method, "uri": r.URI, "status": r.Status, "ms": ms(r.Dur),
 		"queries": len(r.Queries), "live": len(r.Live), "now": r.Now, "done": r.Done, "earlier": r.Earlier, "tone": worst(tones(r)...)}
+	if c := connOf(r.Conns); c.State != "" {
+		out["conn"], out["connText"], out["connTone"] = c.State, c.Text, c.Tone
+	}
+	return out
 }
 
 func tones(r tbRecord) []string {
@@ -91,6 +95,10 @@ func renderPanels(w io.Writer, r tbRecord, extra ...panelView) error {
 			tone = "err"
 		}
 		add("Live", count(len(r.Live)), tone, "live", lv)
+	}
+	if len(r.Conns) > 0 {
+		c := connOf(r.Conns)
+		add("Connection", c.State, c.Tone, "conn", c)
 	}
 	if len(r.GQLFields)+len(r.GQLBatches) > 0 {
 		g := graphqlOf(r)

@@ -44,6 +44,8 @@
   let current = pageID; // the record of the page on screen: a live navigation moves it
   let opened = pageID; // the record of the page the live connection opens from: a navigation over HTTP moves it
   const navRecords = new Map(); // URL → the record of a navigation over HTTP fetching it
+  const recovering = new Set(); // URLs fetched to recover from a closed connection
+  const recoveredFrom = new Map(); // a recovered page's record → the record and state of the page it recovered from
   let going = ""; // where a live navigation in flight goes
   let wtab = recall("wtab") || "summary";
   const wires = new Map(); // "record:seq" → a socket message's frames, drawn: they don't change once sent
@@ -85,7 +87,17 @@
     if (page.tone) handle.classList.add(page.tone);
     const n = calls.filter((c) => !c.page && !c.cron).length;
     stateEl.innerHTML = `<span class="num">${esc(page.ms)}</span><span class="sep">·</span><span class="num">${page.queries} q</span>` +
-      (n ? `<span class="calls" title="fetch and XHR calls">+${n}</span>` : "");
+      (n ? `<span class="calls" title="fetch and XHR calls">+${n}</span>` : "") + connState();
+  }
+
+  // connState is the live connection's state as the server recorded it: a
+  // dot while connected, else the state in words (disconnected, recovering,
+  // idle), the reason in its title.
+  function connState() {
+    if (!page.conn) return "";
+    const title = ` title="${esc(page.connText || page.conn)}"`;
+    if (page.conn === "connected") return `<span class="conn c-connected"${title} aria-label="connected"></span>`;
+    return `<span class="conn c-${esc(page.conn)}"${title}>${esc(page.conn)}</span>`;
   }
 
   function drawBuild() {
@@ -137,8 +149,14 @@
     body.innerHTML = r.html;
     mountIDE();
     if (id === current) { addBrowserErrors(); addStreamProblems(); addStates(); }
+    addRecovered(id);
     for (const d of body.querySelectorAll("details")) if (open.includes(d.dataset.seq || d.dataset.ref)) { d.open = true; wire(d); }
-    show(body.querySelector(`[data-tab="${CSS.escape(tab)}"]`) ? tab : "Request");
+    // A record without the tab chosen shows its Request panel, the choice
+    // kept for the next that has it (a page's Connection panel comes with
+    // its socket).
+    const want = tab, has = !!body.querySelector(`[data-tab="${CSS.escape(tab)}"]`);
+    show(has ? tab : "Request");
+    tab = want;
     const p = body.querySelector(".panel:not([hidden])");
     if (p) p.scrollTop = scroll;
   }
@@ -210,6 +228,16 @@
     try { v = JSON.parse(input.value); } catch { v = input.value; }
     st.set(input.getAttribute("data-key"), v);
   });
+
+  // addRecovered says, on a page that recovered in place, why the
+  // connection before it closed: that is on the record of the page it
+  // recovered from, which the note opens.
+  function addRecovered(id) {
+    const from = recoveredFrom.get(id), panel = body.querySelector('[data-panel="Connection"]');
+    if (!from || !panel) return;
+    panel.insertAdjacentHTML("afterbegin", `<p class="note recovered">This page recovered in place after its connection closed` +
+      (from.text ? `: ${esc(from.text)}` : "") + `. <button type="button" class="linkish record-open" data-id="${esc(from.id)}">The earlier record</button></p>`);
+  }
 
   // addBrowserErrors lists the live failures only the browser saw.
   function addBrowserErrors() {
@@ -307,6 +335,8 @@
           pick(r.id);
         });
     }
+    const rec = e.target.closest(".record-open");
+    if (rec) pick(rec.dataset.id);
     const open = e.target.closest(".cron-open");
     if (open) refreshCrons().then(() => pick(open.dataset.id));
     const c = e.target.closest(".copy");
@@ -320,10 +350,11 @@
   root.addEventListener("keydown", (e) => { if (e.key === "Escape") toggle(false); });
 
   // Each fetch and XHR call answered with a record joins the list.
-  function track(method, url, id, status, full) {
+  function track(method, url, id, status, full, recovery) {
     if (!id || calls.some((c) => c.id === id)) return;
     const u = new URL(url, location.href);
-    calls.push({ id, label: `${method.toUpperCase()} ${u.origin === location.origin ? u.pathname + u.search : u.href} → ${status}` + (full ? ` (full load: ${full})` : "") });
+    calls.push({ id, label: `${method.toUpperCase()} ${u.origin === location.origin ? u.pathname + u.search : u.href} → ${status}` +
+      (recovery ? " (recovery)" : "") + (full ? ` (full load: ${full})` : "") });
     drawSelect();
     drawHandle();
   }
@@ -334,10 +365,15 @@
     const method = (init && init.method) || (input instanceof Request ? input.method : "GET");
     const url = input instanceof Request ? input.url : String(input);
     const nav = !!(init && init.headers && init.headers["Vk-Navigate"]); // the runtime's navigation over HTTP
+    // A page fetched while its socket is connecting is the runtime
+    // recovering from a close asking it to load again (connecting itself
+    // fetches nothing).
+    const recovery = nav && document.documentElement.getAttribute("data-vk-state") === "connecting";
+    if (recovery) recovering.add(bare(url));
     if (!url.includes("/_vuka/")) p.then((r) => {
       const id = r.headers.get(header);
       if (nav && id) { navRecords.set(bare(url), id); if (r.url) navRecords.set(bare(r.url), id); }
-      track(method, url, id, r.status, nav && r.headers.get("Vk-Reload"));
+      track(method, url, id, r.status, nav && r.headers.get("Vk-Reload"), recovery);
     }, () => {});
     return p;
   };
@@ -372,6 +408,18 @@
     else if (!arriving) going = "";
     drawHandle();
   }).observe(html, { attributes: true, attributeFilter: ["data-vk-navigating"] });
+  // The live connection's state changes (connected, disconnected, idle):
+  // the server's record of it, its reason in words, follows.
+  let stateAt = null;
+  new MutationObserver(() => {
+    clearTimeout(stateAt);
+    stateAt = setTimeout(async () => {
+      const id = current;
+      const r = await get("r/" + encodeURIComponent(id)).catch(() => null);
+      if (r && !r.error && id === current) { page = r; drawHandle(); }
+      if (selected === current) reload();
+    }, 60);
+  }).observe(html, { attributes: true, attributeFilter: ["data-vk-state"] });
   // A navigation over HTTP is its fetch's record, which a live connection
   // the page then opens joins.
   window.addEventListener("vk:navigate", async (e) => {
@@ -385,7 +433,12 @@
       const r = await get("r/" + encodeURIComponent(opened)).catch(() => null);
       id = (r && !r.error && r.now) || current;
     }
-    const label = "page " + u.pathname + u.search;
+    const recovered = recovering.delete(bare(u.href));
+    const label = "page " + u.pathname + u.search + (recovered ? " (recovered)" : "");
+    if (recovered && id !== current) {
+      const was = await get("r/" + encodeURIComponent(current)).catch(() => null);
+      recoveredFrom.set(id, { id: current, text: was && !was.error ? was.connText : "" });
+    }
     const follow = selected === current;
     let c = calls.find((x) => x.id === id);
     if (!c) calls.push(c = { id, label, page: true }); else Object.assign(c, { label, page: true });

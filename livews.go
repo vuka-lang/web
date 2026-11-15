@@ -296,7 +296,10 @@ func (h *hub) closeAll() {
 	h.mu.Unlock()
 	var wg sync.WaitGroup
 	for _, c := range conns {
-		wg.Go(func() { c.ws.Close(websocket.StatusGoingAway, "the server is shutting down") })
+		wg.Go(func() {
+			c.noteClose(websocket.StatusGoingAway, "the server is shutting down", "the app is stopping")
+			c.ws.Close(websocket.StatusGoingAway, "the server is shutting down")
+		})
 	}
 	wg.Wait()
 }
@@ -386,6 +389,9 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		return // Accept answered: 403 for another origin
 	}
 	if terr != nil {
+		if a.tb != nil {
+			a.tb.refusedConn(r.URL.Query().Get("tb"), closeReload, terr.Error())
+		}
 		ws.Close(closeReload, terr.Error())
 		return
 	}
@@ -401,7 +407,9 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			c.wire = newWireMirror(c.instanceType)
 		}
 	}
+	c.noteOpen()
 	if !a.hub.add(c) {
+		c.noteClose(websocket.StatusGoingAway, "the server is shutting down", "the app is stopping")
 		ws.Close(websocket.StatusGoingAway, "the server is shutting down")
 		return
 	}
@@ -419,6 +427,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		for {
 			_, data, err := ws.Read(ctx)
 			if err != nil {
+				c.noteDrop(err)
 				return
 			}
 			select {
@@ -459,6 +468,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		case data := <-msgs:
 			active()
 			if c.ending.Load() {
+				c.noteClose(closeReload, "live: the page must load again", "CloseLive closed the page")
 				ws.Close(closeReload, "live: the page must load again")
 				return
 			}
@@ -478,8 +488,10 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			}
 		case <-deadline.C:
 			if c.s == nil {
+				c.noteClose(websocket.StatusPolicyViolation, "live: no join in time", "the socket sent no join within "+cmp.Or(a.hub.joinTimeout, defaultLiveJoinTimeout).String())
 				ws.Close(websocket.StatusPolicyViolation, "live: no join in time")
 			} else {
+				c.noteClose(closeIdle, "live: the page sat idle", "no message or broadcast for "+a.hub.idleTimeout.String()+" (LiveIdleTimeout)")
 				ws.Close(closeIdle, "live: the page sat idle")
 			}
 			return
@@ -492,6 +504,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		case <-c.wake:
 			active()
 			if c.ending.Load() {
+				c.noteClose(closeReload, "live: the page must load again", "CloseLive closed the page")
 				ws.Close(closeReload, "live: the page must load again")
 				return
 			}
@@ -502,7 +515,8 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			go func() {
 				pctx, done := context.WithTimeout(ctx, writeTimeout)
 				defer done()
-				if ws.Ping(pctx) != nil {
+				if err := ws.Ping(pctx); err != nil {
+					c.noteConn("drop", 0, "the browser stopped answering pings", err.Error())
 					cancel()
 				}
 			}()
@@ -530,7 +544,8 @@ func (c *conn) write(ctx context.Context, m any) {
 	}
 	wctx, done := context.WithTimeout(ctx, writeTimeout)
 	defer done()
-	if c.ws.Write(wctx, websocket.MessageText, b) != nil {
+	if err := c.ws.Write(wctx, websocket.MessageText, b); err != nil {
+		c.noteConn("drop", 0, "a write to the browser failed", err.Error())
 		c.ws.CloseNow()
 	}
 }
@@ -565,6 +580,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		c.syncTopics() // before the reply: a broadcast the client causes once joined reaches it
 		c.write(ctx, reply)
 		if code != 0 {
+			c.noteClose(code, cmp.Or(reply.(live.ServerMessage).Error, "redirected to "+reply.(live.ServerMessage).URL), "the join's run of the page's route")
 			c.ws.Close(code, reply.(live.ServerMessage).Error)
 			return false
 		}
@@ -616,9 +632,14 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 // page's variables (Auth): the page loads again, its route answering the
 // browser — a visitor signed out goes down the sign-in path.
 func (c *conn) varsRefused() bool {
-	if c.app.vars == nil || c.page == nil || refusedVars(c.page) == nil {
+	if c.app.vars == nil || c.page == nil {
 		return false
 	}
+	err := refusedVars(c.page)
+	if err == nil {
+		return false
+	}
+	c.noteClose(closeReload, "live: the page must load again", "a gate refused a read of the page's variables: "+err.Error())
 	c.ws.Close(closeReload, "live: the page must load again")
 	return true
 }
@@ -626,7 +647,8 @@ func (c *conn) varsRefused() bool {
 // check runs the app's LiveChecks with the page's context.
 func (c *conn) check() bool {
 	for _, f := range c.app.liveChecks {
-		if f(c.page) != nil {
+		if err := f(c.page); err != nil {
+			c.noteClose(closeReload, "live: the page must load again", "a LiveCheck refused the page: "+err.Error())
 			return false
 		}
 	}
@@ -827,11 +849,13 @@ func (c *conn) join(ctx context.Context, ref, v int, ext []string) (any, websock
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
-	if s := c.adopt(j, v, ext); s != nil {
+	s := c.adopt(j, v, ext)
+	if s != nil {
 		c.s = s
 	} else {
 		c.s = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax), ext...)
 	}
+	c.noteJoin(s != nil, min(v, c.app.liveMax))
 	if e, ok := c.s.(interface{ SetErrorText(func(error) string) }); ok {
 		e.SetErrorText(c.errorText)
 	}

@@ -282,3 +282,16 @@ pre.json { margin: 0; max-height: 50vh; overflow: auto; padding: 8px 10px; borde
 .states input.sv { font: inherit; width: 100%; min-width: 8rem; background: transparent; color: inherit; border: 1px solid var(--line, #8884); border-radius: 3px; padding: 1px 4px; }
 .states tr.flash td { animation: vk-flash 0.8s ease-out; }
 @keyframes vk-flash { from { background: #f5c24255; } to { background: transparent; } }
+
+.handle .conn { padding: 0 5px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); font-size: 11px; }
+.handle .conn.c-connected { width: 7px; height: 7px; padding: 0; border-radius: 50%; background: var(--accent); }
+.handle .conn.c-connecting, .handle .conn.c-idle, .handle .conn.c-moved { background: var(--bg3); color: var(--dim); }
+.cstate { padding: 0 6px; border-radius: 4px; background: var(--warn-bg); color: var(--warn); font-weight: 700; font-size: 10.5px; text-transform: uppercase; }
+.cstate.c-connected { background: var(--accent-bg); color: var(--accent); }
+.cstate.c-connecting, .cstate.c-idle, .cstate.c-moved { background: var(--bg3); color: var(--dim); }
+.conn-now { margin-bottom: 10px; }
+.conns td.num { width: 90px; }
+.conns .t-open, .conns .t-reconnect, .conns .t-join, .conns .t-rejoin, .conns .t-arrive { background: var(--accent-bg); color: var(--accent); }
+.conns .t-close { background: var(--warn-bg); color: var(--warn); }
+.conns .t-drop, .conns .t-refused { background: var(--err-bg); color: var(--err); }
+.conns .t-leave { background: #e3ecff; color: #2f5fd0; }
