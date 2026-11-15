@@ -52,7 +52,15 @@ func (c *conn) prefetch(ctx context.Context, m live.ClientMessage) {
 	if _, held := c.ahead[uri]; held || len(c.ahead) >= maxAheadNav {
 		return
 	}
+	// Run as the navigation that will use the page, the next one: the layouts
+	// the run loads are keyed by the navigation they are loaded on, and a
+	// navigation keeps the instances of a layout whose key it renders again.
+	// Run at the current count, a layout loaded fresh here would share its
+	// key with the one the current page loaded, and so keep that layout's
+	// components across a move that must mount them afresh.
+	c.navs++
 	j, _, err := c.run(ctx, uri, "navigate")
+	c.navs--
 	if err != nil || j.page == nil || j.root != c.root {
 		return // a redirect or another document: the click takes the normal path
 	}
@@ -78,7 +86,6 @@ func (c *conn) aheadTake(uri string) *join {
 	if a == nil || a.nav != c.navs-1 || time.Since(a.at) >= aheadTTL {
 		return nil
 	}
-	a.j.nav = c.navs // key the page to this navigation, as a fresh run would
 	c.aheadTB = a.tb // the toolbar shows the run that happened at hover
 	return a.j
 }

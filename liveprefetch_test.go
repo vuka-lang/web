@@ -1,7 +1,9 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -90,4 +92,47 @@ func reply(t testing.TB, c *websocket.Conn) string {
 	t.Helper()
 	b, _ := json.Marshal(must(t, c))
 	return string(b)
+}
+
+// pfDoc is a document layout every /pf/sec page shares: kept across them.
+type pfDoc struct{ Children ui.Node }
+
+func (l *pfDoc) Render(ctx context.Context, w io.Writer) error {
+	return ui.El("html", nil, ui.El("body", nil, l.Children)).Render(ctx, w)
+}
+
+// pfSec is a layout under it keyed by its path parameter, holding a live
+// component: another {sec} is another layout, its component mounting afresh.
+type pfSec struct {
+	Sec      int
+	Children ui.Node
+}
+
+func (l *pfSec) Render(ctx context.Context, w io.Writer) error {
+	return ui.El("section", nil, ui.Component("pf.sec", nil, &meter{}), l.Children).Render(ctx, w)
+}
+
+// A prefetched navigation keys the layouts it loads to the navigation that
+// uses it, as a fresh run does: moving from /pf/sec/1 to /pf/sec/2 keeps the
+// document but mounts the section layout's component afresh, whether or not
+// the link was hovered first.
+func TestLivePrefetchLayoutKeys(t *testing.T) {
+	app := New(Only("none"))
+	doc, sec := LayoutOf[pfDoc](), LayoutOf[pfSec]()
+	app.Live("/pf/sec/{sec}", func() *titledPage { return &titledPage{text: "page"} }, doc, sec)
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	for _, hover := range []bool{false, true} {
+		c, _ := joined(t, srv, "/pf/sec/1")
+		if hover {
+			send(t, c, map[string]any{"type": "prefetch", "url": "/pf/sec/2"})
+		}
+		before := meterMounts.Load()
+		send(t, c, map[string]any{"type": "navigate", "ref": 2, "url": "/pf/sec/2"})
+		reply(t, c)
+		if n := meterMounts.Load() - before; n != 1 {
+			t.Errorf("hovered %v: the section layout's component mounted %d times on the move to another section, want 1", hover, n)
+		}
+		c.CloseNow()
+	}
 }
