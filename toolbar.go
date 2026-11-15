@@ -308,6 +308,20 @@ func (e *tbEntry) partSpan(name, field string) func(error) {
 	}
 }
 
+// adoptRun folds a route run's record (route, handler, queries, spans, logs,
+// timing) into e, keeping e's own message identity (type, subject, frames).
+// A navigation served from a prefetch uses it: the run happened at hover under
+// src, so the navigate entry that stands for it carries the run's work.
+func (e *tbEntry) adoptRun(src *tbEntry) {
+	r := src.snapshot()
+	e.mu.Lock()
+	e.Route, e.Handler, e.Params = r.Route, r.Handler, r.Params
+	e.Queries, e.Spans, e.Logs, e.Notes, e.Dropped = r.Queries, r.Spans, r.Logs, r.Notes, r.Dropped
+	e.Facts, e.GQLFields, e.GQLBatches = r.Facts, r.GQLFields, r.GQLBatches
+	e.Start, e.Dur, e.Done = r.Start, r.Dur, true
+	e.mu.Unlock()
+}
+
 func (e *tbEntry) snapshot() tbRecord {
 	e.mu.Lock()
 	defer e.mu.Unlock()

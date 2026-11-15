@@ -4748,6 +4748,14 @@
   let aheadFlying = 0;
   const maxAhead = 3;
   const inPlace = (a) => !live && build && a.hasAttribute("data-vk-link") && !a.hasAttribute("data-vk-reload");
+  // overSocket: a ui.Link whose page the connection moves to (another page,
+  // not a patch of this one, not a forced reload) — warmed by asking the
+  // server to mount it ahead, not by an HTTP prefetch.
+  const overSocket = (a) => {
+    if (!live || !joined || !ws) return false;
+    const mode = a.getAttribute("data-vk-prefetch");
+    return a.getAttribute("data-vk-link") === "" && mode !== "off" && mode !== "false" && !a.hasAttribute("data-vk-reload");
+  };
   // fetchedAhead takes the reply fetched ahead for href, once.
   function fetchedAhead(href) {
     const e = navAhead.get(href);
@@ -4768,6 +4776,18 @@
     return u.href;
   }
   function prefetch(a) {
+    if (!a || !a.matches("a[href]") || a.hasAttribute("download") || /^(?!_self$)./.test(a.getAttribute("target") || "")) return;
+    if (navigator.connection && navigator.connection.saveData) return;
+    if (overSocket(a)) {
+      const u = httpURL(a.getAttribute("href"));
+      if (!u || u.origin !== location.origin) return;
+      const at = u.pathname + u.search;
+      if (at === here || Date.now() - (prefetched.get(at) || -Infinity) < 30000) return;
+      prefetched.set(at, Date.now());
+      ws.send(JSON.stringify({ type: "prefetch", url: at }));
+      setTimeout(() => prefetched.delete(at), 30000);
+      return;
+    }
     const href = prefetchable(a);
     if (!href || Date.now() - (prefetched.get(href) || -Infinity) < 30000) return;
     if (inPlace(a)) {

@@ -324,9 +324,11 @@ type conn struct {
 	loads []context.CancelFunc // end the deferred loads of the page joined or navigated to
 	vars  *varHistory          // the page's context processors' results, from one page to the next
 
-	layouts []heldLayout // the layouts the page renders in, loaded (loadLayouts)
-	navs    int          // navigations so far
-	slot    int          // the navigation the page below the layouts was rendered for (slotKey)
+	layouts []heldLayout         // the layouts the page renders in, loaded (loadLayouts)
+	navs    int                  // navigations so far
+	slot    int                  // the navigation the page below the layouts was rendered for (slotKey)
+	ahead   map[string]*aheadNav // pages mounted ahead of a click, by URL (liveprefetch.go)
+	aheadTB *tbEntry             // the toolbar record of a used prefetch's run, for navigated
 
 	mu     sync.Mutex
 	inbox  []delivery
@@ -573,14 +575,23 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		}
 		_, moved := reply.(withToken)
 		if moved && c.tb != nil {
-			// before the reply: the toolbar asks for the page once it lands
-			c.tb.navigated(c.tb.cur.Load(), c.uri, patch, c.r.Header)
+			// before the reply: the toolbar asks for the page once it lands.
+			// A prefetch ran the route at hover, so fold its record into this
+			// navigation's entry, which skipped the run but stands for the move.
+			cur := c.tb.cur.Load()
+			if c.aheadTB != nil && cur != nil {
+				cur.adoptRun(c.aheadTB)
+			}
+			c.tb.navigated(cur, c.uri, patch, c.r.Header)
 		}
+		c.aheadTB = nil
 		c.syncTopics()
 		c.write(ctx, reply)
 		if moved {
 			c.startDeferred(patch)
 		}
+	case m.Type == livePrefetch:
+		c.prefetch(ctx, m.ClientMessage)
 	default:
 		c.vars.newEvent()
 		reply := c.event(m.ClientMessage)
@@ -955,13 +966,17 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		return redirect(), false
 	}
 	c.navs++
-	j, rec, err := c.run(ctx, uri, "navigate")
-	if err != nil {
-		return redirect(), false
-	}
-	if j.page == nil {
-		load.URL = cmp.Or(c.prefixLoc(rec.location()), m.URL)
-		return redirect(), false
+	j := c.aheadTake(uri)
+	if j == nil {
+		run, rec, err := c.run(ctx, uri, "navigate")
+		if err != nil {
+			return redirect(), false
+		}
+		if run.page == nil {
+			load.URL = cmp.Or(c.prefixLoc(rec.location()), m.URL)
+			return redirect(), false
+		}
+		j = run
 	}
 	if j.root != c.root {
 		return redirect(), false // another document: the browser loads it
@@ -1194,6 +1209,8 @@ func (c *conn) record(m live.ClientMessage, data []byte) func() {
 		if m.Patch {
 			typ = "patch"
 		}
+	case livePrefetch:
+		subject = m.URL
 	default:
 		subject = m.Target
 		if h, ok := c.s.(interface{ Handler(string) any }); ok {
