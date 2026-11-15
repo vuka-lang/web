@@ -162,6 +162,31 @@ func (x native) Navigate(ref int, url string, rt live.Route, patch bool) (any, b
 	return m, true
 }
 
+// Ahead is a session that rendered a page ahead of a navigation
+// (live.Session.RenderAhead), for NavigateFrom to take what it mounted. A
+// render that fails closes it and returns the error.
+func Ahead(ctx context.Context, render Render) (*live.Session, error) {
+	s := live.NewSession(ctx, render)
+	if err := s.RenderAhead(); err != nil {
+		s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+// NavigateFrom is Navigate taking the instances ahead mounted instead of
+// mounting them again (live.Session.NavigateFrom). Ahead is closed when it
+// returns, whatever the outcome.
+func (x native) NavigateFrom(ref int, url string, rt live.Route, ahead *live.Session, patch bool) (any, bool) {
+	p, err := x.s.NavigateFrom(rt, ahead, patch)
+	if err != nil {
+		return live.ServerMessage{Type: live.Error, Ref: ref, Error: x.s.ErrorText(err)}, false
+	}
+	m := live.PatchMessage(ref, p)
+	m.URL = url
+	return m, true
+}
+
 func (x native) Info(topic string, msg any) any {
 	p, err := x.s.Info(topic, msg)
 	switch {

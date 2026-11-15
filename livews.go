@@ -408,6 +408,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	defer a.hub.remove(c)
 	defer bindConn(c)()
 	defer func() {
+		c.clearAhead()
 		if c.s != nil {
 			c.s.Close()
 		}
@@ -552,6 +553,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 	}
 	switch {
 	case m.Type == live.Join:
+		c.clearAhead() // made against the session the join replaces
 		if c.s != nil {
 			c.s.Close()
 			c.s = nil
@@ -970,8 +972,17 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		return redirect(), false
 	}
 	c.navs++
-	j := c.aheadTake(uri)
-	if j == nil {
+	var j *join
+	var ahead *live.Session // the page rendered at hover, its instances for the taking
+	if a := c.aheadTake(uri); a != nil {
+		j, ahead = a.j, a.s
+		a.s = nil
+		if a.vars != nil {
+			// the run and render read this copy of the history: it is the
+			// page's from here on, what they computed and showed with it
+			c.vars = a.vars
+		}
+	} else {
 		run, rec, err := c.run(ctx, uri, "navigate")
 		if err != nil {
 			return redirect(), false
@@ -983,9 +994,18 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		j = run
 	}
 	if j.root != c.root {
+		if ahead != nil {
+			ahead.Close()
+		}
 		return redirect(), false // another document: the browser loads it
 	}
 	patch := m.Patch && j.updates != nil
+	if ahead != nil && patch {
+		// a patch keeps the page's instances, and its slot, which the render
+		// ahead keyed the page below the layouts by: nothing there to take
+		ahead.Close()
+		ahead = nil
+	}
 	c.doing = "navigate " + uri
 	if !patch {
 		c.slot = c.navs // the page below the layouts mounts afresh
@@ -993,7 +1013,14 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	// the components of the layouts kept stay mounted when the document's
 	// is one of them
 	keep := len(j.layouts) > 0 && j.layouts[0].gen < c.navs
-	reply, ok := c.s.Navigate(m.Ref, uri, live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates, Keep: keep}, patch)
+	rt := live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates, Keep: keep}
+	var reply any
+	var ok bool
+	if nf, can := c.s.(aheadNavigator); can && ahead != nil {
+		reply, ok = nf.NavigateFrom(m.Ref, uri, rt, ahead, patch) // closes ahead
+	} else {
+		reply, ok = c.s.Navigate(m.Ref, uri, rt, patch)
+	}
 	if !ok {
 		c.layouts = nil
 		return reply, patch
@@ -1019,6 +1046,12 @@ func (c *conn) docTitle(page string) string {
 // rendered, nil when it answered something else (rec has its status and
 // headers).
 func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, error) {
+	return c.runIn(ctx, uri, why, nil)
+}
+
+// runIn is run reading and keeping the context processors' results in hist,
+// the connection's own history when nil.
+func (c *conn) runIn(ctx context.Context, uri, why string, hist *varHistory) (*join, *recorder, error) {
 	// The socket's runs don't pass through http.StripPrefix, so make the
 	// synthetic request mirror it under a mount prefix: route on the path with
 	// the prefix removed (routes are registered without it), but keep the
@@ -1042,13 +1075,16 @@ func (c *conn) run(ctx context.Context, uri, why string) (*join, *recorder, erro
 	j := &join{why: why, held: c.layouts, slot: &c.slot, nav: c.navs}
 	defer j.done.Store(true)
 	if c.app.vars != nil {
-		if c.vars == nil {
-			c.vars = newVarHistory()
+		if hist == nil {
+			if c.vars == nil {
+				c.vars = newVarHistory()
+			}
+			if why == "join" {
+				c.vars.joined(c.app.joinMessages.take(c.tok))
+			}
+			hist = c.vars
 		}
-		if why == "join" {
-			c.vars.joined(c.app.joinMessages.take(c.tok))
-		}
-		ctx = context.WithValue(ctx, histKey{}, c.vars)
+		ctx = context.WithValue(ctx, histKey{}, hist)
 	}
 	req := c.r.Clone(context.WithValue(ctx, joinKey{}, j))
 	req.Method, req.URL, req.RequestURI = http.MethodGet, u, full
@@ -1184,6 +1220,10 @@ func (c *conn) drain(ctx context.Context) bool {
 		return true
 	}
 	for _, d := range batch {
+		if e, ok := d.msg.(aheadExpired); ok {
+			c.expired(e)
+			continue
+		}
 		if l, ok := d.msg.(loaded); ok {
 			ds, _ := c.s.(deferredSession)
 			if ds == nil {
@@ -1205,6 +1245,7 @@ func (c *conn) drain(ctx context.Context) bool {
 			end()
 			continue
 		}
+		c.aheadHeard(d.topic)
 		c.doing = "broadcast " + cmp.Or(d.topic, `""`)
 		end := noop
 		if c.tb != nil {
@@ -1229,7 +1270,7 @@ func (c *conn) syncTopics() {
 	if c.s == nil {
 		return
 	}
-	ts := c.s.Topics()
+	ts := c.aheadTopics(c.s.Topics())
 	c.app.hub.mu.Lock()
 	same := slices.Equal(ts, c.topics)
 	c.app.hub.mu.Unlock()

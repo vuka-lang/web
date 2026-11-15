@@ -8,8 +8,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,6 +109,7 @@ func Flash(ctx context.Context, level, text string) error {
 		h.msgs = append(h.msgs, m)
 		h.msgVer++
 		h.shown = false
+		h.gen.Add(1)
 		h.mu.Unlock()
 		return nil
 	}
@@ -172,6 +175,7 @@ func (h *varHistory) joined(msgs []Message) {
 	h.mu.Lock()
 	h.msgs = append(msgs, h.msgs...)
 	h.msgVer++
+	h.gen.Add(1)
 	h.mu.Unlock()
 }
 
@@ -233,11 +237,48 @@ func (h *varHistory) newEvent() {
 		return
 	}
 	h.mu.Lock()
+	h.clearShown()
+	h.mu.Unlock()
+}
+
+// clearShown drops the messages once they were shown, as an event's start
+// does; the caller holds h.mu.
+func (h *varHistory) clearShown() {
 	if h.shown && len(h.msgs) > 0 {
 		h.msgs, h.shown = nil, false
 		h.msgVer++
+		h.gen.Add(1)
 	}
+}
+
+// fork is a copy of the history as the next event will find it (newEvent
+// applied), for a page rendered ahead of a navigation: what that render
+// computes and the messages it shows stay in the copy, which the navigation
+// adopts. It returns the generation h will have once that event starts, so
+// the navigation can tell that nothing changed h since (gen): a message
+// flashed or shown, a processor run, a RefreshVars.
+func (h *varHistory) fork() (*varHistory, uint64) {
+	h.mu.Lock()
+	want := h.gen.Load()
+	if h.shown && len(h.msgs) > 0 {
+		want++ // the event's start clears them
+	}
+	f := newVarHistory()
+	f.msgs, f.msgVer, f.shown = slices.Clone(h.msgs), h.msgVer, h.shown
+	entries := make(map[*varProc]*varEntry, len(h.entries))
+	maps.Copy(entries, h.entries)
 	h.mu.Unlock()
+	f.clearShown()
+	// Each entry is copied under its own lock, the history's released: a
+	// processor running holds its entry's while it reads others'.
+	for p, e := range entries {
+		e.mu.Lock()
+		if e.done {
+			f.entries[p] = &varEntry{done: true, val: e.val, err: e.err, ver: e.ver, inputs: e.inputs, personal: e.personal, stale: e.stale}
+		}
+		e.mu.Unlock()
+	}
+	return f, want
 }
 
 const messagesCookie = "vk_messages"

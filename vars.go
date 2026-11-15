@@ -406,6 +406,10 @@ type varHistory struct {
 	msgs    []Message
 	msgVer  uint64
 	shown   bool // the messages were read since the last event
+	// gen counts every change to the history: a processor run, a
+	// RefreshVars, a message added or cleared. A copy taken ahead of a
+	// navigation (fork) is good only while it hasn't moved.
+	gen atomic.Uint64
 }
 
 func newVarHistory() *varHistory { return &varHistory{entries: map[*varProc]*varEntry{}} }
@@ -577,6 +581,9 @@ func (st *varStore) value(ctx context.Context, p *varProc) (reflect.Value, uint6
 		e.ver = varVersions.Add(1)
 	}
 	e.val, e.err, e.inputs, e.personal, e.done, e.stale = val, err, inputs, run.person, true, false
+	if st.hist != nil {
+		st.hist.gen.Add(1)
+	}
 	return e.val, e.ver, e, e.err
 }
 
