@@ -34,7 +34,7 @@
     state("connecting");
     ws = new WebSocket(url + encodeURIComponent(token) + (toolbar ? "&tb=" + toolbar : ""));
     ws.onopen = join;
-    ws.onmessage = (e) => receive(JSON.parse(e.data));
+    ws.onmessage = (e) => incoming(JSON.parse(e.data));
     ws.onclose = (e) => {
       ws = null;
       joined = false;
@@ -80,6 +80,15 @@
       return fail(reason || "live: the page can't reconnect");
     }
     location.reload();
+  }
+
+  // incoming receives a message from the socket: a navigation's reply that
+  // moves to another page through withTransition, the rest as they come,
+  // after any a transition holds.
+  function incoming(m) {
+    if (transiting) return transiting.push(m);
+    if (m.type === "patch" && !m.error && nav && m.ref === nav.ref && !nav.patch) return withTransition(() => receive(m));
+    receive(m);
   }
 
   function receive(m) {
@@ -4442,8 +4451,36 @@
         req = fetched(key, false, reload);
         n.abort = req.abort;
       }
-      req.then((r) => { if (nav === n) landed(n, r, fail); }, (err) => fail(null, "network", err && err.message || "the fetch failed"));
+      req.then((r) => {
+        if (nav === n) n.patch ? landed(n, r, fail) : withTransition(() => { if (nav === n) landed(n, r, fail); });
+      }, (err) => fail(null, "network", err && err.message || "the fetch failed"));
     });
+  }
+
+  // withTransition runs fn, a navigation's move to another page, inside
+  // document.startViewTransition when the app opts in (data-vk-transitions
+  // on <html>): the browser crossfades the old page into the new one, and
+  // elements given the same CSS view-transition-name on both morph from
+  // one to the other, with no script of their own. Without the API, or
+  // when the visitor asks for reduced motion, fn runs now, as it always
+  // has. The browser calls fn a frame later, once it has captured the old
+  // page, so the socket's messages arriving meanwhile are held and
+  // received after fn, in order; fn itself (the apply, then scroll and
+  // focus) runs whole and synchronously in the callback.
+  let transiting = null; // the socket's messages a transition holds
+  function withTransition(fn) {
+    if (transiting || typeof document.startViewTransition !== "function" || !document.documentElement.hasAttribute("data-vk-transitions") ||
+      typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return fn();
+    transiting = [];
+    let ran = false;
+    const run = () => {
+      if (ran) return;
+      ran = true;
+      const q = transiting;
+      transiting = null;
+      try { fn(); } finally { q.forEach(incoming); }
+    };
+    try { document.startViewTransition(run); } catch (_) { run(); }
   }
 
   // landed applies a navigation's reply over HTTP, or loads the URL.
