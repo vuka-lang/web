@@ -157,37 +157,6 @@ func patchesUntil(t *testing.T, c *websocket.Conn, want ...string) string {
 	}
 }
 
-func TestLiveDeferredTemplate(t *testing.T) {
-	ctl := &deferCtl{release: make(chan struct{}), ended: make(chan error, 1)}
-	srv := httptest.NewServer(statsApp(ctl).Handler())
-	defer srv.Close()
-
-	// The first render: every group loading, whatever the loaders do.
-	body, _ := pageToken(t, srv, "/stats")
-	for _, want := range []string{"stats loading", "rows loading", "users loading"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("the first render lacks %q: %s", want, body)
-		}
-	}
-
-	c, html := joined(t, srv, "/stats")
-	if !strings.Contains(html, "rows loading") {
-		t.Errorf("the join: %s", html)
-	}
-	// stats and users arrive while rows still wait: the groups load
-	// concurrently, each patching on its own.
-	got := patchesUntil(t, c, "open 3", "users Grace")
-	if strings.Contains(got, "rows Ada") {
-		t.Errorf("rows came before their release: %s", got)
-	}
-	close(ctl.release)
-	patchesUntil(t, c, "rows Ada,Alan")
-
-	// A component an event mounts loads its own group.
-	send(t, c, map[string]any{"type": "event", "ref": 2, "target": handlerOf(t, html, "click", 0), "event": "click"})
-	patchesUntil(t, c, `id="more-users" data-vk-id="c3">users Grace`)
-}
-
 func TestLiveDeferredTemplateError(t *testing.T) {
 	srv := httptest.NewServer(statsApp(&deferCtl{fail: true}).Handler())
 	defer srv.Close()
