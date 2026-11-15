@@ -49,14 +49,7 @@
       ws = null;
       joined = false;
       if (nav) return load(nav.href, nav.pop || nav.replace); // the page it was going to, the long way
-      pending.forEach((p) => clearTimeout(p.timer));
-      pending.clear();
-      busy.forEach((b) => { release(b.el); if (b.held) b.held(); });
-      busy.clear();
-      edgeRefs.forEach((_, r) => edgeReplied(r)); // no reply comes
-      [...preds.keys()].forEach((r) => settle(r, true)); // no reply comes
-      replies.forEach((w) => w.reject(new Error("live: the connection closed")));
-      replies.clear();
+      connLost();
       if (e.code === 4001) return reload(e.reason);
       if (e.code === 4002) return idle();
       if (e.code === 4004 || e.code === 1000) return state("closed");
@@ -64,6 +57,48 @@
       timer = setTimeout(connect, Math.min(10000, 250 * 2 ** attempt++) * (0.5 + Math.random()));
     };
   }
+
+  // connLost ends what waited on the connection: no reply comes.
+  function connLost() {
+    pending.forEach((p) => clearTimeout(p.timer));
+    pending.clear();
+    busy.forEach((b) => { release(b.el); if (b.held) b.held(); });
+    busy.clear();
+    edgeRefs.forEach((_, r) => edgeReplied(r));
+    [...preds.keys()].forEach((r) => settle(r, true));
+    replies.forEach((w) => w.reject(new Error("live: the connection closed")));
+    replies.clear();
+  }
+
+  // The back/forward cache keeps no page with an open connection, so the
+  // connection closes as the page is hidden — its handlers taken off first,
+  // so the close is no lost connection to retry, and a navigation in flight
+  // ends. A page shown again from the cache connects again at once, as a
+  // reconnect: its token joins a fresh session, or (expired) is closed with
+  // 4001 and the page recovers in place. One that wasn't connecting (closed
+  // for good, or never live) stays as it was.
+  let thaw = false;
+  window.addEventListener("pagehide", () => {
+    clearTimeout(timer);
+    const st = document.documentElement.getAttribute("data-vk-state");
+    thaw = live && (!!ws || st === "disconnected" || st === "connecting" || st === "idle");
+    if (!ws) return;
+    const s = ws;
+    s.onopen = s.onmessage = s.onclose = null;
+    try { s.close(1000); } catch (_) {}
+    ws = null;
+    joined = false;
+    supersede();
+    connLost();
+    state("connecting");
+  });
+  window.addEventListener("pageshow", (e) => {
+    if (!e.persisted || !thaw || ws) return;
+    thaw = false;
+    sleeping = false;
+    attempt = 0;
+    connect();
+  });
 
   // join asks for the page in protocol v2 (render trees); a server that
   // doesn't speak it answers in v1 (HTML).
@@ -577,11 +612,26 @@
     }
     return false;
   }
-  window.addEventListener("beforeunload", (e) => {
+  // The browser's own prompt listens only while a form asks for it (or a
+  // field of one is edited): a beforeunload listener keeps a page out of
+  // some browsers' back/forward cache.
+  const onLeave = (e) => {
     if (leaving || !unsaved()) return;
     e.preventDefault();
     e.returnValue = "";
-  });
+  };
+  let guarding = false;
+  function guardLeave(on) {
+    if (on === guarding) return;
+    guarding = on;
+    window[on ? "addEventListener" : "removeEventListener"]("beforeunload", onLeave);
+  }
+  const leaveForms = () => { if (document.querySelector) guardLeave(!!document.querySelector("form[data-vk-confirm-leave]")); };
+  document.addEventListener("vk:patched", leaveForms);
+  const leaveField = (e) => { if (!guarding && e.target instanceof Element && e.target.closest("form[data-vk-confirm-leave]")) guardLeave(true); };
+  document.addEventListener("input", leaveField, true);
+  document.addEventListener("change", leaveField, true);
+  leaveForms();
   window.addEventListener("pageshow", () => { leaving = false; });
   document.addEventListener("submit", (e) => { if (!e.defaultPrevented) leaving = true; }); // a form posting: the page goes on purpose
 
