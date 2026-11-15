@@ -156,7 +156,8 @@
         outOfStep = false;
         if (n && !n.patch) { removed.length = 0; seenAsked.clear(); } // another page
         if (m.ref && !m.error) confirmRemoved(m.ref); // the push succeeded: what the server renders is the page's
-        for (const u of ups) if (!done.some((el) => el && el.isConnected && inside(el, byID(u.id)))) done.push(apply(u));
+        const applyAll = () => { for (const u of ups) if (!done.some((el) => el && el.isConnected && inside(el, byID(u.id)))) done.push(apply(u)); };
+        n && !n.patch ? toPage(applyAll) : applyAll();
         keepRemoved(done);
         if (outOfStep && !n) { // a batch was lost: start over
           fail("live: a stream is out of step with the server");
@@ -1176,6 +1177,7 @@
     placed.add(el);
     if (el.tagName !== next.tagName) return el.replaceWith(place(document.importNode(whole(next), true)));
     if (el.hasAttribute("data-vk-ignore") && el.id && el.id === next.id) return;
+    if (keptOnce(el, next)) return;
     // An island host owns its children (the client-mounted component). Update
     // its attributes — a changed data-vk-props drives the island's update() —
     // but never morph into its subtree.
@@ -1216,6 +1218,20 @@
     } else if (fresh || serverValue(el) !== before || heldServer.has(el)) takeServer(el);
     if (!typing) unhold(el);
   }
+  // A value shown once (ui.ShowOnce) stays as the browser has it while the
+  // page renders its place with no value, or with the one it shows; another
+  // value replaces it. A move to another page (leavingPage) takes it off.
+  const keptOnce = (el, next) => {
+    if (leavingPage || !el.id || el.id !== next.id || !el.hasAttribute("data-vk-once") || !next.hasAttribute("data-vk-once")) return false;
+    const k = next.getAttribute("data-vk-once");
+    return !k || k === el.getAttribute("data-vk-once");
+  };
+  let leavingPage = false;
+  const toPage = (fn) => {
+    const was = leavingPage;
+    leavingPage = true;
+    try { return fn(); } finally { leavingPage = was; }
+  };
   const unhold = (el) => { heldServer.delete(el); heldEls.delete(el); };
   const heldServer = new WeakSet(); // fields whose server value changed while their event was unanswered
 
@@ -4358,6 +4374,7 @@
     const b = document.body, c = b.cloneNode(true), from = Array.from(b.childNodes), to = Array.from(c.childNodes);
     from.forEach((n, i) => { if (foreign.has(n)) to[i].remove(); }); // what the page's scripts and the runtime put in the body (the overlay host) aren't the page's
     for (const x of Array.from(c.querySelectorAll("[data-vk-overlays]"))) x.remove();
+    for (const x of Array.from(c.querySelectorAll("[data-vk-once]"))) { x.textContent = ""; x.setAttribute("data-vk-once", ""); } // a value shown once isn't kept past the page
     const html = c.innerHTML;
     shots.delete(here);
     if (html.length > 1 << 20) return; // a page that large isn't worth holding
@@ -4375,7 +4392,7 @@
   }
   function showShot(s, pop) {
     if (!s) return;
-    try { page(s.html); } catch (_) { return; } // the navigation goes on; it just has nothing to show first
+    try { toPage(() => page(s.html)); } catch (_) { return; } // the navigation goes on; it just has nothing to show first
     document.title = s.title;
     document.documentElement.setAttribute("data-vk-preview", "");
     if (pop && typeof scrollTo === "function") scrollTo(pop.y != null ? pop.x || 0 : s.x, pop.y != null ? pop.y : s.y);
@@ -4612,7 +4629,7 @@
     toolbar = h("X-Vuka-Toolbar") || toolbar;
     for (const o of Array.from(frames.values())) closeFrame(o.el); // the page they were opened on leaves
     if (!n.patch) removed.length = 0; // another page
-    try { page(r.html); } catch (err) { console.error("vuka: live: " + err.message); return fail(n.href, "patch", err.message); }
+    try { n.patch ? page(r.html) : toPage(() => page(r.html)); } catch (err) { console.error("vuka: live: " + err.message); return fail(n.href, "patch", err.message); }
     keepRemoved([document.body]);
     arrived(n, {});
     loadParts(h("Vk-Parts-Token"));
