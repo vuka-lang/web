@@ -124,6 +124,18 @@ func (x native) SetErrorText(text func(error) string) { x.s.SetErrorText(text) }
 // islands (live.Session.Deferred).
 func (x native) Deferred() []*ui.DeferredLoad { return x.s.Deferred() }
 
+// DeferredSeen starts the deferred groups loading when seen that groups
+// names (live.Session.DeferredSeen), when this Vuka's session has them;
+// nil otherwise.
+func (x native) DeferredSeen(groups []string) []*ui.DeferredLoad {
+	if s, ok := any(x.s).(interface {
+		DeferredSeen([]string) []*ui.DeferredLoad
+	}); ok {
+		return s.DeferredSeen(groups)
+	}
+	return nil
+}
+
 // Loaded is what a deferred load changed (live.Session.Loaded); nil when
 // nothing.
 func (x native) Loaded(d *ui.DeferredLoad) any {

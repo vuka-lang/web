@@ -540,6 +540,8 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		live.ClientMessage
 		V   int      `json:"v,omitempty"`   // the newest protocol version the page speaks (a join's)
 		Ext []string `json:"ext,omitempty"` // and the v2 extensions it speaks: "stream"
+		// loads: the deferred groups whose fallbacks the browser saw
+		Groups []string `json:"groups,omitempty"`
 	}
 	if err := json.Unmarshal(data, &m); err != nil {
 		c.write(ctx, live.ServerMessage{Type: live.Error, Error: "live: bad message"})
@@ -592,6 +594,8 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		}
 	case m.Type == livePrefetch:
 		c.prefetch(ctx, m.ClientMessage)
+	case m.Type == liveLoads:
+		c.startSeen(m.Groups)
 	default:
 		c.vars.newEvent()
 		reply := c.event(m.ClientMessage)
@@ -1096,6 +1100,24 @@ type deferredSession interface {
 	Loaded(d *ui.DeferredLoad) any
 }
 
+// seenSession is a session whose deferred groups may load once their
+// fallbacks are seen (live.Session.DeferredSeen).
+type seenSession interface {
+	DeferredSeen(groups []string) []*ui.DeferredLoad
+}
+
+// liveLoads is the client message naming the deferred groups loading when
+// seen (ui.Defer.WhenSeen) whose fallbacks scrolled into view, as
+// {"type":"loads","groups":["comments"]}. The runtime sends it once per
+// group per page; nothing is sent back but the groups' patches as they
+// load. A group the page doesn't defer that way, or one started already,
+// is ignored, so a repeat or a made-up name costs nothing.
+const liveLoads = "loads"
+
+// maxSeenGroups caps the groups one loads message may name: the server's
+// backstop against a client naming more than a page could render.
+const maxSeenGroups = 64
+
 // loaded is a deferred load done, waiting in the inbox to be applied.
 type loaded struct{ d *ui.DeferredLoad }
 
@@ -1116,7 +1138,26 @@ func (c *conn) startDeferred(kept bool) {
 		}
 		c.loads = nil
 	}
-	loads := ds.Deferred()
+	c.runLoads(ds.Deferred())
+}
+
+// startSeen starts the loads of the groups the browser saw the fallbacks
+// of, as startDeferred does the others: on the page's context, ended with
+// them when the page is left.
+func (c *conn) startSeen(groups []string) {
+	ss, ok := c.s.(seenSession)
+	if !ok || len(groups) == 0 {
+		return
+	}
+	if len(groups) > maxSeenGroups {
+		groups = groups[:maxSeenGroups]
+	}
+	c.runLoads(ss.DeferredSeen(groups))
+}
+
+// runLoads runs loads, each on its own goroutine with the page's context;
+// each, done, waits in the inbox to be applied as a broadcast is.
+func (c *conn) runLoads(loads []*ui.DeferredLoad) {
 	if len(loads) == 0 {
 		return
 	}
@@ -1211,6 +1252,12 @@ func (c *conn) record(m live.ClientMessage, data []byte) func() {
 		}
 	case livePrefetch:
 		subject = m.URL
+	case liveLoads:
+		var g struct {
+			Groups []string `json:"groups"`
+		}
+		json.Unmarshal(data, &g)
+		subject = strings.Join(g.Groups, ", ")
 	default:
 		subject = m.Target
 		if h, ok := c.s.(interface{ Handler(string) any }); ok {
