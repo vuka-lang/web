@@ -71,15 +71,35 @@
     sleeping = true;
   }
 
-  // reload fetches the page again for a fresh token, at most once in 10s.
+  // reload fetches the page again for a fresh token: in place first
+  // (recover), else the document — each at most once in 10s, the page
+  // failing when the document loaded again in that time comes to it too.
   function reload(reason) {
-    let last = 0;
-    try { last = +sessionStorage.getItem("vk-reload") || 0; sessionStorage.setItem("vk-reload", Date.now()); } catch (_) {}
-    if (Date.now() - last < 10000) {
+    const now = Date.now();
+    const last = (k) => { try { return +sessionStorage.getItem(k) || 0; } catch (_) { return 0; } };
+    const stamp = (k) => { try { sessionStorage.setItem(k, now); } catch (_) {} };
+    if (now - last("vk-reload") < 10000) {
       state("closed");
       return fail(reason || "live: the page can't reconnect");
     }
+    if (build && typeof fetch === "function" && now - last("vk-recover") >= 10000) {
+      stamp("vk-recover");
+      return recover();
+    }
+    stamp("vk-reload");
     location.reload();
+  }
+
+  // recover loads the page again in place, as the reload command does: its
+  // own URL fetched over HTTP (fetchGo, no-cache, the entry and scroll
+  // kept), the body patched and the fresh token its reply carries joined.
+  // The patch follows the morph's rules as any does — a form's unsaved
+  // changes fare as in any patch. A reply that can't be patched, or isn't
+  // a live page, loads the document (landed).
+  function recover() {
+    state("connecting");
+    const u = httpURL(location.href);
+    fetchGo(u, u.pathname + u.search, true, null, true, true, true).catch(() => {});
   }
 
   function receive(m) {
@@ -4421,13 +4441,13 @@
     bindIn(p, html);
     emit("vk:part", { id });
   }
-  function fetchGo(u, at, patch, pop, replace, reload) {
+  function fetchGo(u, at, patch, pop, replace, reload, recover) {
     const again = !!(pop || replace);
     if (!pop) save();
     supersede();
     const key = u.href.replace(/#.*$/, "");
     return new Promise((resolve, reject) => {
-      const n = nav = { href: u.href, patch, pop, replace, reload, resolve, reject };
+      const n = nav = { href: u.href, patch, pop, replace, reload, recover, resolve, reject };
       const fail = (to, why, detail) => {
         if (nav !== n) return;
         clearTimeout(n.timer);
@@ -4455,6 +4475,7 @@
     if (h("Vk-Reload")) return fail(moved, h("Vk-Reload"), h("Vk-Reload-Detail"));
     if (!/^text\/html/i.test(h("Content-Type")) || !h("Vk-Page")) return fail(moved, "not a page", "the reply is " + res.status + " " + (h("Content-Type") || "with no Content-Type") + (h("Vk-Page") ? "" : ", not a page the app rendered"));
     if (h("Vk-Page") !== root) return fail(moved, "another root layout", (res.status >= 400 ? "the " + res.status + " error page" : "the page") + " is under " + (h("Vk-Page") === "-" ? "no root layout" : "root layout " + h("Vk-Page")) + ", this one under " + (root === "-" ? "none" : root));
+    if (n.recover && !h("Vk-Live")) return fail(moved, "not live", "the page recovering from a closed connection came back without one");
     if (moved) n.href = moved;
     toolbar = h("X-Vuka-Toolbar") || toolbar;
     for (const o of Array.from(frames.values())) closeFrame(o.el); // the page they were opened on leaves

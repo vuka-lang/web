@@ -550,8 +550,10 @@ func browserReconnect(t *testing.T, v int) {
 	p.Click("button")
 	p.WaitText("span", "n=6")
 
-	time.Sleep(3100 * time.Millisecond) // the token (whole seconds) expires: reconnecting reloads the page
+	time.Sleep(3100 * time.Millisecond) // the token (whole seconds) expires: reconnecting loads the page again, in place
 	dropConnections(app)
-	p.Wait(`window.marker === undefined && document.documentElement.dataset.vkState === "connected"`)
 	p.WaitText("span", "n=5")
+	p.Wait(`window.marker === 1 && document.documentElement.dataset.vkState === "connected"`)
+	p.Click("button")
+	p.WaitText("span", "n=6") // the fresh token's session answers
 }
