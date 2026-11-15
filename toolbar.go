@@ -55,6 +55,7 @@ const (
 
 	toolbarKeep    = 100  // requests kept
 	toolbarLive    = 200  // socket messages kept per page
+	toolbarConns   = 100  // live connection events kept per page
 	toolbarMaxRows = 1000 // statements, spans, log records and notes kept per request
 )
 
@@ -151,6 +152,9 @@ type tbRecord struct {
 	// FramesDropped says a socket message's frames were dropped, the
 	// page's record keeping the latest messages' (wirePageMax).
 	FramesDropped bool
+	// Conns is the life of the page's live connections: opens, joins,
+	// closes (toolbar_conn.go).
+	Conns []tbConn
 	// Now is the record of the page a live connection opened from this
 	// page shows now, after navigating over the socket; "" when it hasn't.
 	Now string
@@ -330,7 +334,7 @@ func (e *tbEntry) snapshot() tbRecord {
 	r.Logs, r.Notes, r.Live = slices.Clone(r.Logs), slices.Clone(r.Notes), slices.Clone(r.Live)
 	r.Facts = slices.Clone(r.Facts)
 	r.GQLFields, r.GQLBatches = slices.Clone(r.GQLFields), slices.Clone(r.GQLBatches)
-	r.Frames = slices.Clone(r.Frames)
+	r.Frames, r.Conns = slices.Clone(r.Frames), slices.Clone(r.Conns)
 	r.Encoding, r.Body, r.Wire = e.wire.get()
 	if !r.Done {
 		r.Dur = time.Since(r.Start)
@@ -347,6 +351,11 @@ type tbSink struct {
 
 	origin *tbEntry            // the page the connection was opened by
 	shown  map[string]*tbEntry // the connection's pages, by URI
+
+	conn  int                     // the connection's number, for its events (toolbar_conn.go)
+	at    atomic.Pointer[tbEntry] // page, for the events noted on other goroutines
+	ended atomic.Bool             // a close or drop is noted: what follows from it isn't
+	joins int                     // the joins the connection answered
 }
 
 type tbKey struct{}
@@ -928,6 +937,8 @@ func (tb *toolbar) liveSink(id, uri string) *tbSink {
 		s.shown[p.URI] = p
 		p.mu.Unlock()
 	}
+	s.conn = int(tbConnSeq.Add(1))
+	s.at.Store(s.page)
 	return s
 }
 
@@ -1018,8 +1029,10 @@ func (s *tbSink) navigated(m *tbEntry, uri string, patch bool, h http.Header) {
 		}
 		old.mu.Unlock()
 		p.addLive(m)
+		s.moved(old, p, uri)
 	}
 	s.page = p
+	s.at.Store(p)
 	s.origin.mu.Lock()
 	s.origin.Now = p.ID
 	s.origin.mu.Unlock()

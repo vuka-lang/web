@@ -69,6 +69,16 @@
 	</details>{{end}}
 </div>{{end}}
 
+{{define "conn"}}<div class="line conn-now">
+	<span class="cstate c-{{.State}}">{{.State}}</span> since {{.Since}} <span class="dim">· {{.Conns}} connection{{if ne .Conns 1}}s{{end}}</span>
+</div>
+<table class="grid conns">
+	<tr><th class="num">Time</th><th class="n">#</th><th>Event</th></tr>
+	{{- range .Rows}}<tr class="{{.Tone}}" data-conn-kind="{{.Kind}}"><td class="num dim">{{.Clock}}</td><td class="n dim">#{{.Conn}}</td>
+		<td><span class="type t-{{.Kind}}">{{.Label}}</span>{{if .Code}} <code class="code">{{.Code}}</code>{{end}} {{.Text}}{{if .Detail}}<div class="args">{{.Detail}}</div>{{end}}</td></tr>{{end}}
+</table>
+<p class="foot">The latest first; a page keeps its latest 100 events.</p>{{end}}
+
 {{define "wire"}}<nav class="wtabs" role="tablist">
 	<button type="button" role="tab" class="wtab" data-wtab="summary">Summary</button>
 	<button type="button" role="tab" class="wtab" data-wtab="diff">Diff{{if .Changes}} <span class="count">{{.Changes}}</span>{{end}}</button>
