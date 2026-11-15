@@ -531,17 +531,25 @@ func (a *App) page(rq *request, n ui.Node) {
 	// A GET page's deferred parts (ui.Part) render their fallbacks, each
 	// method starting as the render meets it; the page is sent whole, its
 	// parts parked for the runtime's request for them once it has loaded
-	// (handoff). Without the hand-off (HEAD, PartsWindow(0))
-	// no method runs: the runtime's request renders the page again
-	// (parts.go).
+	// (handoff) — or, to a browser loading the page as its document
+	// through a writer that flushes, written into the page's own response
+	// as each is ready (streamParts). Without the hand-off (HEAD,
+	// PartsWindow(0)) no method runs: the runtime's request renders the
+	// page again (parts.go).
 	pctx, parts := rq.ctx, (*ui.Parts)(nil)
 	pending := pendingParts(rq.ctx)
 	want := partsWanted(r)
 	handoff := want == nil && r.Method == http.MethodGet && !pending && a.partsWindow > 0
+	stream := handoff && streamable(w, r)
 	parked, cancelParts := false, context.CancelFunc(func() {})
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && (pending || !testing.Testing() || streamInTests) {
 		base := rq.ctx
-		if handoff {
+		switch {
+		case stream:
+			// The parts end with the response: the visitor going away, or
+			// the window running out, cancels them.
+			base, cancelParts = context.WithTimeout(rq.ctx, a.partsWindow)
+		case handoff:
 			// The parts outlive the page's response: its values, not its
 			// cancellation.
 			base, cancelParts = context.WithCancel(context.WithoutCancel(rq.ctx))
@@ -610,7 +618,12 @@ func (a *App) page(rq *request, n ui.Node) {
 	var partsTok string
 	if deferred {
 		varyParts(w.Header())
-		if handoff {
+		if stream {
+			w.Header().Set("X-Accel-Buffering", "no")
+			if w.Header().Get("Cache-Control") == "" {
+				w.Header().Set("Cache-Control", "private") // the page names its visitor's parts
+			}
+		} else if handoff {
 			partsTok = a.parkParts(rq, parts, cancelParts)
 			parked = true
 			w.Header().Set(partsTokenHeader, partsTok) // a navigation's: the runtime asks for the parts with it
@@ -674,6 +687,10 @@ func (a *App) page(rq *request, n ui.Node) {
 		w.Header().Set("Cache-Control", "private, max-age="+strconv.Itoa(int(prefetchWindow/time.Second)))
 	}
 	if nav && token == "" && partsTok == "" && etagged(w, r, html, []byte(head), []byte(script)) {
+		return
+	}
+	if deferred && stream {
+		writeStreamed(w, html, head, script, parts)
 		return
 	}
 	writePage(w, html, head, script)

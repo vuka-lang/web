@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -259,4 +260,201 @@ func (a *App) observePart(ctx context.Context, name string) (context.Context, fu
 	}
 	field := "part " + name
 	return StatementOrigin(ctx, "", field), e.partSpan(name, field)
+}
+
+// A page's parts in its own response. To a browser loading the page as its
+// document (Sec-Fetch-Dest: document or iframe; not a navigation's fetch,
+// a prefetch or a request for parts) through a writer that flushes, with
+// no Content-Security-Policy refusing inline scripts, the page is sent up
+// to the runtime's script tag and flushed, the response kept open: each
+// part, as its method returns (a group's together, in the order the page
+// met them), is written as a <template data-vk-part="id"> and a one-line
+// script moving it into place (partsMover, defined once at the top of the
+// stream), and flushed. The runtime's tag and the rest of the page follow
+// the last part, so the runtime — a deferred script — runs once every
+// streamed part is in place: it finds no mark of theirs, and asks for
+// none. The parts' methods run with the request's cancellation, for at
+// most PartsWindow; a part still running then keeps its fallback and its
+// mark, and the runtime asks for it as for a page whose parts' token has
+// expired. The page's first complete paint needs no request after it.
+//
+// A shell shorter than streamPartsPad's padding gets the padding (a
+// comment in the mover's script) so proxies that hold a response until
+// some bytes arrive pass the shell on; X-Accel-Buffering: no asks nginx
+// not to buffer it. Without a writer that flushes, to a HEAD, a fetch, or
+// a client that doesn't say it loads a document, the page goes whole and
+// its parts are parked for the runtime's request, as above.
+
+// streamable reports whether the parts of r's page go in its response.
+func streamable(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodGet || navigation(r) || prefetching(r) {
+		return false
+	}
+	if d := r.Header.Get("Sec-Fetch-Dest"); d != "document" && d != "iframe" {
+		return false
+	}
+	return canFlush(w) && inlineScripts(w.Header())
+}
+
+// canFlush reports whether w, or the writer it wraps, sends what was
+// written so far when flushed.
+func canFlush(w http.ResponseWriter) bool {
+	for {
+		if u, ok := w.(interface{ Unwrap() http.ResponseWriter }); ok {
+			w = u.Unwrap()
+			continue
+		}
+		switch w.(type) {
+		case http.Flusher, interface{ FlushError() error }:
+			return true
+		}
+		return false
+	}
+}
+
+// inlineScripts reports whether a page with header h may run inline
+// scripts: it has no Content-Security-Policy, or one whose script policy
+// allows them.
+func inlineScripts(h http.Header) bool {
+	for _, policy := range h.Values("Content-Security-Policy") {
+		dirs := map[string][]string{}
+		for _, d := range strings.Split(policy, ";") {
+			if f := strings.Fields(strings.ToLower(d)); len(f) > 0 {
+				if _, ok := dirs[f[0]]; !ok {
+					dirs[f[0]] = f[1:]
+				}
+			}
+		}
+		srcs, ok := dirs["script-src-elem"]
+		if !ok {
+			srcs, ok = dirs["script-src"]
+		}
+		if !ok {
+			srcs, ok = dirs["default-src"]
+		}
+		if !ok {
+			continue
+		}
+		inline := false
+		for _, s := range srcs {
+			switch {
+			case s == "'unsafe-inline'":
+				inline = true
+			case strings.HasPrefix(s, "'nonce-"), strings.HasPrefix(s, "'sha"), s == "'strict-dynamic'":
+				return false // 'unsafe-inline' is ignored beside them
+			}
+		}
+		if !inline {
+			return false
+		}
+	}
+	return true
+}
+
+// partsMover defines the function the stream calls to move a part into the
+// place its marks hold for it: the template's content replaces what lies
+// between <!--vk-part:id--> and <!--/vk-part:id-->, the template and the
+// calling script are removed, and vk:part fires, as the runtime's own move
+// does. It needs no runtime: the runtime's script hasn't run yet.
+const partsMover = `<script>window.__vkS=function(i){var d=document,c=d.currentScript,t=d.querySelector('template[data-vk-part="'+i+'"]'),w=d.createTreeWalker(d.body,128),s=null,n,x;while(n=w.nextNode())if(n.data==="vk-part:"+i){s=n;break}if(t&&s){var p=s.parentNode;for(n=s.nextSibling;n&&!(n.nodeType===8&&n.data==="/vk-part:"+i);n=x){x=n.nextSibling;p.removeChild(n)}p.insertBefore(t.content,s);p.removeChild(s);if(n)p.removeChild(n);d.dispatchEvent(new CustomEvent("vk:part",{detail:{id:i}}))}if(t)t.parentNode.removeChild(t);if(c)c.parentNode.removeChild(c)};`
+
+// streamPartsPad is how many bytes the page's first flush has at least.
+const streamPartsPad = 2048
+
+// writeStreamed writes the page (html, with head and the runtime's script
+// tag as writePage puts them) with its parts in its response: the page up
+// to the script tag, then each part as it is ready, then the rest.
+func writeStreamed(w http.ResponseWriter, html []byte, head, script string, parts *ui.Parts) {
+	var page bytes.Buffer
+	writePage(&page, html, head, script)
+	b := page.Bytes()
+	at := bytes.LastIndex(b, []byte(script))
+	if at < 0 {
+		at = len(b)
+	}
+	rc := http.NewResponseController(w)
+	flush := func() error {
+		if err := rc.Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			return err
+		}
+		return nil
+	}
+	w.Write(b[:at])
+	io.WriteString(w, partsMover)
+	if at < streamPartsPad {
+		io.WriteString(w, "/*"+strings.Repeat(" ", streamPartsPad)+"*/")
+	}
+	io.WriteString(w, `(function(s){s.parentNode.removeChild(s)})(document.currentScript)</script>`)
+	if flush() != nil {
+		return
+	}
+	mv := &moverWriter{w: w}
+	if err := parts.StreamParts(mv, flush); err != nil && !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		return // the visitor went away
+	}
+	mv.end()
+	w.Write(b[at:])
+}
+
+// moverWriter turns the parts StreamParts writes — each a template ended
+// by <!--vk-parts:id--> for the runtime — into templates each followed by
+// the call of partsMover's function moving it into place.
+type moverWriter struct {
+	w    io.Writer
+	held []byte // after the last whole part
+}
+
+var partEnd = []byte("</template><!--vk-parts:")
+
+func (m *moverWriter) Write(b []byte) (int, error) {
+	m.held = append(m.held, b...)
+	var out bytes.Buffer
+	for {
+		i := bytes.Index(m.held, partEnd)
+		if i < 0 {
+			break
+		}
+		rest := m.held[i+len(partEnd):]
+		j := bytes.Index(rest, []byte("-->"))
+		if j < 0 {
+			break
+		}
+		id := rest[:j]
+		out.Write(m.held[:i])
+		out.WriteString("</template>")
+		if partID(id) {
+			out.WriteString(`<script>__vkS("` + string(id) + `")</script>`)
+		}
+		m.held = rest[j+3:]
+	}
+	if out.Len() > 0 {
+		if _, err := m.w.Write(out.Bytes()); err != nil {
+			return 0, err
+		}
+	}
+	m.held = append([]byte(nil), m.held...)
+	return len(b), nil
+}
+
+// end writes what follows the last whole part: nothing, as StreamParts
+// writes whole parts.
+func (m *moverWriter) end() {
+	if len(m.held) > 0 {
+		m.w.Write(m.held)
+		m.held = nil
+	}
+}
+
+// partID reports whether id is a part's id as ui names them: letters,
+// digits, '.', '-' and '_'.
+func partID(id []byte) bool {
+	if len(id) == 0 {
+		return false
+	}
+	for _, c := range id {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
 }
