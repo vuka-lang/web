@@ -4266,12 +4266,62 @@
     return u.protocol === "http:" || u.protocol === "https:" ? u : null;
   }
   function load(href, replace) {
+    unpreview();
     const u = httpURL(href);
     if (!u) return fail("live: refused to load a URL that isn't http or https");
     if (u.hash && u.href === location.href) return location.reload(); // assigning it would only scroll to the #hash
     replace ? location.replace(u.href) : location.assign(u.href);
   }
   const save = () => history.replaceState({ ...history.state, x: scrollX, y: scrollY }, "");
+
+  // Snapshots: the page a navigation leaves in place is kept as it looks
+  // (its body's markup, title and scroll), by URL, the last 10. Going back
+  // or forward to one shows it at once, data-vk-preview on <html>, while
+  // the server renders the page; the render morphs in over it as any
+  // navigation's does. <html data-vk-snapshots> shows them on every
+  // navigation; data-vk-no-snapshot on <html> or <body> keeps none. A page
+  // with a stream isn't kept: its rows are the runtime's, by batch, and a
+  // copy of them would be taken for the server's. The preview is only
+  // what the visitor sees first: the connection, its token and the
+  // navigation go on as they would without it.
+  const shots = new Map();
+  const noShots = () => document.documentElement.hasAttribute("data-vk-no-snapshot") || document.body.hasAttribute("data-vk-no-snapshot");
+  function keepShot() {
+    if (!document.body || noShots() || document.documentElement.hasAttribute("data-vk-preview") || document.body.querySelector("[data-vk-stream]")) return;
+    const b = document.body, c = b.cloneNode(true), from = Array.from(b.childNodes), to = Array.from(c.childNodes);
+    from.forEach((n, i) => { if (foreign.has(n)) to[i].remove(); }); // what the page's scripts and the runtime put in the body (the overlay host) aren't the page's
+    for (const x of Array.from(c.querySelectorAll("[data-vk-overlays]"))) x.remove();
+    const html = c.innerHTML;
+    shots.delete(here);
+    if (html.length > 1 << 20) return; // a page that large isn't worth holding
+    shots.set(here, { html, title: document.title, x: scrollX, y: scrollY });
+    if (shots.size > 10) shots.delete(shots.keys().next().value);
+  }
+  // shotFor is the snapshot a navigation to at shows, or null.
+  function shotFor(at, patch, pop, reload) {
+    if (patch || reload || at === here || !(pop || document.documentElement.hasAttribute("data-vk-snapshots")) || noShots()) return null;
+    const s = shots.get(at);
+    if (!s) return null;
+    shots.delete(at);
+    shots.set(at, s);
+    return s;
+  }
+  function showShot(s, pop) {
+    if (!s) return;
+    try { page(s.html); } catch (_) { return; } // the navigation goes on; it just has nothing to show first
+    document.title = s.title;
+    document.documentElement.setAttribute("data-vk-preview", "");
+    if (pop && typeof scrollTo === "function") scrollTo(pop.y != null ? pop.x || 0 : s.x, pop.y != null ? pop.y : s.y);
+  }
+  function unpreview() { document.documentElement.removeAttribute("data-vk-preview"); }
+  // A form in a snapshot is the page as it was, its fields and tokens a
+  // render the server no longer has: a submit while it shows is dropped,
+  // the fresh render a moment away.
+  window.addEventListener("submit", (e) => {
+    if (!document.documentElement.hasAttribute("data-vk-preview")) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
 
   // go moves the page to href; pop is the history state back or forward
   // brought, the address being href already; replace takes the place of
@@ -4301,10 +4351,17 @@
     }
     manual();
     stopParts();
-    if (!live) return fetchGo(u, at, patch, pop, replace, reload);
+    keepShot();
+    const shot = shotFor(at, patch, pop, reload);
+    if (!live) {
+      const p = fetchGo(u, at, patch, pop, replace, reload);
+      showShot(shot, pop); // once the entry's scroll is saved
+      return p;
+    }
     if (!pop) save();
     flush();
     supersede();
+    showShot(shot, pop);
     return new Promise((resolve, reject) => {
       nav = { ref: ++ref, href: u.href, patch, pop, replace, reload, resolve, reject, timer: setTimeout(() => load(u.href, again), 10000) };
       document.documentElement.setAttribute("data-vk-navigating", at); // where to, for the development toolbar
@@ -4517,6 +4574,7 @@
     nav = null;
     clearTimeout(n.timer);
     document.documentElement.removeAttribute("data-vk-navigating");
+    unpreview();
     if (m.token) token = m.token;
     if (typeof m.title === "string" && m.title) document.title = m.title;
     const u = new URL(n.href);
