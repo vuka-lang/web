@@ -154,7 +154,7 @@
         }
         const done = [];
         outOfStep = false;
-        if (n && !n.patch) removed.length = 0; // another page
+        if (n && !n.patch) { removed.length = 0; seenAsked.clear(); } // another page
         if (m.ref && !m.error) confirmRemoved(m.ref); // the push succeeded: what the server renders is the page's
         for (const u of ups) if (!done.some((el) => el && el.isConnected && inside(el, byID(u.id)))) done.push(apply(u));
         keepRemoved(done);
@@ -4986,6 +4986,39 @@
   }));
   const watchViewport = () => { if (inView && document.querySelectorAll) document.querySelectorAll('a[data-vk-prefetch="viewport"]').forEach((a) => inView.observe(a)); };
   document.addEventListener("vk:patched", watchViewport);
+
+  // Seen: the fallback of a deferred group loading when seen (data-vk-seen,
+  // ui.Defer("x").WhenSeen()) asks the server for its group once it nears
+  // the viewport, with a loads message; the group's patch replaces it. Each
+  // group is asked for once per page, the set starting over on a join (a
+  // fresh session, which has started none) and on a move to another page.
+  // A fallback seen while the page can't send — disconnected, or on its way
+  // to another page — is looked at again on the next patch or join. Without
+  // IntersectionObserver every fallback asks at once, so the groups load as
+  // the eager ones do rather than never.
+  const seenAsked = new Set();
+  function askSeen(names) {
+    if (!live || !joined || !ws || nav) return false;
+    const groups = [...new Set(names)].filter((g) => g && !seenAsked.has(g));
+    if (!groups.length) return true;
+    groups.forEach((g) => seenAsked.add(g));
+    ws.send(JSON.stringify({ type: "loads", groups }));
+    return true;
+  }
+  const seenIO = typeof IntersectionObserver === "function" ? new IntersectionObserver((es) => {
+    const seen = es.filter((e) => e.isIntersecting).map((e) => e.target);
+    seen.forEach((el) => seenIO.unobserve(el)); // asked, or looked at again on the next patch
+    if (seen.length) askSeen(seen.map((el) => el.getAttribute("data-vk-seen")));
+  }, { rootMargin: "200px" }) : null;
+  function watchSeen(e) {
+    if (e && e.detail && e.detail.join) seenAsked.clear();
+    if (!document.querySelectorAll) return;
+    const els = Array.from(document.querySelectorAll("[data-vk-seen]")).filter((el) => !seenAsked.has(el.getAttribute("data-vk-seen")));
+    if (!els.length) return;
+    if (!seenIO) return void askSeen(els.map((el) => el.getAttribute("data-vk-seen")));
+    els.forEach((el) => seenIO.observe(el));
+  }
+  document.addEventListener("vk:patched", watchSeen);
 
   window.vuka = { connect, tree, register, push, emit: emitIsland, states, navigate, run: (el, ops, e) => run(el, ops, e || null), state: () => document.documentElement.getAttribute("data-vk-state") };
   if (watch) {
