@@ -145,3 +145,73 @@ func TestBrowserReloadRegion(t *testing.T) {
 		})
 	}
 }
+
+type invoicesChanged struct{ reload bool }
+
+// watchedDB is what watchedTable lists: read from a package variable, so
+// the table has no props, and with no state of its own, is skipped by the
+// page's renders until something renders its region.
+var watchedDB = &invoiceDB{}
+
+// watchedInvoices is a page whose watcher, a component beside its table,
+// hears of new invoices by a broadcast. With reload the watcher's Update
+// has the table's region render again.
+type watchedInvoices struct{ ui.Live }
+
+func (p *watchedInvoices) Render() ui.Node {
+	return ui.El("main", nil, ui.El("input", []ui.Attr{attr("id", "q")}),
+		ui.Component("invoices.watcher", nil, &invoiceWatcher{}),
+		ui.Component("invoices.table", nil, &watchedTable{}))
+}
+
+type invoiceWatcher struct{ ui.Live }
+
+func (w *invoiceWatcher) LiveSchema(l *ui.LiveSchema) { l.Mount(w.mount) }
+func (w *invoiceWatcher) mount(context.Context) error { w.Subscribe("invoices"); return nil }
+func (w *invoiceWatcher) Update(m invoicesChanged) {
+	if m.reload {
+		w.PushJS(ui.JS.Reload("#invoices"))
+	}
+}
+func (w *invoiceWatcher) Render() ui.Node { return ui.El("span", nil) }
+
+type watchedTable struct{ ui.Live }
+
+func (t *watchedTable) Delete(id int)   { watchedDB.delete(id) }
+func (t *watchedTable) Render() ui.Node { return invoiceTable(watchedDB.list(), t.Delete) }
+
+// TestBrowserReloadRegionFromServer: a handler on the server (here a
+// broadcast's Update, with no event from the browser) re-renders one region
+// of the page, which the page's renders otherwise skip, by pushing
+// Reload("#id"): the region shows the rows added since, and what the
+// visitor typed elsewhere stays.
+func TestBrowserReloadRegionFromServer(t *testing.T) {
+	defer func(v bool) { live.Verify = v }(live.Verify)
+	live.Verify = false // the table reads the database
+	watchedDB.ids = []int{1}
+	a := New(Only("none"))
+	a.Live("/watched", func() *watchedInvoices { return &watchedInvoices{} })
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	p := chrome.Launch(t).Open(srv.URL + "/watched")
+	p.Eval(`document.querySelector("#q").value = "overdue"`, nil)
+	watchedDB.add(2)
+
+	if err := a.Broadcast(context.Background(), "invoices", invoicesChanged{}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	var n int
+	if p.Eval(`document.querySelectorAll("#invoices tr").length`, &n); n != 1 {
+		t.Fatalf("a broadcast without the reload rendered the region: %d rows", n)
+	}
+
+	if err := a.Broadcast(context.Background(), "invoices", invoicesChanged{reload: true}); err != nil {
+		t.Fatal(err)
+	}
+	p.Wait(`document.querySelectorAll("#invoices tr").length === 2`)
+	var q string
+	if p.Eval(`document.querySelector("#q").value`, &q); q != "overdue" {
+		t.Errorf("the field beside the region after its reload: %q", q)
+	}
+}
