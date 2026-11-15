@@ -1,11 +1,39 @@
-// Package viewtest helps test pages: it gives pages that read template
-// variables the values a test chooses instead of what the app's context
-// processors (web.ContextProcessors) compute, and sets how a page's
-// deferred parts render.
+// Package viewtest tests an app's pages from Go, as visitors use them.
 //
-// In a test binary a page's deferred parts (@ui.Defer, ui.Part) render in
-// place: the test reads the page whole, as it is once every part has
-// arrived. Pending renders the page as it first shows instead.
+// Three handles drive a page the app serves, each on a test server of its
+// own, closed as the test ends:
+//
+//   - Open drives a page over its live connection without a browser: it
+//     sends what the runtime would — clicks, filled fields, submits,
+//     navigations, hovers' prefetches, loads when seen — and reads the
+//     page as the server's messages leave it. Fast; needs nothing
+//     installed.
+//
+//   - Browse drives it in a headless Chrome, the real runtime running:
+//     for JS commands, islands, hooks and whatever the browser itself
+//     does. EventStream runs it with no WebSocket.
+//
+//   - Mount drives a page's struct form (<ui.Form for>) field by field,
+//     its fields named by pointers into the page's type, live or as a
+//     browser without script posts it (Plain).
+//
+// A test of a page of todos:
+//
+//	p := viewtest.Open(t, app, "/todos")
+//	p.Fill("title", "Buy milk").Click("Add")
+//	p.Expect("#todos li").Text("Buy milk")
+//
+// Expect re-checks until the page shows what it should — a reply, a
+// deferred group's patch, a broadcast arriving — failing with what it
+// showed last once Timeout passes. To test as a signed-in user, build the
+// app with auth/authtest's As.
+//
+// It also gives pages that read template variables the values a test
+// chooses instead of what the app's context processors
+// (web.ContextProcessors) compute, and sets how a page's deferred parts
+// render: in a test binary a page's deferred parts (@ui.Defer, ui.Part)
+// render in place, the test reading the page whole, as it is once every
+// part has arrived; Pending renders the page as it first shows instead.
 package viewtest
 
 import (

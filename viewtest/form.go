@@ -1,7 +1,6 @@
 package viewtest
 
 import (
-	"context"
 	"encoding/json"
 	"html"
 	"io"
@@ -15,9 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/coder/websocket"
 	"github.com/vuka-lang/ui/v2"
 	"github.com/vuka-lang/ui/v2/live"
 	"github.com/vuka-lang/web/v2"
@@ -74,10 +71,10 @@ type pageState struct {
 	html string
 }
 
-// Option configures Mount.
+// Option configures how Mount or Browse drives a page.
 type Option func(*options)
 
-type options struct{ plain bool }
+type options struct{ plain, stream bool }
 
 // Plain drives the page as a browser without script does: its form posts
 // to the page on submit, the page answering 422 with the errors or 303.
@@ -90,6 +87,9 @@ func Mount[T any](t testing.TB, app *web.App, path string, opts ...Option) *Page
 	var o options
 	for _, f := range opts {
 		f(&o)
+	}
+	if o.stream {
+		t.Fatalf("viewtest: EventStream applies to Browse, not Mount")
 	}
 	p := &Page[T]{t: t, path: path}
 	if rt := reflect.TypeFor[T](); rt.Kind() == reflect.Pointer {
@@ -325,10 +325,7 @@ func (t *plainPost) event(st *pageState, typ string, v url.Values) (string, stri
 func (t *plainPost) close() {}
 
 // liveConn is the transport of a page with script: its connection.
-type liveConn struct {
-	c   *websocket.Conn
-	ref int
-}
+type liveConn struct{ c *conn }
 
 var tokenAttr = regexp.MustCompile(`data-vk-token="([^"]+)"`)
 
@@ -338,49 +335,15 @@ func joinLive(t testing.TB, srv *httptest.Server, client *http.Client, page stri
 	if m == nil {
 		t.Fatalf("viewtest: the page isn't live (no join token)")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	u, _ := url.Parse(srv.URL)
-	h := http.Header{"Origin": {srv.URL}}
-	for _, c := range client.Jar.Cookies(u) {
-		h.Add("Cookie", c.Name+"="+c.Value)
-	}
-	c, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/_vuka/live?t="+url.QueryEscape(html.UnescapeString(m[1])), &websocket.DialOptions{HTTPHeader: h})
+	c, err := dialLive(srv.URL, client.Jar, m[1])
 	if err != nil {
 		t.Fatalf("viewtest: connecting the page: %v", err)
 	}
-	c.SetReadLimit(-1)
-	lc := &liveConn{c: c}
-	msg := lc.roundTrip(t, live.ClientMessage{Type: live.Join})
-	if msg.Type != live.Render {
-		t.Fatalf("viewtest: join: %s %s", msg.Type, msg.Error)
+	msg, err := c.roundTrip(live.ClientMessage{Type: live.Join})
+	if err != nil || msg.Type != live.Render {
+		t.Fatalf("viewtest: join: %s %s %v", msg.Type, msg.Error, err)
 	}
-	return lc, msg.HTML
-}
-
-func (l *liveConn) roundTrip(t testing.TB, m live.ClientMessage) live.ServerMessage {
-	t.Helper()
-	l.ref++
-	m.Ref = l.ref
-	b, _ := json.Marshal(m)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := l.c.Write(ctx, websocket.MessageText, b); err != nil {
-		t.Fatalf("viewtest: %v", err)
-	}
-	for {
-		_, data, err := l.c.Read(ctx)
-		if err != nil {
-			t.Fatalf("viewtest: %v", err)
-		}
-		var reply live.ServerMessage
-		if err := json.Unmarshal(data, &reply); err != nil {
-			t.Fatalf("viewtest: %v", err)
-		}
-		if reply.Ref == m.Ref {
-			return reply
-		}
-	}
+	return &liveConn{c}, msg.HTML
 }
 
 var (
@@ -398,7 +361,10 @@ func (l *liveConn) event(st *pageState, typ string, v url.Values) (string, strin
 		}
 		return st.html, "" // a form checking only on submit
 	}
-	reply := l.roundTrip(st.t, live.ClientMessage{Type: live.EventMsg, Event: ui.Event{Target: m[1], Type: typ, Form: v}})
+	reply, err := l.c.roundTrip(live.ClientMessage{Type: live.EventMsg, Event: ui.Event{Target: m[1], Type: typ, Form: v}})
+	if err != nil {
+		st.t.Fatalf("viewtest: %s: %v", typ, err)
+	}
 	switch {
 	case reply.Type == live.Error:
 		st.t.Fatalf("viewtest: %s: %s", typ, reply.Error)
@@ -407,10 +373,7 @@ func (l *liveConn) event(st *pageState, typ string, v url.Values) (string, strin
 	case reply.Error != "":
 		st.t.Errorf("viewtest: %s: %s", typ, reply.Error)
 	}
-	page := st.html
-	for _, u := range reply.Updates {
-		page = replaceInstance(page, u.ID, u.HTML)
-	}
+	page, _ := l.c.state()
 	js, _ := json.Marshal(reply.JS)
 	if n := navigate.FindSubmatch(js); n != nil {
 		var href string
@@ -420,7 +383,7 @@ func (l *liveConn) event(st *pageState, typ string, v url.Values) (string, strin
 	return page, ""
 }
 
-func (l *liveConn) close() { l.c.CloseNow() }
+func (l *liveConn) close() { l.c.close() }
 
 // replaceInstance is page with the element of instance id (its data-vk-id)
 // replaced by html; c0 is the whole page.

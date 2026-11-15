@@ -4,14 +4,12 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
 
 	"github.com/vuka-lang/ui/v2"
-	"github.com/vuka-lang/web/v2/internal/chrome"
 )
 
 // navFrame is the browser test's root layout: a header with a search field
@@ -49,16 +47,15 @@ func islandAssets(t *testing.T) {
 	t.Setenv(AssetsEnv, dir)
 }
 
-// In-place navigation over HTTP in Chrome: a page that isn't live moves to
-// another in place, the layout's elements, its field's focus and what was
-// typed kept, the islands of the page it leaves unmounted and the new
-// page's mounted; back fetches again; a live page reached joins without
-// mounting twice. The document is never loaded again.
-func TestBrowserNavigationOverHTTP(t *testing.T) {
+// navHTTPApp is the app of the test of in-place navigation over HTTP
+// (TestBrowserNavigationOverHTTP): pages /h/a, /h/b and /h/c that aren't
+// live, each with an island, and a live one, /h/live, in one layout; navs
+// counts the navigations fetched. The app stops as the test ends.
+func navHTTPApp(t *testing.T) (app *App, navs *atomic.Int32) {
 	islandAssets(t)
 	meterMounts.Store(0)
-	var navs atomic.Int32
-	app := New(Only("none"), NoTailwind())
+	navs = new(atomic.Int32)
+	app = New(Only("none"), NoTailwind())
 	app.Use(func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Header.Get(NavigateHeader) != "" {
@@ -77,49 +74,6 @@ func TestBrowserNavigationOverHTTP(t *testing.T) {
 	app.Get("/h/b", island("Ticker", "b"), frame)
 	app.Get("/h/c", island("Clock", "c"), frame)
 	app.Live("/h/live", &meter{}, frame)
-	srv := httptest.NewServer(app.Handler())
-	defer srv.Close()
-	defer app.Stop(context.Background()) // ends the assets' event stream
-
-	p := chrome.Launch(t).Visit(srv.URL + "/h/a")
-	p.Wait(`(window.mounts || []).join() === "Clock a"`)
-	p.Eval(`window.__doc = 1; document.querySelector("header").__mark = 7; true`, nil)
-	p.Type("#q", "typed")
-
-	// A patch link's move, the field focused: focus and typing stay.
-	p.Eval(`window.vuka.navigate("/h/b", { patch: true }); true`, nil)
-	p.Wait(`location.pathname === "/h/b" && document.querySelector("#at").textContent === "b"`)
-	p.Wait(`window.mounts.join() === "Clock a,Ticker b" && window.unmounts.join() === "Clock a"`)
-	kept := `window.__doc === 1 && document.querySelector("header").__mark === 7 && document.querySelector("#q").value === "typed"`
-	var ok bool
-	p.Eval(kept+` && document.activeElement.id === "q" && history.scrollRestoration === "manual"`, &ok)
-	if !ok {
-		t.Fatal("the patch didn't keep the layout, the field's focus and what was typed")
-	}
-
-	// A link: the next page's island mounts where the last one's was.
-	p.Click("#to-c")
-	p.Wait(`location.pathname === "/h/c" && window.mounts.join() === "Clock a,Ticker b,Clock c" && window.unmounts.join() === "Clock a,Ticker b"`)
-	p.Eval(kept+` && document.activeElement.tagName === "MAIN"`, &ok)
-	if !ok {
-		t.Fatal("the navigation didn't keep the layout, or focus didn't move to main")
-	}
-
-	// Back: fetched again, its island mounted again.
-	p.Eval(`history.back(); true`, nil)
-	p.Wait(`location.pathname === "/h/b" && window.mounts.join() === "Clock a,Ticker b,Clock c,Ticker b"`)
-
-	// A live page: it joins, Mount having run once.
-	p.Click("#to-live")
-	p.Wait(`document.documentElement.getAttribute("data-vk-state") === "connected"`)
-	p.WaitText("main span", "m1 n0")
-	p.Click("main button")
-	p.WaitText("main span", "m1 n1")
-	p.Eval(kept, &ok)
-	if !ok {
-		t.Fatal("the live page's arrival loaded the document")
-	}
-	if n := navs.Load(); n != 4 {
-		t.Errorf("%d navigations fetched, want 4", n)
-	}
+	t.Cleanup(func() { app.Stop(context.Background()) }) // ends the assets' event stream
+	return app, navs
 }
