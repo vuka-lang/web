@@ -95,7 +95,7 @@ func (a *App) panicResponse(w *trackingWriter, r *http.Request, err error, html 
 
 // recoverSocket runs before the connection context is canceled, so a live
 // render/guard panic can close the socket cleanly. A failed session is discarded.
-func (a *App) recoverSocket(ws *websocket.Conn, r *http.Request) {
+func (a *App) recoverSocket(ws liveTransport, r *http.Request) {
 	if p := recover(); p != nil {
 		if p == http.ErrAbortHandler {
 			panic(p)
