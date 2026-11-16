@@ -647,7 +647,7 @@ func (a *App) compileNodePage(s *routeSpec, t reflect.Type) (http.Handler, error
 		}
 		end()
 		if err != nil {
-			a.writeError(w, r, err, true)
+			a.writeError(w, r, a.devErr(err, s), true)
 			return
 		}
 		a.page(rq, page)

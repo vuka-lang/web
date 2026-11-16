@@ -285,7 +285,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		}
 		if err != nil {
 			end()
-			a.writeError(w, r, err, true)
+			a.writeError(w, r, a.devErr(err, s), true)
 			return
 		}
 		comp := c.Interface().(ui.Stateful)
@@ -293,7 +293,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 			pv := reflect.New(params.typ)
 			if err := a.bindProps(pv.Elem(), paramProps, pathNames, r); err != nil {
 				end()
-				a.writeError(w, r, err, true)
+				a.writeError(w, r, a.devErr(err, s), true)
 				return
 			}
 			if !params.ptr {
@@ -313,7 +313,7 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 		loaded, err := a.loadLayouts(rq, layouts, pathNames)
 		if err != nil {
 			end()
-			a.writeError(w, r, err, true)
+			a.writeError(w, r, a.devErr(err, s), true)
 			return
 		}
 		if framed(layouts) {
@@ -513,7 +513,7 @@ func (a *App) page(rq *request, n ui.Node) {
 		if n != nil {
 			defer a.span(rq.ctx, "render", "page")()
 			if err := render(rq.ctx, n, buf); err != nil {
-				a.writeError(w, r, err, true)
+				a.writeError(w, r, a.devErr(err, rq.route), true)
 				return
 			}
 		}
@@ -606,7 +606,7 @@ func (a *App) page(rq *request, n ui.Node) {
 		if s != nil {
 			s.Close()
 		}
-		a.writeError(w, r, err, true)
+		a.writeError(w, r, a.devErr(err, rq.route), true)
 		return
 	}
 	live := s != nil && pageLive(html)

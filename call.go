@@ -77,7 +77,7 @@ func (a *App) callOpen(w http.ResponseWriter, r *http.Request, s *routeSpec, gua
 		comp, err = c.Value(nil)
 	}
 	if err != nil {
-		a.callError(w, r, err)
+		a.callError(w, r, a.devErr(err, s))
 		return
 	}
 	defer a.span(rq.ctx, "render", c.Component())()
@@ -123,6 +123,10 @@ func (a *App) publicError(err error) *ui.IslandError {
 
 // callError answers an open that failed before its component rendered.
 func (a *App) callError(w http.ResponseWriter, r *http.Request, err error) {
+	var dev *devError
+	if d, ok := err.(*devError); ok {
+		dev, err = d, d.err
+	}
 	var to Redirect
 	if errors.As(err, &to) {
 		writeJSON(w, http.StatusOK, map[string]any{"redirect": string(to)})
@@ -130,7 +134,11 @@ func (a *App) callError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	e := a.publicError(err)
 	if e.Status >= 500 {
-		log.Printf("web: %d %s %s call: %v", e.Status, r.Method, r.URL.Path, err)
+		if a.dev && dev != nil {
+			log.Print(dev.devLog(e.Status, r.Method, r.URL.RequestURI(), " call", err))
+		} else {
+			log.Printf("web: %d %s %s call: %v", e.Status, r.Method, r.URL.Path, err)
+		}
 	}
 	writeJSON(w, e.Status, map[string]any{"error": e})
 }

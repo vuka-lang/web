@@ -229,7 +229,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		if len(layouts) > 0 {
 			var err error
 			if loaded, err = a.loadLayouts(rq, layouts, pathNames); err != nil {
-				a.writeError(w, r, err, htmlPage)
+				a.writeError(w, r, a.devErr(err, s), htmlPage)
 				return
 			}
 		}
@@ -237,7 +237,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		for i, b := range binders {
 			v, err := b(rq)
 			if err != nil {
-				a.writeError(w, r, err, htmlPage)
+				a.writeError(w, r, a.devErr(err, s), htmlPage)
 				return
 			}
 			args[i] = v
@@ -265,6 +265,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 
 func (a *App) respond(rq *request, val reflect.Value, err error, v *view, htmlPage bool) {
 	w, r := rq.w, rq.r
+	err = a.devErr(err, rq.route)
 	var to Redirect
 	if errors.As(err, &to) {
 		redirect(w, r, to)
@@ -290,7 +291,7 @@ func (a *App) respond(rq *request, val reflect.Value, err error, v *view, htmlPa
 	if v != nil && v.node != nil {
 		n, err := v.node(val)
 		if err != nil {
-			a.writeError(w, r, err, true)
+			a.writeError(w, r, a.devErr(err, rq.route), true)
 			return
 		}
 		a.page(rq, n)
@@ -301,7 +302,7 @@ func (a *App) respond(rq *request, val reflect.Value, err error, v *view, htmlPa
 		html, err := v.render(val)
 		end()
 		if err != nil {
-			a.writeError(w, r, err, true)
+			a.writeError(w, r, a.devErr(err, rq.route), true)
 			return
 		}
 		if wholePage(r) {

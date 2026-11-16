@@ -104,6 +104,12 @@ func (r Redirect) Render(context.Context, io.Writer) error { return nil }
 func (r Redirect) RedirectLocation() string { return string(r) }
 
 func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, htmlPage bool) {
+	// What follows — the response, OnError — sees the error as the handler
+	// returned it; the development note rides only the log.
+	var dev *devError
+	if d, ok := err.(*devError); ok {
+		dev, err = d, d.err
+	}
 	// A redirect returned anywhere — a page handler, a live view's Mount or
 	// render — redirects, rather than becoming a 500. The request path handles
 	// this before erroring; doing it here covers the live paths too.
@@ -126,8 +132,15 @@ func (a *App) writeError(w http.ResponseWriter, r *http.Request, err error, html
 	}
 	if e.Status >= 500 {
 		// Server errors go to the console, not only the response: one
-		// clean line with the method, path and error.
-		log.Printf("web: %d %s %s: %v", e.Status, r.Method, r.URL.Path, err)
+		// clean line with the method, path and error. In development the
+		// line keeps the query and says where the error came from: the
+		// route's handler and, when the stack still had it, the app frame
+		// it surfaced through.
+		if a.dev && dev != nil {
+			log.Print(dev.devLog(e.Status, r.Method, r.URL.RequestURI(), "", err))
+		} else {
+			log.Printf("web: %d %s %s: %v", e.Status, r.Method, r.URL.Path, err)
+		}
 	}
 	if a.onError != nil {
 		a.onError(w, r, e, htmlPage)

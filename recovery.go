@@ -48,6 +48,13 @@ func (a *App) recoverRequest(w *trackingWriter, r *http.Request, html bool) {
 		if isFailure {
 			// A (T, error) call in markup run outside a render (a layout's
 			// markup, a handler's): its error, as the render's would be.
+			// Inside the recover the stack is intact, so the development
+			// 500 log can say which app frame the call sits in.
+			if a.dev {
+				if frame := appFrame(2); frame != "" {
+					failed = &devError{err: failed, frame: frame}
+				}
+			}
 			a.panicResponse(w, r, failed, html)
 			return
 		}
@@ -56,9 +63,10 @@ func (a *App) recoverRequest(w *trackingWriter, r *http.Request, html bool) {
 }
 
 // render renders n into w: a (T, error) call in its markup failing
-// (ui.Must) is its error, as a Mount error is.
+// (ui.Must) is its error, as a Mount error is — noted, for the development
+// 500 log, with the app frame the failing call sits in (catchFailure).
 func render(ctx context.Context, n ui.Node, w io.Writer) (err error) {
-	defer ui.Catch(&err)
+	defer catchFailure(&err)
 	return n.Render(ctx, w)
 }
 

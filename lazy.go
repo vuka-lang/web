@@ -36,7 +36,7 @@ func (a *App) lazyRegion(rq *request, n ui.Node, id string) {
 		err = refusedVars(rq.ctx)
 	}
 	if err != nil {
-		a.writeError(w, r, err, true)
+		a.writeError(w, r, a.devErr(err, rq.route), true)
 		return
 	}
 	h := w.Header()

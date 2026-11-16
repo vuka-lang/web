@@ -163,7 +163,12 @@ func (a *App) pushCalls(s, page *routeSpec, h http.Handler) (http.Handler, error
 			}
 		}
 		if e.Status >= 500 {
-			log.Printf("web: %d %s %s push: %v", e.Status, r.Method, r.URL.Path, err)
+			if a.dev {
+				d := &devError{err: err, where: s.where, frame: appFrame(1)}
+				log.Print(d.devLog(e.Status, r.Method, r.URL.RequestURI(), " push", err))
+			} else {
+				log.Printf("web: %d %s %s push: %v", e.Status, r.Method, r.URL.Path, err)
+			}
 		}
 		writeJSON(w, e.Status, map[string]any{"error": e})
 	}), nil

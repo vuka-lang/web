@@ -231,18 +231,18 @@ func (a *App) compileIslandPage(s *routeSpec) (http.Handler, error) {
 		}
 		if err != nil {
 			end()
-			a.writeError(w, r, err, true)
+			a.writeError(w, r, a.devErr(err, s), true)
 			return
 		}
 		if err := ui.MountPage(rq.ctx, x.Interface()); err != nil {
 			end()
-			a.writeError(w, r, err, true)
+			a.writeError(w, r, a.devErr(err, s), true)
 			return
 		}
 		props, err := ui.PropsJSON(rq.ctx, x.Elem().Interface())
 		if err != nil {
 			end()
-			a.writeError(w, r, err, true)
+			a.writeError(w, r, a.devErr(err, s), true)
 			return
 		}
 		end()
@@ -311,7 +311,7 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rq := a.newRequest(w, r, s)
 		if _, err := a.loadLayouts(rq, guards, pathNames); err != nil {
-			a.writeError(w, r, err, false)
+			a.writeError(w, r, a.devErr(err, s), false)
 			return
 		}
 		var call pageCall
@@ -376,14 +376,19 @@ func (a *App) compileIslandCall(s *routeSpec) (http.Handler, error) {
 				}
 			}
 			if e.Status >= 500 {
-				log.Printf("web: %d POST %s %s: %v", e.Status, r.URL.Path, what, err)
+				if a.dev {
+					d := &devError{err: err, where: s.where + "." + what, frame: appFrame(1)}
+					log.Print(d.devLog(e.Status, "POST", r.URL.RequestURI(), "", err))
+				} else {
+					log.Printf("web: %d POST %s %s: %v", e.Status, r.URL.Path, what, err)
+				}
 			}
 			writeJSON(w, e.Status, map[string]any{"error": e})
 			return
 		}
 		props, err := ui.PropsJSON(rq.ctx, x.Elem().Interface(), ui.WithLoads(loads))
 		if err != nil {
-			a.writeError(w, r, err, false)
+			a.writeError(w, r, a.devErr(err, s), false)
 			return
 		}
 		res := map[string]any{"props": string(props), "sig": a.signProps(rq.ctx, ip, r.URL.Path, props)}
