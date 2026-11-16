@@ -689,16 +689,21 @@ func (l *Live) Hover(loc string) *Live {
 
 // ScrollTo brings the element loc names into view: the deferred groups
 // loading when seen (ui.Defer("x").WhenSeen()) whose fallbacks are it or
-// inside it start loading; Expect waits for their content.
+// inside it start loading, and the lazy regions loading when seen
+// (ui.Lazy's seen) that are it or inside it, shown, ask for their content;
+// Expect waits for what they render.
 func (l *Live) ScrollTo(loc string) *Live {
 	l.t.Helper()
 	root := l.doc()
 	el := l.mustFind(root, "ScrollTo", loc, anyKind)
-	var groups []string
+	var groups, inits []string
 	el.walk(func(e *node) bool {
 		if g := e.get("data-vk-seen"); g != "" && !l.asked[g] {
 			l.asked[g] = true
 			groups = append(groups, g)
+		}
+		if e.has("data-vk-when-seen") && e.has("data-vk-init") && e.get("data-vk-on-vkinit") != "" && shown(e) {
+			inits = append(inits, e.get("data-vk-on-vkinit"))
 		}
 		return true
 	})
@@ -706,6 +711,16 @@ func (l *Live) ScrollTo(loc string) *Live {
 		if err := l.conn.write(map[string]any{"type": "loads", "groups": groups}); err != nil {
 			l.t.Fatalf("viewtest: ScrollTo(%q): %v", loc, err)
 		}
+	}
+	for _, target := range inits {
+		if l.conn == nil {
+			break
+		}
+		reply, err := l.conn.roundTrip(live.ClientMessage{Type: live.EventMsg, Event: ui.Event{Target: target, Type: "vkinit"}})
+		if err != nil {
+			l.t.Fatalf("viewtest: ScrollTo(%q): %v", loc, err)
+		}
+		l.settle(reply, "ScrollTo("+loc+")")
 	}
 	return l
 }
