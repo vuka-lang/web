@@ -43,13 +43,13 @@ func TestMountLocation(t *testing.T) {
 	mounted := httptest.NewRequest("POST", "/admin/login", nil)
 	mounted.RequestURI = "/gateway/admin/login"
 	cases := map[string]string{
-		"/admin":          "/gateway/admin",  // the login handler's HomePath
-		"/admin/users":    "/gateway/admin/users",
-		"/gateway/admin":  "/gateway/admin",  // already prefixed: not doubled
-		"/gateway":        "/gateway",        // the bare prefix: not doubled
-		"./y":             "./y",             // relative: untouched
-		"//host/z":        "//host/z",        // scheme-relative: untouched
-		"https://x/z":     "https://x/z",     // absolute URL: untouched
+		"/admin":         "/gateway/admin", // the login handler's HomePath
+		"/admin/users":   "/gateway/admin/users",
+		"/gateway/admin": "/gateway/admin", // already prefixed: not doubled
+		"/gateway":       "/gateway",       // the bare prefix: not doubled
+		"./y":            "./y",            // relative: untouched
+		"//host/z":       "//host/z",       // scheme-relative: untouched
+		"https://x/z":    "https://x/z",    // absolute URL: untouched
 	}
 	for in, want := range cases {
 		if got := mountLocation(mounted, in); got != want {
@@ -80,7 +80,7 @@ func TestPrefixJS(t *testing.T) {
 	for _, want := range []string{
 		`["navigate",{"href":"/gateway/admin/systems/records"}]`,
 		`["patch",{"href":"/gateway/admin/users?q=x"}]`, // unchanged, not doubled
-		`["addClass",{"name":"on"}]`,                     // untouched
+		`["addClass",{"name":"on"}]`,                    // untouched
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prefixJS missing %s\n got %s", want, got)
