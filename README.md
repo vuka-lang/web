@@ -491,7 +491,12 @@ inserts and removals. `data-vk-ignore` (with an `id`) leaves an element as the
 browser has it. A value shown once (`ui.ShowOnce`, `data-vk-once` with an
 `id`) stays as the browser has it while the page renders its place empty or
 with the same key, takes a value with another key, and goes when the page is
-left. A whole-document `c0` patch morphs the `<body>` and sets the title.
+left. Content in a `ui.Temporary` region (`<ui.Temporary of={Rows}>`) is sent
+once and then forgotten by the server: later patches leave it as the browser
+has it, until `of` is another value (a new slice, another length or value),
+which sends it whole again — for a large one-shot list that would otherwise
+stay in the connection's memory. A whole-document `c0` patch morphs the
+`<body>` and sets the title.
 
 **Browser hooks.** `<html data-vk-state>` is `connecting`, `connected`,
 `disconnected`, `idle` or `closed` (style a banner on it). The document receives
