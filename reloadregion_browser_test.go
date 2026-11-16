@@ -146,7 +146,7 @@ func TestBrowserReloadRegion(t *testing.T) {
 	}
 }
 
-type invoicesChanged struct{ reload bool }
+type invoicesChanged struct{ reload, inReply bool }
 
 // watchedDB is what watchedTable lists: read from a package variable, so
 // the table has no props, and with no state of its own, is skipped by the
@@ -169,7 +169,9 @@ type invoiceWatcher struct{ ui.Live }
 func (w *invoiceWatcher) LiveSchema(l *ui.LiveSchema) { l.Mount(w.mount) }
 func (w *invoiceWatcher) mount(context.Context) error { w.Subscribe("invoices"); return nil }
 func (w *invoiceWatcher) Update(m invoicesChanged) {
-	if m.reload {
+	if m.inReply {
+		w.Reload("#invoices")
+	} else if m.reload {
 		w.PushJS(ui.JS.Reload("#invoices"))
 	}
 }
@@ -213,5 +215,36 @@ func TestBrowserReloadRegionFromServer(t *testing.T) {
 	var q string
 	if p.Eval(`document.querySelector("#q").value`, &q); q != "overdue" {
 		t.Errorf("the field beside the region after its reload: %q", q)
+	}
+}
+
+// TestBrowserReloadInReply: a broadcast's Update has the region's render
+// carried in the broadcast's own patch (ui.Live.Reload): the region shows
+// the rows added since, what the visitor typed elsewhere stays, and the
+// browser sends nothing — no vkreload round trip.
+func TestBrowserReloadInReply(t *testing.T) {
+	defer func(v bool) { live.Verify = v }(live.Verify)
+	live.Verify = false // the table reads the database
+	watchedDB.ids = []int{1}
+	a := New(Only("none"))
+	a.Live("/watched", func() *watchedInvoices { return &watchedInvoices{} })
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	p := chrome.Launch(t).Open(srv.URL + "/watched")
+	var ok bool
+	p.Eval(sentLog, &ok)
+	p.Eval(`document.querySelector("#q").value = "overdue"`, nil)
+	watchedDB.add(2)
+
+	if err := a.Broadcast(context.Background(), "invoices", invoicesChanged{inReply: true}); err != nil {
+		t.Fatal(err)
+	}
+	p.Wait(`document.querySelectorAll("#invoices tr").length === 2`)
+	var q string
+	if p.Eval(`document.querySelector("#q").value`, &q); q != "overdue" {
+		t.Errorf("the field beside the region after its reload: %q", q)
+	}
+	if n := sent(t, p, `m.event === "vkreload"`); n != 0 {
+		t.Errorf("the render came in the reply, yet %d vkreload events were sent", n)
 	}
 }

@@ -661,6 +661,7 @@ func (a *App) page(rq *request, n ui.Node) {
 	if deferred || live || (s != nil || info.Opaque) && (bytes.Contains(html, []byte(" data-vk-js-")) || bytes.Contains(html, []byte(" data-vk-b"))) || s == nil && !info.Opaque && info.JS ||
 		bytes.Contains(html, []byte(" data-vk-link")) ||
 		bytes.Contains(html, []byte(" data-vk-check=")) || // a form's browser checks (ui.Config.BrowserChecks)
+		bytes.Contains(html, []byte(" data-vk-region=")) || // a lazy region, or a hidden form, waiting for the runtime to ask
 		bytes.Contains(html, []byte(" data-vk-http")) { // a form the runtime sends over HTTP
 		script = a.scriptTag(r, token)
 		if partsTok != "" {

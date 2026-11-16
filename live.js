@@ -676,12 +676,17 @@
   }
   function unwait(el) {
     if (inView0) (waits.get(el) || []).forEach((t) => inView0.unobserve(t));
+    if (seenIO) (waits.get(el) || []).forEach((t) => seenIO.unobserve(t));
     waits.delete(el);
   }
+  // seenOf: a region marked data-vk-when-seen (ui.Lazy's seen) isn't due
+  // until it scrolls near the viewport, which the seen observer notes on
+  // it; without IntersectionObserver it is due as soon as it shows.
+  const seenOf = (el) => !el.hasAttribute("data-vk-when-seen") || !seenIO || el.vkSeen === true;
   // due reports whether el asks now, noting what it saw.
   function due(el) {
     if (!el.isConnected) return void unwait(el);
-    if (el.hasAttribute("data-vk-init")) return !el.vkInit && shows(el);
+    if (el.hasAttribute("data-vk-init")) return !el.vkInit && shows(el) && seenOf(el);
     if (!el.hasAttribute("data-vk-each")) return void unwait(el);
     if (!shows(el)) {
       if (el.vkShown) el.vkHid = true;
@@ -724,6 +729,7 @@
       const ts = [el, ...Array.from(el.children)];
       waits.set(el, ts);
       if (inView0) ts.forEach((t) => inView0.observe(t));
+      if (seenIO && el.hasAttribute("data-vk-when-seen") && !el.vkSeen) ts.forEach((t) => seenIO.observe(t));
     });
     checkShown();
   }
@@ -5155,7 +5161,10 @@
   // A fallback seen while the page can't send — disconnected, or on its way
   // to another page — is looked at again on the next patch or join. Without
   // IntersectionObserver every fallback asks at once, so the groups load as
-  // the eager ones do rather than never.
+  // the eager ones do rather than never. The same observer watches lazy
+  // regions loading when seen (data-vk-when-seen, ui.Lazy's seen; watchShown
+  // registers them): one nearing the viewport becomes due (seenOf) and asks
+  // for its content as a shown region does.
   const seenAsked = new Set();
   function askSeen(names) {
     if (!live || !joined || !ws || nav) return false;
@@ -5168,7 +5177,13 @@
   const seenIO = typeof IntersectionObserver === "function" ? new IntersectionObserver((es) => {
     const seen = es.filter((e) => e.isIntersecting).map((e) => e.target);
     seen.forEach((el) => seenIO.unobserve(el)); // asked, or looked at again on the next patch
-    if (seen.length) askSeen(seen.map((el) => el.getAttribute("data-vk-seen")));
+    const groups = seen.filter((el) => el.hasAttribute("data-vk-seen"));
+    if (groups.length) askSeen(groups.map((el) => el.getAttribute("data-vk-seen")));
+    // a watched lazy region (data-vk-when-seen), or a child of one, seen
+    for (const t of seen) {
+      if (t.hasAttribute("data-vk-seen")) continue;
+      for (const [el, ts] of waits) if (ts.includes(t) && !el.vkSeen) { el.vkSeen = true; ask(el); }
+    }
   }, { rootMargin: "200px" }) : null;
   function watchSeen(e) {
     if (e && e.detail && e.detail.join) seenAsked.clear();
