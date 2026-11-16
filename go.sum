@@ -30,8 +30,8 @@ github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/vuka-lang/orm/v2 v2.18.0 h1:mSqqbEFs6yGORSQMdKSeL6wzOGQYYCkcXUVIXPRFb9k=
 github.com/vuka-lang/orm/v2 v2.18.0/go.mod h1:0o9nj3EulmDuJAe4VhjQNE9N6tXEuOXfh6aFJmV7ZEw=
-github.com/vuka-lang/ui/v2 v2.19.1-0.20261116004731-80fe767a69d2 h1:frvhGeskV5AXMkO236l/m1LhUptmQbeQmfwqVjGjuQo=
-github.com/vuka-lang/ui/v2 v2.19.1-0.20261116004731-80fe767a69d2/go.mod h1:9+C3lrfwapfdbCOCf5EM4PcI88il4sWTl2MPR9Ngu/c=
+github.com/vuka-lang/ui/v2 v2.19.1-0.20261116031934-16ca1e1f9153 h1:DZXf2HHh3ntOqD6JGe8YEozmSb/wPStjJt6xF2kvnok=
+github.com/vuka-lang/ui/v2 v2.19.1-0.20261116031934-16ca1e1f9153/go.mod h1:9+C3lrfwapfdbCOCf5EM4PcI88il4sWTl2MPR9Ngu/c=
 github.com/vuka-lang/vuka/v2 v2.19.0 h1:+gEM2SwPLSmHA2xMEmGBteajv6VZpDXQCoESqRqxHgs=
 github.com/vuka-lang/vuka/v2 v2.19.0/go.mod h1:rH7t5WrQ8buhdC6tJV7hCjf24XguTCEikr86umiXU+w=
 github.com/xyproto/randomstring v1.0.5 h1:YtlWPoRdgMu3NZtP45drfy1GKoojuR7hmRcnhZqKjWU=
