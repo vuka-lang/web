@@ -1328,6 +1328,7 @@
     if (el.tagName !== next.tagName || branchChanged(el, next)) return el.replaceWith(place(document.importNode(whole(next), true)));
     if (el.hasAttribute("data-vk-ignore") && el.id && el.id === next.id) return;
     if (keptOnce(el, next)) return;
+    if (instanceChanged(el, next)) disown(el);
     // An island host owns its children (the client-mounted component). Update
     // its attributes — a changed data-vk-props drives the island's update() —
     // but never morph into its subtree.
@@ -1377,6 +1378,26 @@
     const br = next.getAttribute("data-vk-br");
     return br !== null && br !== el.getAttribute("data-vk-br");
   };
+  // A component instance's root (data-vk-id, data-vk-s) paired with the markup of
+  // another instance (a navigation, a reload, a patch that renders other
+  // instances there: all new ids) is the same element, so what the page
+  // and the user hold in it — a typed value, the focus — carries over, but
+  // what the old instance's scripts did to its elements (the attributes
+  // and children they own) belongs to that instance and is dropped: the
+  // new one gets the server's render, and its scripts mount fresh. A patch
+  // of the same instance keeps its id and what its scripts wrote.
+  // An instance is a script root's scope (data-vk-s) and, for the root of a
+  // live component, its id (data-vk-id): the loader remounts when either
+  // differs, and so the morph drops what the old one owned.
+  const instanceChanged = (el, next) => {
+    const id = next.getAttribute("data-vk-id");
+    return id !== null && el.hasAttribute("data-vk-id") && id !== el.getAttribute("data-vk-id") || next.getAttribute("data-vk-s") !== el.getAttribute("data-vk-s");
+  };
+  function disown(el) {
+    owned.delete(el);
+    ownedKids.delete(el);
+    for (const c of el.querySelectorAll("*")) { owned.delete(c); ownedKids.delete(c); }
+  }
   // A value shown once (ui.ShowOnce) stays as the browser has it while the
   // page renders its place with no value, or with the one it shows; another
   // value replaces it. A move to another page (leavingPage) takes it off.
