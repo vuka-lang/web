@@ -795,3 +795,47 @@ func TestLiveURLFieldAssignKeepsLoads(t *testing.T) {
 		t.Fatalf("mounts %d, loads %d after links, want 3 each", mounts.Load(), loads.Load())
 	}
 }
+
+// tablePage opens a batch kept in the URL, under which a keyed DataTable
+// pages.
+type tablePage struct {
+	ui.Live
+	batch uigen.Assign[int]
+}
+
+func (p *tablePage) LiveSchema(l *ui.LiveSchema) { l.Field(&p.batch, ui.URL("batch")) }
+func (p *tablePage) Open()                       { p.batch.Set(306) }
+func (p *tablePage) Render() ui.Node {
+	nodes := []ui.Node{ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(p.Open)}}, ui.Text("open"))}
+	if p.batch.Get() != 0 {
+		rows := []string{"a", "b", "c", "d", "e"}
+		nodes = append(nodes, ui.DataTable[string]{
+			ID: "t", Key: fmt.Sprint("b", p.batch.Get()), Sizes: []int{2}, Rows: rows,
+			Columns: []ui.Column[string]{{Header: ui.Text("Row"), Cell: func(s string) ui.Node { return ui.Text(s) }}},
+		})
+	}
+	return ui.El("main", nil, nodes...)
+}
+
+// The links an event's reply renders from the page's URL carry what the
+// event wrote to it, though the navigate for the write renders nothing.
+func TestLiveURLFieldLinksInReply(t *testing.T) {
+	a := New(Only("none"))
+	a.Live("/batches", func() *tablePage { return &tablePage{} })
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+
+	c, html := joined(t, srv, "/batches?advert=7")
+	open := handlerOf(t, html, "click", 0)
+	send(t, c, map[string]any{"type": "event", "ref": 2, "target": open, "event": "click"})
+	m := must(t, c)
+	got := fmt.Sprint(m.Updates, m.Trees)
+	if !strings.Contains(got, "b306.page=2") {
+		t.Fatalf("the reply has no pager link: %s", got)
+	}
+	for _, part := range strings.Split(got, "href=")[1:] {
+		if strings.Contains(part, "b306.page") && !strings.Contains(strings.SplitN(part, ">", 2)[0], "batch=306") {
+			t.Fatalf("a pager link lacks batch=306: %.120s", part)
+		}
+	}
+}
