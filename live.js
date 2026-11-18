@@ -1325,7 +1325,7 @@
   // is typing.
   function morph(el, next) {
     placed.add(el);
-    if (el.tagName !== next.tagName) return el.replaceWith(place(document.importNode(whole(next), true)));
+    if (el.tagName !== next.tagName || branchChanged(el, next)) return el.replaceWith(place(document.importNode(whole(next), true)));
     if (el.hasAttribute("data-vk-ignore") && el.id && el.id === next.id) return;
     if (keptOnce(el, next)) return;
     // An island host owns its children (the client-mounted component). Update
@@ -1368,6 +1368,15 @@
     } else if (fresh || serverValue(el) !== before || heldServer.has(el)) takeServer(el);
     if (!typing) unhold(el);
   }
+  // A branch's root (data-vk-br) says which branch of an {if} or {match}
+  // rendered it: the render tree writes it on the roots of a branch that
+  // just replaced another, and a server may write it on every render. An
+  // element is never morphed into one of another branch, or of a branch
+  // that just came: it is replaced, its scripts' instances with it.
+  const branchChanged = (el, next) => {
+    const br = next.getAttribute("data-vk-br");
+    return br !== null && br !== el.getAttribute("data-vk-br");
+  };
   // A value shown once (ui.ShowOnce) stays as the browser has it while the
   // page renders its place with no value, or with the one it shows; another
   // value replaces it. A move to another page (leavingPage) takes it off.
@@ -1406,7 +1415,9 @@
   // An element's key: its id, an instance's data-vk-id, or the key of a
   // keyed loop's element (data-vk-key on an element with no keyboard
   // handler, whose data-vk-key lists the keys it takes) while the
-  // children being matched have one each (loopKeys).
+  // children being matched have one each (loopKeys). A key is an
+  // element's identity, in a loop or not: one the server no longer
+  // renders there is gone, never morphed into another's.
   const keyOf = (n) => n.nodeType === 1 ? (minted.has(n) ? "" : n.id) || n.getAttribute("data-vk-id") || (loopKeys ? loopKey(n) : "") : "";
   const loopKey = (n) => {
     const k = n.getAttribute("data-vk-key");
@@ -1492,7 +1503,7 @@
       // shifting the elements after it — fields keeping what was typed — by one.
       if (k) {
         match = keyed(k, n.tagName);
-        if (!match && cur && same(cur, n) && keyOf(cur) && !(nextKeys || (nextKeys = keysOf(next))).has(keyOf(cur))) match = cur;
+        if (!match && cur && same(cur, n) && keyOf(cur) && !keyOf(cur).startsWith("\0") && !(nextKeys || (nextKeys = keysOf(next))).has(keyOf(cur))) match = cur;
       } else if (cur) {
         let at = cur; // past the keyed elements here: matched by their keys, or gone
         while (at && (kept(at) || keyOf(at))) at = at.nextSibling;
@@ -1519,6 +1530,14 @@
               if (!kept(x)) el.insertBefore(x, after);
             }
           } else el.insertBefore(match, cur);
+        }
+        if (n.nodeType === 1 && branchChanged(match, n)) {
+          // another branch's element: this one goes, the new one takes its place
+          const after = match.nextSibling;
+          last = place(document.importNode(whole(n), true));
+          el.replaceChild(last, match);
+          cur = skip(after);
+          continue;
         }
         if (n.nodeType === 1) morph(match, n);
         else if (match.nodeValue !== n.nodeValue) match.nodeValue = n.nodeValue;
@@ -2626,6 +2645,7 @@
   function tree() {
     const statics = new Map(), strs = new Map(), held = new Map(); // id → frame, or {html}
     let gen = 0; // the apply running: a block made or stepped by it has its g
+    let marking = false; // an apply is writing the HTML of the instances it names
     const bad = (what) => { throw new Error("bad tree: " + what); };
     const frame = (o) => {
       if (o.s) statics.set(o.t, o.s);
@@ -2656,6 +2676,12 @@
       }
       f.info = undefined; // its markup changed
       return f;
+    };
+    // switched: the one item of an {if} or {match} block was replaced by
+    // an item of other statics, another branch; it renders marked (brMark).
+    const switched = (old, now) => {
+      if (old && old.c && old.c.length === 1 && now.c.length === 1 && old.c[0] !== now.c[0] && old.c[0].t !== now.c[0].t) now.c[0].br = gen;
+      return now;
     };
     const change = (old, x) => {
       if (x && x.u) return update(old, x.u);
@@ -2688,13 +2714,14 @@
         if (i !== old.c.length) inPlace = false;
         if (inPlace) return { c: out, g: gen, dirty, at: old.at };
         if (perm && perm.length === old.c.length && new Set(perm).size === perm.length) return { c: out, g: gen, dirty, at: old.at, perm };
-        return { c: out, g: gen };
+        return switched(old, { c: out, g: gen });
       }
       if (x && x.p) {
         if (typeof old !== "string") bad("token patch of a non-string");
         return patchText(old, x.p);
       }
-      return dyn(x);
+      const now = dyn(x);
+      return now && now.c ? switched(old, now) : now;
     };
     const html = (id, seen) => {
       const h = held.get(id);
@@ -2710,13 +2737,14 @@
       let out = s[0];
       f.d.forEach((d, i) => {
         if (typeof d === "string") out += d;
-        else if (d.c) d.c.forEach((it) => { out += frameHTML(it, seen); });
+        else if (d.c) d.c.forEach((it) => { out += itemHTML(it, seen); });
         else if (d.id !== undefined) out += html(d.id, seen);
         else out += frameHTML(d, seen);
         out += s[i + 1];
       });
       return out;
     };
+    const itemHTML = (it, seen) => marking && it.br === gen ? brMark(frameHTML(it, seen), it.t) : frameHTML(it, seen);
     // apply takes a message's entries and returns the new HTML of each
     // instance they name; render (true) starts over.
     const apply = (entries, render) => {
@@ -2729,10 +2757,13 @@
         else bad("change of instance " + e.id);
       }
       const out = {};
-      for (const e of entries) {
-        const sk = scopes() ? scoped(e.id, new Set()) : null;
-        out[e.id] = sk ? { sk } : html(e.id, new Set());
-      }
+      marking = true;
+      try {
+        for (const e of entries) {
+          const sk = scopes() ? scoped(e.id, new Set()) : null;
+          out[e.id] = sk ? { sk } : html(e.id, new Set());
+        }
+      } finally { marking = false; }
       if (render || entries.some((e) => e.full)) prune();
       return out;
     };
@@ -2778,6 +2809,7 @@
         let out = s[0];
         f.d.forEach((d, i) => {
           if (typeof d === "string") out += d;
+          else if (d.c && marking && d.c.some((it) => it.br === gen)) d.c.forEach((it) => { out += itemHTML(it, seen); });
           else if (d.c) {
             const shape = d.c.length ? loopShape(out, s[i], s[i + 1]) : null;
             const infos = shape && d.c.map(item);
@@ -2808,6 +2840,40 @@
       return marks.length ? { html: out, marks, bind } : null;
     };
     return { apply, page: () => html("c0", new Set()), html: (id) => html(id, new Set()), scoped };
+  }
+
+  // brMark is the markup h of a branch with data-vk-br="id" on each of its
+  // top-level elements.
+  function brMark(h, id) {
+    const at = [];
+    let depth = 0, i = 0;
+    while (i < h.length) {
+      const lt = h.indexOf("<", i);
+      if (lt < 0) break;
+      if (h.startsWith("<!--", lt)) { const e = h.indexOf("-->", lt + 4); i = e < 0 ? h.length : e + 3; continue; }
+      const m = /^<(\/?)([a-zA-Z][^\s/>]*)/.exec(h.slice(lt, lt + 64));
+      if (!m) { i = lt + 1; continue; }
+      const name = m[2].toLowerCase();
+      if (m[1]) { depth--; i = h.indexOf(">", lt) + 1 || h.length; continue; }
+      let j = lt + m[0].length, q = "";
+      for (; j < h.length; j++) {
+        const c = h[j];
+        if (q) { if (c === q) q = ""; } else if (c === '"' || c === "'") q = c; else if (c === ">") break;
+      }
+      const selfClosed = h[j - 1] === "/";
+      if (!depth) at.push(lt + m[0].length);
+      i = j + 1;
+      if (VOID.has(name) || selfClosed) continue;
+      if (RAWTEXT.has(name)) {
+        const e = h.toLowerCase().indexOf("</" + name, i);
+        i = e < 0 ? h.length : h.indexOf(">", e) + 1 || h.length;
+        continue;
+      }
+      depth++;
+    }
+    let out = "", from = 0;
+    for (const p of at) { out += h.slice(from, p) + ' data-vk-br="' + id + '"'; from = p; }
+    return out + h.slice(from);
   }
 
   // streamAttrs writes a stream container's attributes back from their
