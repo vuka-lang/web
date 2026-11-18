@@ -16,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/vuka-lang/ui/v2"
 	"github.com/vuka-lang/ui/v2/live"
+	"github.com/vuka-lang/ui/v2/uigen"
 	"github.com/vuka-lang/web/v2/internal/chrome"
 )
 
@@ -708,5 +709,89 @@ func TestLiveNavigateSupersedesQueuedPatches(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("the navigation waited %v behind the patches", d)
+	}
+}
+
+// urlDeferPage keeps the open group in the URL and loads its rows deferred;
+// it has no Update, so a navigation to it mounts it again.
+type urlDeferPage struct {
+	ui.Live
+	open   uigen.Assign[int]
+	rows   []string
+	mounts *atomic.Int32
+	loads  *atomic.Int32
+}
+
+func (p *urlDeferPage) LiveSchema(l *ui.LiveSchema) {
+	l.Field(&p.open, ui.URL("open"))
+	l.Field(&p.rows, ui.Defer("rows"))
+	l.Mount(func(context.Context) error { p.mounts.Add(1); return nil })
+	l.Loads("rows", func(context.Context) error {
+		p.loads.Add(1)
+		p.rows = []string{"Ada"}
+		return nil
+	})
+}
+
+func (p *urlDeferPage) Toggle() { p.open.Set(p.open.Get() + 1) }
+
+func (p *urlDeferPage) Render() ui.Node {
+	text := "rows loading"
+	if !p.Loading("rows") {
+		text = fmt.Sprintf("rows %s open %d", strings.Join(p.rows, ","), p.open.Get())
+	}
+	return ui.El("main", nil,
+		ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(p.Toggle)}}, ui.Text("toggle")),
+		ui.El("section", []ui.Attr{{Name: "id", Value: "rows"}}, ui.Text(text)))
+}
+
+// Assigning a @ui.URL field in an event is a change of state: the page's
+// reply has the new state, and the navigate its URL write makes runs
+// neither Mount nor the loaders, and renders nothing. A link to another
+// query is a navigation as ever.
+func TestLiveURLFieldAssignKeepsLoads(t *testing.T) {
+	var mounts, loads atomic.Int32
+	a := New(Only("none"))
+	a.Live("/groups", func() *urlDeferPage { return &urlDeferPage{mounts: &mounts, loads: &loads} })
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+
+	c, html := joined(t, srv, "/groups")
+	patchesUntil(t, c, "rows Ada open 0")
+	toggle := handlerOf(t, html, "click", 0)
+
+	send(t, c, map[string]any{"type": "event", "ref": 2, "target": toggle, "event": "click"})
+	m := must(t, c)
+	got := fmt.Sprint(m.Updates, m.Trees)
+	if !strings.Contains(got, "open 1") || strings.Contains(got, "loading") {
+		t.Fatalf("the event's reply: %s", got)
+	}
+	if len(m.JS) == 0 || !strings.Contains(string(m.JS[0].Ops), `"/groups?open=1"`) {
+		t.Fatalf("the reply writes the URL: %+v", m.JS)
+	}
+
+	send(t, c, map[string]any{"type": "navigate", "ref": 3, "url": "/groups?open=1", "patch": true})
+	m = must(t, c)
+	if m.Type != live.PatchMsg || m.Ref != 3 || m.URL != "/groups?open=1" || len(m.Updates) > 0 || len(m.Trees) > 0 {
+		t.Fatalf("the URL write's navigate: %+v", m)
+	}
+	if mounts.Load() != 1 || loads.Load() != 1 {
+		t.Fatalf("mounts %d, loads %d: the URL write mounted or loaded again", mounts.Load(), loads.Load())
+	}
+
+	// the same address again is not the page's own write
+	send(t, c, map[string]any{"type": "navigate", "ref": 4, "url": "/groups?open=1", "patch": true})
+	if m = must(t, c); m.Ref != 4 {
+		t.Fatalf("something rendered after the URL write: %+v", m)
+	}
+	patchesUntil(t, c, "rows Ada open 1")
+	if mounts.Load() != 2 || loads.Load() != 2 {
+		t.Fatalf("mounts %d, loads %d after a link to the address, want 2 each", mounts.Load(), loads.Load())
+	}
+
+	send(t, c, map[string]any{"type": "navigate", "ref": 5, "url": "/groups?open=7", "patch": true})
+	patchesUntil(t, c, "open 7")
+	if mounts.Load() != 3 || loads.Load() != 3 {
+		t.Fatalf("mounts %d, loads %d after links, want 3 each", mounts.Load(), loads.Load())
 	}
 }

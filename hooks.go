@@ -273,11 +273,12 @@ func (c *conn) liveHandler(target string, fn any, name string) LiveHandler {
 // returns it to the event's handler and to its decorators, which, unlike
 // the handler, may have no context.Context to read.
 type LiveEvent struct {
-	ctx       context.Context
-	handler   string
-	rendering atomic.Bool // the handler returned, and the page renders
-	mu        sync.Mutex
-	refused   error
+	ctx        context.Context
+	handler    string
+	rendering  atomic.Bool // the handler returned, and the page renders
+	mu         sync.Mutex
+	refused    error
+	foreignURL atomic.Bool // the handler edited the page's URL by web.Query, not by a @ui.URL field (liveself.go)
 }
 
 // Context is the context the page's route ran with (the join's, or the

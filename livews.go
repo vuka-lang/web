@@ -326,6 +326,7 @@ type conn struct {
 	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
 	loads     []context.CancelFunc     // end the deferred loads of the page joined or navigated to
+	selfURL   atomic.Pointer[string]   // the address the page's own event moved it to, the next navigate's (liveself.go)
 	updatable atomic.Bool              // the page shown has an Update(URLParams): only then can a patch keep it
 	leave     atomic.Pointer[leaveCtx] // the page's context, whose renders leaveEarly can end
 	leaving   atomic.Int32             // navigates leaving the page read and not yet served
@@ -716,8 +717,9 @@ func (c *conn) leaveEarly(data []byte) bool {
 	var m struct {
 		Type  string `json:"type"`
 		Patch bool   `json:"patch"`
+		URL   string `json:"url"`
 	}
-	if json.Unmarshal(data, &m) != nil || m.Type != "navigate" || m.Patch && c.updatable.Load() {
+	if json.Unmarshal(data, &m) != nil || m.Type != "navigate" || m.Patch && (c.updatable.Load() || c.selfNavigates(m.URL)) {
 		return false // not a navigate, or a patch that may keep the page
 	}
 	c.leaving.Add(1)
@@ -813,6 +815,7 @@ func (c *conn) event(m live.ClientMessage) any {
 	c.ev = ev
 	reply := c.answer(func() any { return c.s.Event(m) })
 	c.ev = nil
+	defer func() { c.noteSelfURL(ev, reply) }()
 	if ev.refused != nil {
 		return withError{reply, c.errorText(ev.refused)}
 	}
@@ -1099,6 +1102,9 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	}
 	if !strings.HasPrefix(uri, "/") || strings.HasPrefix(uri, "//") || strings.HasPrefix(uri, "/\\") {
 		return redirect(), false
+	}
+	if reply, ok := c.selfNavigate(m, uri); ok {
+		return reply, true
 	}
 	c.navs++
 	if !m.Patch || !c.updatable.Load() {

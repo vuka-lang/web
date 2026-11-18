@@ -46,12 +46,22 @@ func pushes(opts []QueryOption) bool {
 	return false
 }
 
+// editURL is ui.EditURL for an edit the page's code makes by hand: the
+// event's reply moves the page to the new address as a navigation, which
+// runs the route again, as a change of a @ui.URL field doesn't (liveself.go).
+func editURL(ctx context.Context, edit func(url.Values), push bool) {
+	if ev := CurrentLiveEvent(); ev != nil {
+		ev.foreignURL.Store(true)
+	}
+	ui.EditURL(ctx, edit, push)
+}
+
 // Set sets the query parameter key to value: a string as it is, a number
 // or bool as strconv writes it, a type with MarshalText as it writes it,
 // a slice as one value per element.
 func (QueryEdits) Set(ctx context.Context, key string, value any, opts ...QueryOption) {
 	vals := ui.QueryText(value)
-	ui.EditURL(ctx, func(q url.Values) {
+	editURL(ctx, func(q url.Values) {
 		if vals == nil {
 			q.Del(key)
 			return
@@ -62,13 +72,13 @@ func (QueryEdits) Set(ctx context.Context, key string, value any, opts ...QueryO
 
 // Del removes the query parameter key.
 func (QueryEdits) Del(ctx context.Context, key string, opts ...QueryOption) {
-	ui.EditURL(ctx, func(q url.Values) { q.Del(key) }, pushes(opts))
+	editURL(ctx, func(q url.Values) { q.Del(key) }, pushes(opts))
 }
 
 // Update edits the query in place: edit gets the page's parameters, as the
 // event's edits so far left them.
 func (QueryEdits) Update(ctx context.Context, edit func(url.Values), opts ...QueryOption) {
-	ui.EditURL(ctx, edit, pushes(opts))
+	editURL(ctx, edit, pushes(opts))
 }
 
 // Get is the query parameter key of the page whose event (or request) ctx
