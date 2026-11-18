@@ -747,8 +747,9 @@ func (p *urlDeferPage) Render() ui.Node {
 
 // Assigning a @ui.URL field in an event is a change of state: the page's
 // reply has the new state, and the navigate its URL write makes runs
-// neither Mount nor the loaders, and renders nothing. A link to another
-// query is a navigation as ever.
+// neither Mount nor the loaders, and renders nothing. A link that changes only
+// the field's parameter moves the page in place; the same address again is a
+// navigation as ever.
 func TestLiveURLFieldAssignKeepsLoads(t *testing.T) {
 	var mounts, loads atomic.Int32
 	a := New(Only("none"))
@@ -791,8 +792,8 @@ func TestLiveURLFieldAssignKeepsLoads(t *testing.T) {
 
 	send(t, c, map[string]any{"type": "navigate", "ref": 5, "url": "/groups?open=7", "patch": true})
 	patchesUntil(t, c, "open 7")
-	if mounts.Load() != 3 || loads.Load() != 3 {
-		t.Fatalf("mounts %d, loads %d after links, want 3 each", mounts.Load(), loads.Load())
+	if mounts.Load() != 2 || loads.Load() != 2 {
+		t.Fatalf("mounts %d, loads %d after a link changing only the field's parameter, want 2 each", mounts.Load(), loads.Load())
 	}
 }
 
@@ -837,5 +838,63 @@ func TestLiveURLFieldLinksInReply(t *testing.T) {
 		if strings.Contains(part, "b306.page") && !strings.Contains(strings.SplitN(part, ">", 2)[0], "batch=306") {
 			t.Fatalf("a pager link lacks batch=306: %.120s", part)
 		}
+	}
+}
+
+// pagedPage opens a batch kept in the URL, under which a keyed DataTable pages;
+// it has no Update, and loads its header deferred.
+type pagedPage struct {
+	ui.Live
+	batch  int
+	head   string
+	mounts *atomic.Int32
+	loads  *atomic.Int32
+}
+
+func (p *pagedPage) LiveSchema(l *ui.LiveSchema) {
+	l.Field(&p.batch, ui.URL("batch"))
+	l.Field(&p.head, ui.Defer("head"))
+	l.Mount(func(context.Context) error { p.mounts.Add(1); return nil })
+	l.Loads("head", func(context.Context) error { p.loads.Add(1); p.head = "Head"; return nil })
+}
+
+func (p *pagedPage) Render() ui.Node {
+	nodes := []ui.Node{ui.El("h1", nil, ui.Text(fmt.Sprint("head ", p.head)))}
+	if p.batch != 0 {
+		nodes = append(nodes, ui.DataTable[string]{
+			ID: "t", Key: fmt.Sprint("b", p.batch), Sizes: []int{2}, Rows: []string{"a", "b", "c", "d", "e"},
+			Columns: []ui.Column[string]{{Header: ui.Text("Row"), Cell: func(s string) ui.Node { return ui.Text("row-" + s) }}},
+		})
+	}
+	return ui.El("main", nil, nodes...)
+}
+
+// A patch navigation that changes only the parameters components keep in the
+// address (a pager's page, the open batch) keeps the page, though it has no
+// Update: nothing mounts again, no load starts again, and the reply renders
+// the new state. A change of any other parameter is a navigation as ever.
+func TestLiveURLOnlyPatchKeepsPage(t *testing.T) {
+	var mounts, loads atomic.Int32
+	a := New(Only("none"))
+	a.Live("/paged", func() *pagedPage { return &pagedPage{mounts: &mounts, loads: &loads} })
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+
+	c, _ := joined(t, srv, "/paged?advert=7&batch=306")
+	patchesUntil(t, c, "head Head")
+	send(t, c, map[string]any{"type": "navigate", "ref": 2, "url": "/paged?advert=7&batch=306&b306.page=2", "patch": true})
+	m := must(t, c)
+	got := fmt.Sprint(m.Updates, m.Trees)
+	if m.Ref != 2 || !strings.Contains(got, "row-c") || strings.Contains(got, "row-a") {
+		t.Fatalf("the reply lacks page 2: %+v", m)
+	}
+	if mounts.Load() != 1 || loads.Load() != 1 {
+		t.Fatalf("mounts %d, loads %d after paging, want 1 each", mounts.Load(), loads.Load())
+	}
+
+	send(t, c, map[string]any{"type": "navigate", "ref": 3, "url": "/paged?advert=8&batch=306&b306.page=2", "patch": true})
+	patchesUntil(t, c, "head Head")
+	if mounts.Load() != 2 || loads.Load() != 2 {
+		t.Fatalf("mounts %d, loads %d after another advert, want 2 each", mounts.Load(), loads.Load())
 	}
 }

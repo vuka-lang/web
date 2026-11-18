@@ -149,6 +149,9 @@ func (x native) Loaded(d *ui.DeferredLoad) any {
 	return nil
 }
 
+// URLParams are the query parameters the page's components keep in the address.
+func (x native) URLParams() map[string]bool { return x.s.URLParams() }
+
 func (x native) Topics() []string { return x.s.Topics() }
 func (x native) Close()           { x.s.Close() }
 

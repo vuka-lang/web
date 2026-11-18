@@ -327,6 +327,7 @@ type conn struct {
 
 	loads     []context.CancelFunc     // end the deferred loads of the page joined or navigated to
 	selfURL   atomic.Pointer[string]   // the address the page's own event moved it to, the next navigate's (liveself.go)
+	urlSnap   atomic.Pointer[urlSnap]  // the address and the parameters its components keep in it, for a patch that only moves those (liveurlonly.go)
 	updatable atomic.Bool              // the page shown has an Update(URLParams): only then can a patch keep it
 	leave     atomic.Pointer[leaveCtx] // the page's context, whose renders leaveEarly can end
 	leaving   atomic.Int32             // navigates leaving the page read and not yet served
@@ -663,6 +664,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		c.startDeferred(true) // a component the event mounted
 	}
 	c.syncTopics()
+	c.noteURLOwned()
 	return true
 }
 
@@ -719,7 +721,7 @@ func (c *conn) leaveEarly(data []byte) bool {
 		Patch bool   `json:"patch"`
 		URL   string `json:"url"`
 	}
-	if json.Unmarshal(data, &m) != nil || m.Type != "navigate" || m.Patch && (c.updatable.Load() || c.selfNavigates(m.URL)) {
+	if json.Unmarshal(data, &m) != nil || m.Type != "navigate" || m.Patch && (c.updatable.Load() || c.selfNavigates(m.URL) || c.urlSnap.Load().keeps(m.URL)) {
 		return false // not a navigate, or a patch that may keep the page
 	}
 	c.leaving.Add(1)
@@ -1107,7 +1109,8 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		return reply, true
 	}
 	c.navs++
-	if !m.Patch || !c.updatable.Load() {
+	urlOnly := m.Patch && !c.updatable.Load() && c.snapURL().keeps(uri)
+	if !m.Patch || !c.updatable.Load() && !urlOnly {
 		// The page is being left: end its deferred loads now, before the next
 		// page's route runs, so their queries hand the pool and the CPU to the
 		// navigation instead of racing it. Only a navigation asking for a
@@ -1143,8 +1146,9 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		}
 		return redirect(), false // another document: the browser loads it
 	}
-	patch := m.Patch && j.updates != nil
-	if m.Patch && !patch {
+	urlOnly = urlOnly && j.updates == nil
+	patch := m.Patch && (j.updates != nil || urlOnly)
+	if m.Patch && !patch && !urlOnly {
 		c.app.warnNoUpdate(ctx, j)
 	}
 	if ahead != nil && patch {
@@ -1162,12 +1166,12 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	keep := len(j.layouts) > 0 && j.layouts[0].gen < c.navs
 	prevPage, prevLeave := c.page, c.leave.Load()
 	j.ctx = c.setPage(j.ctx)
-	rt := live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates, Keep: keep}
+	rt := live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates, Keep: keep, URLOnly: urlOnly}
 	var reply any
 	var ok bool
 	// A patch the page's Update takes is a read, as a GET is: a navigate
 	// leaving the page that arrives behind it ends it, Update and render.
-	read := patch && j.updates != nil
+	read := patch
 	if read {
 		c.beginRead()
 	}
