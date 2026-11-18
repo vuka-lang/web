@@ -581,6 +581,8 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		live.ClientMessage
 		V   int      `json:"v,omitempty"`   // the newest protocol version the page speaks (a join's)
 		Ext []string `json:"ext,omitempty"` // and the v2 extensions it speaks: "stream"
+		// build: the build that rendered the page (a join's), when the runtime says
+		Build string `json:"build,omitempty"`
 		// loads: the deferred groups whose fallbacks the browser saw
 		Groups []string `json:"groups,omitempty"`
 	}
@@ -599,7 +601,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 			c.s.Close()
 			c.s = nil
 		}
-		reply, code := c.join(ctx, m.Ref, m.V, m.Ext)
+		reply, code := c.join(ctx, m.Ref, m.V, m.Ext, m.Build)
 		if code == 0 && c.varsRefused() {
 			return false
 		}
@@ -929,7 +931,10 @@ func (w withError) MarshalJSON() ([]byte, error) {
 // version v when the app can (else v1). When the GET's own session is still
 // parked under the token and the same identity joins in time, it is adopted
 // instead of mounting the page's components again (livepark.go).
-func (c *conn) join(ctx context.Context, ref, v int, ext []string) (any, websocket.StatusCode) {
+func (c *conn) join(ctx context.Context, ref, v int, ext []string, build string) (any, websocket.StatusCode) {
+	if build != "" && build != c.app.buildID() {
+		return live.ServerMessage{Type: live.Error, Ref: ref, Error: errOtherBuild.Error()}, closeReload
+	}
 	j, rec, err := c.run(ctx, c.uri, "join")
 	if err != nil {
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: errBadToken.Error()}, closeReload

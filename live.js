@@ -104,7 +104,8 @@
   // doesn't speak it answers in v1 (HTML).
   // ext: the v2 extensions the runtime speaks — "stream", a stream
   // container's attributes as one compact dynamic (tree, streamAttrs).
-  const join = () => ws.send(JSON.stringify({ type: "join", ref: ++ref, v: 2, ext: ["stream"] }));
+  // build: the build that rendered the page; a server of another refuses it.
+  const join = () => ws.send(JSON.stringify({ type: "join", ref: ++ref, v: 2, ext: ["stream"], ...(build && { build }) }));
 
   // The fallback transport (livesse.go): server-sent events down and fetch
   // POSTs up, carrying the socket's messages, for a network whose proxies

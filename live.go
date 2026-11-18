@@ -840,6 +840,7 @@ func (a *App) signToken(uri string) string {
 var (
 	errBadToken     = errors.New("live: invalid page token")
 	errExpiredToken = errors.New("live: the page token expired")
+	errOtherBuild   = errors.New("live: the page was rendered by another build")
 )
 
 func (a *App) verifyToken(tok string) (string, error) {

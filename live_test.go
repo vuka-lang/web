@@ -557,3 +557,33 @@ func browserReconnect(t *testing.T, v int) {
 	p.Click("button")
 	p.WaitText("span", "n=6") // the fresh token's session answers
 }
+
+func TestLiveJoinBuild(t *testing.T) {
+	app := liveApp()
+	srv := httptest.NewServer(app.Handler())
+	defer srv.Close()
+	join := func(m map[string]any) (live.ServerMessage, error) {
+		_, tok := pageToken(t, srv, "/counter")
+		c, err := dial(t, srv, tok, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		send(t, c, m)
+		reply := must(t, c)
+		if reply.Type == live.Render {
+			return reply, nil
+		}
+		_, err = recv(c, 2*time.Second)
+		return reply, err
+	}
+	if m, _ := join(map[string]any{"type": "join", "ref": 1, "build": app.buildID()}); m.Type != live.Render {
+		t.Errorf("the page's own build: %+v", m)
+	}
+	if m, _ := join(map[string]any{"type": "join", "ref": 1}); m.Type != live.Render {
+		t.Errorf("no build: %+v", m)
+	}
+	m, err := join(map[string]any{"type": "join", "ref": 1, "build": "another"})
+	if m.Type != live.Error || m.Error != errOtherBuild.Error() || websocket.CloseStatus(err) != closeReload {
+		t.Errorf("another build: %+v, %v", m, err)
+	}
+}
