@@ -2144,6 +2144,9 @@
     busy.forEach((b) => { waiting = waiting || b.el === el; });
     let own = owned.get(el);
     if (own) own.forEach((server, name) => { if (next.getAttribute(name) !== server) own.delete(name); });
+    // hidden belongs to the element's own show binding, put back after the
+    // morph anyway: writing the server's here is a set-then-undo
+    const vis = next.hasAttribute("data-vk-v") || next.hasAttribute("data-vk-show");
     // the page's first join: what differs from the server's render, the
     // same as the page's HTTP one, is the scripts' that ran before this one
     const seed = (name) => {
@@ -2153,11 +2156,11 @@
       return true;
     };
     for (const a of Array.from(el.attributes)) {
-      if (next.hasAttribute(a.name) || a.name === "id" && minted.has(el) || own && own.has(a.name) || waiting && a.name === "aria-busy" || /^data-vk-(pending|failed)$/.test(a.name) || seed(a.name)) continue;
+      if (next.hasAttribute(a.name) || a.name === "id" && minted.has(el) || own && own.has(a.name) || vis && a.name === "hidden" || waiting && a.name === "aria-busy" || /^data-vk-(pending|failed)$/.test(a.name) || seed(a.name)) continue;
       el.removeAttribute(a.name);
     }
     for (const a of Array.from(next.attributes)) {
-      if (own && own.has(a.name) || el.getAttribute(a.name) === a.value || seed(a.name)) continue;
+      if (own && own.has(a.name) || vis && a.name === "hidden" || el.getAttribute(a.name) === a.value || seed(a.name)) continue;
       el.setAttribute(a.name, a.value);
     }
     if (own && !own.size) owned.delete(el);
@@ -4047,8 +4050,7 @@
     });
   }
   function visible(el, on) {
-    if (on) el.removeAttribute("hidden");
-    else if (!el.hasAttribute("hidden")) el.setAttribute("hidden", "");
+    if (on === el.hasAttribute("hidden")) on ? el.removeAttribute("hidden") : el.setAttribute("hidden", "");
   }
   const popOpen = (p) => { try { return p.matches(":popover-open"); } catch (_) { return false; } };
   // A popover the browser closed: the state its <vk-show> shows is written

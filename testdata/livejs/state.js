@@ -323,6 +323,21 @@ test("show={…}: hidden while it doesn't hold; the transition's phases, the lea
   eq([m().hasAttribute("hidden"), m().className], [true, ""], "a render shows the browser's value at once");
 });
 
+test("a morph leaves hidden to the element's show binding: no set-then-undo", () => {
+  const html = (n) => `<div data-vk-id="c1"><button id="b" data-vk-js-click='${j([["state_toggle", open1]])}'>${n}</button>
+    <section id="m" hidden data-vk-v='${j(open1)}'></section></div>`;
+  const p = joined(html(0));
+  p.fire("#b", "click");
+  const m = p.$("#m"), writes = [];
+  const sa = m.setAttribute.bind(m), ra = m.removeAttribute.bind(m);
+  m.setAttribute = (n, v) => { if (n === "hidden") writes.push("set"); return sa(n, v); };
+  m.removeAttribute = (n) => { if (n === "hidden") writes.push("rm"); return ra(n); };
+  p.server({ type: "patch", ref: 2, updates: [{ id: "c1", html: html(1) }] });
+  eq([m.hasAttribute("hidden"), writes], [false, []], "shown through the patch, hidden untouched");
+  p.fire("#b", "click");
+  eq([m.hasAttribute("hidden"), writes], [true, ["set"]], "the binding still hides it");
+});
+
 test("bindings refuse what commands refuse", () => {
   const u = s("c1:u:1", "/a");
   const p = open(`<a id="a" href="/a" data-vk-b-href='${j(u)}'></a><button id="b" data-vk-js-click='${j([["state_set", { ...u, v: "javascript:alert(1)" }]])}'></button>`);
