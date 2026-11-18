@@ -319,6 +319,80 @@ func TestLiveDeferredPatchWithoutUpdateEndsLoadsFirst(t *testing.T) {
 	}
 }
 
+// slowRenderPage defers "rows", whose load is instant; the render after the
+// apply runs a slow query (it waits on its context, 3s at most) — a
+// DataTable loading its rows does the same.
+type slowRenderPage struct {
+	ui.Live
+	ctl  *deferCtl
+	rows []string
+}
+
+func (p *slowRenderPage) LiveSchema(l *ui.LiveSchema) {
+	l.Field(&p.rows, ui.Defer("rows"))
+	l.Loads("rows", p.loadRows)
+}
+
+func (p *slowRenderPage) loadRows(ctx context.Context) error {
+	p.rows = []string{"Ada"}
+	return nil
+}
+
+func (p *slowRenderPage) Render() ui.Node {
+	if p.Loading("rows") {
+		return ui.El("main", nil, ui.Text("rows loading"))
+	}
+	return ui.El("main", nil, ui.Ctx(func(ctx context.Context) ui.Node {
+		select {
+		case <-ctx.Done():
+			p.ctl.ended <- ctx.Err()
+			return ui.Text("rows gone")
+		case <-time.After(3 * time.Second):
+			p.ctl.ended <- nil
+			return ui.Text("rows slow")
+		}
+	}))
+}
+
+// A navigate arriving while a deferred load's apply renders — a read — ends
+// the page's context, so the slow query the render runs stops instead of
+// making the navigation wait behind it.
+func TestLiveDeferredNavigateInterruptsASlowApplyRender(t *testing.T) {
+	ctl := &deferCtl{ended: make(chan error, 1)}
+	a := New(Only("none"))
+	a.Live("/slow", func() *slowRenderPage { return &slowRenderPage{ctl: ctl} })
+	a.Get("/next", func() ui.Node { return ui.El("main", nil, ui.Text("next")) })
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	c, _ := joined(t, srv, "/slow")
+	time.Sleep(300 * time.Millisecond) // the load applied; its render is in the slow query
+	start := time.Now()
+	send(t, c, map[string]any{"type": "navigate", "ref": 2, "url": "/next"})
+	select {
+	case err := <-ctl.ended:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("the render's query ended with %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the render's query was not ended")
+	}
+	for {
+		m, err := recv(c, 2*time.Second)
+		if err != nil {
+			t.Fatalf("waiting for the navigation's reply: %v", err)
+		}
+		if m.Type == live.Error {
+			t.Fatalf("the navigation failed: %+v", m)
+		}
+		if m.Ref == 2 {
+			break
+		}
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("the navigation waited %v for the render", d)
+	}
+}
+
 // A page rendered for a form posted without script has no connection to
 // receive its deferred fields: they load before it is sent.
 type deferFormPage struct {

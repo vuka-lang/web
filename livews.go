@@ -326,7 +326,9 @@ type conn struct {
 	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
 	loads     []context.CancelFunc // end the deferred loads of the page joined or navigated to
-	updatable bool                 // the page shown has an Update(URLParams): only then can a patch keep it
+	updatable atomic.Bool          // the page shown has an Update(URLParams): only then can a patch keep it
+	applying  atomic.Bool          // the loop is applying a deferred load (a render, read-only)
+	leave     atomic.Value         // context.CancelFunc ending the page's context, for leaveEarly
 	vars      *varHistory          // the page's context processors' results, from one page to the next
 
 	layouts []heldLayout         // the layouts the page renders in, loaded (loadLayouts)
@@ -442,6 +444,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 				c.noteDrop(err)
 				return
 			}
+			c.leaveEarly(data)
 			select {
 			case msgs <- data:
 			case <-ctx.Done():
@@ -669,9 +672,34 @@ func (c *conn) check() bool {
 }
 
 // setPage makes ctx the page's context: its events' and LiveOrigin's.
-func (c *conn) setPage(ctx context.Context) {
+// setPage installs ctx as the page's context, wrapped so leaveEarly can end
+// it, and returns the wrapped context, which the session must render with.
+func (c *conn) setPage(ctx context.Context) context.Context {
+	ctx, cancel := context.WithCancel(ctx)
 	c.page = ctx
 	c.shared.Store(&ctx)
+	c.leave.Store(context.CancelFunc(cancel))
+	return ctx
+}
+
+// leaveEarly ends the page's context from the socket's reader: a navigate
+// has arrived while the loop applies a deferred load — a render, which is
+// read-only — of a page no patch can keep, so the slow query the render
+// runs may stop now instead of making the navigation wait. An event's
+// handler is never ended this way: it may be writing.
+func (c *conn) leaveEarly(data []byte) {
+	if !c.applying.Load() || c.updatable.Load() {
+		return
+	}
+	var m struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(data, &m) != nil || m.Type != "navigate" {
+		return
+	}
+	if cancel, ok := c.leave.Load().(context.CancelFunc); ok && cancel != nil {
+		cancel()
+	}
 }
 
 // pageCtx is the page's context, from any goroutine.
@@ -862,6 +890,7 @@ func (c *conn) join(ctx context.Context, ref, v int, ext []string) (any, websock
 		}
 		return live.ServerMessage{Type: live.Error, Ref: ref, Error: msg}, closeRefused
 	}
+	j.ctx = c.setPage(j.ctx)
 	s := c.adopt(j, v, ext)
 	if s != nil {
 		c.s = s
@@ -872,10 +901,9 @@ func (c *conn) join(ctx context.Context, ref, v int, ext []string) (any, websock
 	if e, ok := c.s.(interface{ SetErrorText(func(error) string) }); ok {
 		e.SetErrorText(c.errorText)
 	}
-	c.setPage(j.ctx)
 	c.root = j.root
 	c.layouts = j.layouts
-	c.updatable = j.updates != nil
+	c.updatable.Store(j.updates != nil)
 	c.doing = "join"
 	return c.s.Join(ref), 0
 }
@@ -1010,7 +1038,7 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		return redirect(), false
 	}
 	c.navs++
-	if !m.Patch || !c.updatable {
+	if !m.Patch || !c.updatable.Load() {
 		// The page is being left: end its deferred loads now, before the next
 		// page's route runs, so their queries hand the pool and the CPU to the
 		// navigation instead of racing it. Only a navigation asking for a
@@ -1060,6 +1088,8 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	// the components of the layouts kept stay mounted when the document's
 	// is one of them
 	keep := len(j.layouts) > 0 && j.layouts[0].gen < c.navs
+	prevPage, prevLeave := c.page, c.leave.Load()
+	j.ctx = c.setPage(j.ctx)
 	rt := live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates, Keep: keep}
 	var reply any
 	var ok bool
@@ -1069,13 +1099,17 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		reply, ok = c.s.Navigate(m.Ref, uri, rt, patch)
 	}
 	if !ok {
+		c.page = prevPage
+		c.shared.Store(&prevPage)
+		if prevLeave != nil {
+			c.leave.Store(prevLeave)
+		}
 		c.layouts = nil
 		return reply, patch
 	}
 	c.uri = uri
 	c.layouts = j.layouts
-	c.setPage(j.ctx)
-	c.updatable = j.updates != nil
+	c.updatable.Store(j.updates != nil)
 	return withToken{reply, c.app.signToken(uri), c.docTitle(ui.PageTitle(j.ctx))}, patch
 }
 
@@ -1289,7 +1323,9 @@ func (c *conn) drain(ctx context.Context) bool {
 				end = c.recording("load", l.d.Group, 0, nil)
 			}
 			c.vars.newEvent()
+			c.applying.Store(true)
 			m := ds.Loaded(l.d)
+			c.applying.Store(false)
 			if c.varsRefused() {
 				return false
 			}
