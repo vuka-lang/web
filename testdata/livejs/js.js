@@ -1037,6 +1037,21 @@ test("navigation: a URL that isn't http or https is refused", () => {
   }
 });
 
+// A reply landing while a link leaves the page answers an event of the page
+// being left: the URL edit it pushes doesn't take the visitor back. Once the
+// navigation lands, a patch the new page pushes goes through.
+test("navigation: a pushed patch waits for no navigation leaving the page", () => {
+  const p = joined(shelf(1), { url: "http://test/shelf?page=1" });
+  p.fire("#inc", "click");
+  p.fire("#book", "click");
+  const ref = lastRef(p);
+  p.server({ type: "patch", ref: ref - 1, updates: [], js: [{ id: "c1", ops: [["patch", { href: "/shelf?page=1&q=a", replace: true }]] }] });
+  eq(navs(p), [{ type: "navigate", url: "/books/7" }], "the edit is dropped");
+  p.server({ type: "patch", ref, updates: [{ id: "c1", html: book(7).slice(6, -7) }], url: "/books/7" });
+  window_run(p, [["patch", { href: "/books/7?tab=2" }]]);
+  eq(navs(p).at(-1), { type: "navigate", url: "/books/7?tab=2", patch: true }, "the new page's patch");
+});
+
 // window.vuka.navigate: what an island's live.navigate / live.patch and
 // VukaLink use.
 const settled = (pr) => { const s = { v: "pending" }; pr.then((r) => { s.v = r; }, (err) => { s.v = "rejected " + err.message; }); return s; };

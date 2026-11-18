@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http/httptest"
+	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -395,6 +398,167 @@ func TestLiveDeferredNavigateInterruptsASlowApplyRender(t *testing.T) {
 	}
 }
 
+// searchCtl steers a searchPage: each handler works for work, then the
+// render after it runs a query of slow, unless its context ends first.
+type searchCtl struct {
+	work, slow time.Duration
+	mu         sync.Mutex
+	handled    []error // each handler's context's error once its work was done, in order
+	ended      chan error
+}
+
+// searchPage is a search box whose every event's handler only edits the
+// page's state, and whose render then runs a slow query — a DataTable with
+// a Load searching as the user types.
+type searchPage struct {
+	ui.Live
+	ctl *searchCtl
+	n   int
+}
+
+func (p *searchPage) Search(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+	case <-time.After(p.ctl.work):
+	}
+	p.ctl.mu.Lock()
+	p.ctl.handled = append(p.ctl.handled, ctx.Err())
+	p.n = len(p.ctl.handled)
+	p.ctl.mu.Unlock()
+	return nil
+}
+
+func (p *searchPage) Update(statsParams) {}
+
+func (p *searchPage) Render() ui.Node {
+	results := ui.Text("no search")
+	if p.n > 0 {
+		results = ui.Ctx(func(ctx context.Context) ui.Node {
+			select {
+			case <-ctx.Done():
+				p.ctl.ended <- ctx.Err()
+				return ui.Text("results gone")
+			case <-time.After(p.ctl.slow):
+				p.ctl.ended <- nil
+				return ui.Text(fmt.Sprint("results ", p.n))
+			}
+		})
+	}
+	return ui.El("main", nil,
+		ui.El("button", []ui.Attr{{Name: "onClick", Value: ui.On(p.Search)}}, ui.Text("search")),
+		ui.El("section", nil, results))
+}
+
+func searchApp(ctl *searchCtl) *App {
+	a := New(Only("none"))
+	a.Live("/search", func() *searchPage { return &searchPage{ctl: ctl} })
+	a.Get("/next", func() ui.Node { return ui.El("main", nil, ui.Text("next")) })
+	return a
+}
+
+// navigatedBy reads the connection's messages until the reply to the
+// navigate ref, failing on an error, and returns the events' replies seen
+// before it.
+func navigatedBy(t *testing.T, c *websocket.Conn, ref int, wait time.Duration) []int {
+	t.Helper()
+	var before []int
+	for {
+		m, err := recv(c, wait)
+		if err != nil {
+			t.Fatalf("waiting for the navigation's reply: %v (replies seen: %v)", err, before)
+		}
+		if m.Type == live.Error {
+			t.Fatalf("an error: %+v", m)
+		}
+		if m.Ref == ref {
+			return before
+		}
+		before = append(before, m.Ref)
+	}
+}
+
+// A navigate leaving the page behind queued events: each event's handler
+// still runs, in order, with a live context — the one working when the
+// navigate arrives too — while the renders after them, reads, are ended, so
+// the navigation doesn't wait for every queued search's query.
+func TestLiveNavigateEndsTheRendersOfQueuedEvents(t *testing.T) {
+	ctl := &searchCtl{work: 150 * time.Millisecond, slow: 3 * time.Second, ended: make(chan error, 8)}
+	srv := httptest.NewServer(searchApp(ctl).Handler())
+	defer srv.Close()
+	c, html := joined(t, srv, "/search")
+	target := handlerOf(t, html, "click", 0)
+	start := time.Now()
+	for ref := 2; ref <= 4; ref++ {
+		send(t, c, map[string]any{"type": "event", "ref": ref, "target": target, "event": "click"})
+	}
+	send(t, c, map[string]any{"type": "navigate", "ref": 5, "url": "/next"})
+	before := navigatedBy(t, c, 5, 3*time.Second)
+	if d := time.Since(start); d > 1500*time.Millisecond {
+		t.Errorf("the navigation waited %v for the queued renders", d)
+	}
+	if len(before) != 3 || before[0] != 2 || before[1] != 3 || before[2] != 4 {
+		t.Errorf("the events' replies before the navigation's: %v", before)
+	}
+	ctl.mu.Lock()
+	handled := slices.Clone(ctl.handled)
+	ctl.mu.Unlock()
+	if len(handled) != 3 {
+		t.Fatalf("%d handlers ran, want 3", len(handled))
+	}
+	for i, err := range handled {
+		if err != nil {
+			t.Errorf("handler %d ran with its context ended: %v", i+1, err)
+		}
+	}
+	for i := range 3 {
+		if err := <-ctl.ended; !errors.Is(err, context.Canceled) {
+			t.Errorf("render %d's query ended with %v", i+1, err)
+		}
+	}
+}
+
+// A render in progress after an event's handler is ended by a navigate that
+// arrives while it runs.
+func TestLiveNavigateEndsARenderAfterAHandler(t *testing.T) {
+	ctl := &searchCtl{slow: 3 * time.Second, ended: make(chan error, 2)}
+	srv := httptest.NewServer(searchApp(ctl).Handler())
+	defer srv.Close()
+	c, html := joined(t, srv, "/search")
+	send(t, c, map[string]any{"type": "event", "ref": 2, "target": handlerOf(t, html, "click", 0), "event": "click"})
+	time.Sleep(200 * time.Millisecond) // the handler returned; its render is in the slow query
+	start := time.Now()
+	send(t, c, map[string]any{"type": "navigate", "ref": 3, "url": "/next"})
+	navigatedBy(t, c, 3, 3*time.Second)
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("the navigation waited %v for the render", d)
+	}
+	if err := <-ctl.ended; !errors.Is(err, context.Canceled) {
+		t.Errorf("the render's query ended with %v", err)
+	}
+}
+
+// A patch of a page with an Update keeps it: the renders of the events
+// before it run to the end, and later events' handlers see a live context.
+func TestLivePatchKeepsTheRendersOfQueuedEvents(t *testing.T) {
+	ctl := &searchCtl{slow: 300 * time.Millisecond, ended: make(chan error, 4)}
+	srv := httptest.NewServer(searchApp(ctl).Handler())
+	defer srv.Close()
+	c, html := joined(t, srv, "/search")
+	target := handlerOf(t, html, "click", 0)
+	send(t, c, map[string]any{"type": "event", "ref": 2, "target": target, "event": "click"})
+	send(t, c, map[string]any{"type": "navigate", "ref": 3, "url": "/search?page=2", "patch": true})
+	if before := navigatedBy(t, c, 3, 3*time.Second); len(before) != 1 || before[0] != 2 {
+		t.Errorf("the event's reply before the patch's: %v", before)
+	}
+	send(t, c, map[string]any{"type": "event", "ref": 4, "target": target, "event": "click"})
+	patchesUntil(t, c, "results 2")
+	for i := range 2 {
+		if err := <-ctl.ended; err != nil {
+			t.Errorf("render %d's query ended with %v", i+1, err)
+		}
+	}
+}
+
 // A page rendered for a form posted without script has no connection to
 // receive its deferred fields: they load before it is sent.
 type deferFormPage struct {
@@ -445,4 +609,104 @@ func TestBrowserDeferredTemplate(t *testing.T) {
 	p.WaitText("#rows", "rows Ada,Alan")
 	p.Click("#more")
 	p.WaitText("#more-users", "users Grace")
+}
+
+// searchURLPage keeps its search in the URL: each event's handler only edits
+// it, and the render that follows runs a slow query (3s at most, unless its
+// context ends) — a DataTable with a Load searching as the user types.
+type searchURLPage struct {
+	ui.Live
+	Q string
+	n int
+}
+
+type searchURLParams struct {
+	URLParams
+	Q string `query:"q"`
+}
+
+func (p *searchURLPage) Update(q searchURLParams) { p.Q = q.Q }
+
+func (p *searchURLPage) Search(ctx context.Context) error {
+	p.n++
+	ui.EditURL(ctx, func(v url.Values) { v.Set("q", strings.Repeat("a", p.n)) }, false)
+	return nil
+}
+
+func (p *searchURLPage) Render() ui.Node {
+	results := ui.Text("no search")
+	if p.Q != "" || p.n > 0 {
+		results = ui.Ctx(func(ctx context.Context) ui.Node {
+			select {
+			case <-ctx.Done():
+				return ui.Text("results gone")
+			case <-time.After(3 * time.Second):
+				return ui.Text("results for " + p.Q)
+			}
+		})
+	}
+	return ui.El("main", nil,
+		ui.El("button", []ui.Attr{{Name: "id", Value: "search"}, {Name: "onClick", Value: ui.On(p.Search)}}, ui.Text("search")),
+		ui.Link(ui.LinkProps{Href: "/next", ID: "to-next", Children: ui.Text("next")}),
+		ui.El("section", nil, results))
+}
+
+// nextPage is a live page a search page's link goes to.
+type nextPage struct{ ui.Live }
+
+func (p *nextPage) Render() ui.Node {
+	return ui.El("main", nil, ui.El("p", attrs("id", "next"), ui.Text("next")))
+}
+
+// A click on a link behind searches still rendering leaves the page at once,
+// and stays left: the URL edits the searches' replies carry belong to the
+// page left, not to the visitor's next move.
+func TestBrowserNavigateLeavesBehindQueuedSearches(t *testing.T) {
+	a := New(Only("none"))
+	a.Live("/search", func() *searchURLPage { return &searchURLPage{} })
+	a.Live("/next", func() *nextPage { return &nextPage{} })
+	srv := httptest.NewServer(a.Handler())
+	t.Cleanup(srv.Close)
+	p := chrome.Launch(t).Open(srv.URL + "/search")
+	p.Wait(`document.documentElement.dataset.vkState === "connected"`)
+	start := time.Now()
+	p.Eval(`(async () => {
+		const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+		for (let i = 0; i < 3; i++) { document.querySelector("#search").click(); await sleep(150); }
+		document.querySelector("#to-next").click();
+	})()`, nil)
+	p.WaitText("#next", "next")
+	if d := time.Since(start); d > 1500*time.Millisecond {
+		t.Errorf("the navigation took %v behind the searches", d)
+	}
+	time.Sleep(300 * time.Millisecond) // a search's URL edit would have moved it back by now
+	var path string
+	p.Eval(`location.pathname`, &path)
+	if path != "/next" {
+		t.Errorf("the page went back to %q", path)
+	}
+}
+
+// Patches the browser sent before a navigate leaving the page — a search's
+// URL edits — were superseded there: the one rendering when the navigate
+// arrives is ended, those queued behind it don't run, and each still gets a
+// reply that is no error.
+func TestLiveNavigateSupersedesQueuedPatches(t *testing.T) {
+	a := New(Only("none"))
+	a.Live("/search", func() *searchURLPage { return &searchURLPage{} })
+	a.Get("/next", func() ui.Node { return ui.El("main", nil, ui.Text("next")) })
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	c, _ := joined(t, srv, "/search")
+	send(t, c, map[string]any{"type": "navigate", "ref": 2, "url": "/search?q=a", "patch": true})
+	time.Sleep(200 * time.Millisecond) // its render is in the slow query
+	start := time.Now()
+	send(t, c, map[string]any{"type": "navigate", "ref": 3, "url": "/search?q=aa", "patch": true})
+	send(t, c, map[string]any{"type": "navigate", "ref": 4, "url": "/next"})
+	if before := navigatedBy(t, c, 4, 3*time.Second); len(before) != 2 || before[0] != 2 || before[1] != 3 {
+		t.Errorf("the patches' replies before the navigation's: %v", before)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("the navigation waited %v behind the patches", d)
+	}
 }

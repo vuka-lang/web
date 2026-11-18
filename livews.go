@@ -325,11 +325,14 @@ type conn struct {
 	doing  string                          // what the session runs, for its errors' log: a handler's name, "join", …
 	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
-	loads     []context.CancelFunc // end the deferred loads of the page joined or navigated to
-	updatable atomic.Bool          // the page shown has an Update(URLParams): only then can a patch keep it
-	applying  atomic.Bool          // the loop is applying a deferred load (a render, read-only)
-	leave     atomic.Value         // context.CancelFunc ending the page's context, for leaveEarly
-	vars      *varHistory          // the page's context processors' results, from one page to the next
+	loads     []context.CancelFunc     // end the deferred loads of the page joined or navigated to
+	updatable atomic.Bool              // the page shown has an Update(URLParams): only then can a patch keep it
+	leave     atomic.Pointer[leaveCtx] // the page's context, whose renders leaveEarly can end
+	leaving   atomic.Int32             // navigates leaving the page read and not yet served
+	readMu    sync.Mutex               // guards reading against leaveEarly
+	reading   bool                     // the loop renders after a handler, or applies a deferred load: a read
+	answering bool                     // an event's or a broadcast's handler runs; the render after it is a read
+	vars      *varHistory              // the page's context processors' results, from one page to the next
 
 	layouts []heldLayout         // the layouts the page renders in, loaded (loadLayouts)
 	navs    int                  // navigations so far
@@ -437,7 +440,9 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			c.s.Close()
 		}
 	}()
-	msgs := make(chan []byte)
+	// The reader keeps reading while the loop is busy, so a navigate that
+	// leaves the page is seen behind the events queued before it.
+	msgs := make(chan clientMsg, liveQueue)
 	go func() {
 		defer cancel()
 		for {
@@ -446,9 +451,9 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 				c.noteDrop(err)
 				return
 			}
-			c.leaveEarly(data)
+			leaves := c.leaveEarly(data)
 			select {
-			case msgs <- data:
+			case msgs <- clientMsg{data, leaves}:
 			case <-ctx.Done():
 				return
 			}
@@ -482,14 +487,17 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			if s, ok := c.s.(interface{ Trim() }); ok {
 				s.Trim()
 			}
-		case data := <-msgs:
+		case msg := <-msgs:
 			active()
+			if msg.leaves {
+				c.leaving.Add(-1) // served now: the renders before it are behind it
+			}
 			if c.ending.Load() {
 				c.noteClose(closeReload, "live: the page must load again", "CloseLive closed the page")
 				ws.Close(closeReload, "live: the page must load again")
 				return
 			}
-			if !c.handle(ctx, data) {
+			if !c.handle(ctx, msg.data) {
 				return
 			}
 			if c.s != nil {
@@ -605,9 +613,18 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		c.startDeferred(false)
 	case c.s == nil:
 		c.write(ctx, live.ServerMessage{Type: live.Error, Ref: m.Ref, Error: "live: join first"})
+	case m.Type == live.Navigate && c.leaving.Load() > 0:
+		// a navigate leaving the page waits behind this one: the browser
+		// moved on from it, so neither its route nor its render runs
+		c.write(ctx, live.ServerMessage{Type: live.PatchMsg, Ref: m.Ref})
 	case m.Type == live.Navigate:
 		c.vars.newEvent()
 		reply, patch := c.navigate(ctx, m.ClientMessage)
+		if c.leaving.Load() == 0 {
+			c.leave.Load().renew() // a navigation that failed keeps the page
+		} else if sm, ok := reply.(live.ServerMessage); ok && sm.Type == live.Error {
+			reply = live.ServerMessage{Type: live.PatchMsg, Ref: m.Ref} // ended for one the browser moved on to
+		}
 		if c.varsRefused() {
 			return false
 		}
@@ -673,37 +690,71 @@ func (c *conn) check() bool {
 	return true
 }
 
-// setPage makes ctx the page's context: its events' and LiveOrigin's.
 // setPage installs ctx as the page's context, wrapped so leaveEarly can end
-// it, and returns the wrapped context, which the session must render with.
+// its renders, and returns the wrapped context, which the session must
+// render with.
 func (c *conn) setPage(ctx context.Context) context.Context {
-	ctx, cancel := context.WithCancel(ctx)
-	c.page = ctx
+	l := newLeaveCtx(ctx)
+	c.page = l
+	ctx = l
 	c.shared.Store(&ctx)
-	c.leave.Store(context.CancelFunc(cancel))
-	return ctx
+	c.leave.Store(l)
+	return l
 }
 
-// leaveEarly ends the page's context from the socket's reader: a navigate
-// that leaves the page (anything but a patch of a page with an Update) has
-// arrived while the loop applies a deferred load — a render, which is
-// read-only — so the slow query the render runs may stop now instead of
-// making the navigation wait. An event's handler is never ended this way:
-// it may be writing.
-func (c *conn) leaveEarly(data []byte) {
-	if !c.applying.Load() {
-		return
-	}
+// leaveEarly notes, from the socket's reader, a navigate that leaves the page
+// (anything but a patch of a page with an Update), and reports whether data
+// is one. Until the loop serves it, the page's renders are ended: the one in
+// progress now, when the loop is rendering after an event's handler or
+// applying a deferred load, and those after the handlers of the events queued
+// before it. A render is read-only, so the slow query it runs may stop instead
+// of making the navigation wait. An event's handler is never ended this way:
+// it may be writing, and each runs, in order, with a context of its own.
+func (c *conn) leaveEarly(data []byte) bool {
 	var m struct {
 		Type  string `json:"type"`
 		Patch bool   `json:"patch"`
 	}
 	if json.Unmarshal(data, &m) != nil || m.Type != "navigate" || m.Patch && c.updatable.Load() {
-		return // not a navigate, or a patch that may keep the page
+		return false // not a navigate, or a patch that may keep the page
 	}
-	if cancel, ok := c.leave.Load().(context.CancelFunc); ok && cancel != nil {
-		cancel()
+	c.leaving.Add(1)
+	c.readMu.Lock()
+	if c.reading {
+		c.leave.Load().end()
 	}
+	c.readMu.Unlock()
+	return true
+}
+
+// beginRead marks the start of a render that only reads: after a handler, or
+// a deferred load's apply. With a navigate leaving the page waiting, it is
+// ended at once.
+func (c *conn) beginRead() {
+	c.readMu.Lock()
+	c.reading = true
+	if c.leaving.Load() > 0 {
+		c.leave.Load().end()
+	}
+	c.readMu.Unlock()
+}
+
+func (c *conn) endRead() {
+	c.readMu.Lock()
+	c.reading = false
+	c.readMu.Unlock()
+}
+
+// answer runs a handler (an event's, a broadcast's) and the render after it
+// with the page's context live for the handler.
+func (c *conn) answer(run func() any) any {
+	c.leave.Load().renew()
+	c.answering = true
+	defer func() {
+		c.answering = false
+		c.endRead()
+	}()
+	return run()
 }
 
 // pageCtx is the page's context, from any goroutine.
@@ -758,7 +809,7 @@ func (c *conn) event(m live.ClientMessage) any {
 		m.Shown = shown
 	}
 	c.ev = ev
-	reply := c.s.Event(m)
+	reply := c.answer(func() any { return c.s.Event(m) })
 	c.ev = nil
 	if ev.refused != nil {
 		return withError{reply, c.errorText(ev.refused)}
@@ -835,6 +886,9 @@ func (c *conn) render(page ui.Node) liveproto.Render {
 	return func(context.Context) ui.Node {
 		if ev := c.ev; ev != nil {
 			ev.rendering.Store(true)
+		}
+		if c.answering {
+			c.beginRead() // the handler returned
 		}
 		return page
 	}
@@ -1100,10 +1154,19 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	rt := live.Route{Ctx: j.ctx, Render: c.render(j.page), Updates: j.updates, Keep: keep}
 	var reply any
 	var ok bool
+	// A patch the page's Update takes is a read, as a GET is: a navigate
+	// leaving the page that arrives behind it ends it, Update and render.
+	read := patch && j.updates != nil
+	if read {
+		c.beginRead()
+	}
 	if nf, can := c.s.(aheadNavigator); can && ahead != nil {
 		reply, ok = nf.NavigateFrom(m.Ref, uri, rt, ahead, patch) // closes ahead
 	} else {
 		reply, ok = c.s.Navigate(m.Ref, uri, rt, patch)
+	}
+	if read {
+		c.endRead()
 	}
 	if !ok {
 		c.page = prevPage
@@ -1343,9 +1406,9 @@ func (c *conn) drain(ctx context.Context) bool {
 				end = c.recording("load", l.d.Group, 0, nil)
 			}
 			c.vars.newEvent()
-			c.applying.Store(true)
+			c.beginRead()
 			m := ds.Loaded(l.d)
-			c.applying.Store(false)
+			c.endRead()
 			if c.varsRefused() {
 				return false
 			}
@@ -1362,7 +1425,7 @@ func (c *conn) drain(ctx context.Context) bool {
 			end = c.recordInfo(d)
 		}
 		c.vars.newEvent()
-		m := c.s.Info(d.topic, d.msg)
+		m := c.answer(func() any { return c.s.Info(d.topic, d.msg) })
 		if c.varsRefused() {
 			return false
 		}

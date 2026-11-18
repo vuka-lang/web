@@ -4108,7 +4108,13 @@
     state_set: (el, a, e) => { if (!redismiss(a, e)) swrite(a, a.v); },
     state_toggle: (el, a, e) => { if (!redismiss(a, e)) swrite(a, !sread(a)); },
     state_inc: (el, a) => swrite(a, (+sread(a) || 0) + (a.by || 0)),
-    patch: (el, a) => { move(String(a.href), true, null, !!a.replace); },
+    // A reply arriving while a navigation leaves the page answers an event of
+    // the page being left: its URL edit is not the visitor's next move.
+    patch: (el, a) => {
+      const href = String(a.href);
+      if (nav && !nav.patch && httpURL(href)) return;
+      move(href, true, null, !!a.replace);
+    },
     // reload renders the page again at its URL: a patch of it in place of
     // the history entry, scroll and focus kept (go, reload)
     reload: (el, a) => { a.sel ? reloadRegion(String(a.sel)) : move(location.href, true, null, true, true); },
