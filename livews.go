@@ -325,8 +325,9 @@ type conn struct {
 	doing  string                          // what the session runs, for its errors' log: a handler's name, "join", …
 	shared atomic.Pointer[context.Context] // page, for LiveOrigin on other goroutines
 
-	loads []context.CancelFunc // end the deferred loads of the page joined or navigated to
-	vars  *varHistory          // the page's context processors' results, from one page to the next
+	loads     []context.CancelFunc // end the deferred loads of the page joined or navigated to
+	updatable bool                 // the page shown has an Update(URLParams): only then can a patch keep it
+	vars      *varHistory          // the page's context processors' results, from one page to the next
 
 	layouts []heldLayout         // the layouts the page renders in, loaded (loadLayouts)
 	navs    int                  // navigations so far
@@ -874,6 +875,7 @@ func (c *conn) join(ctx context.Context, ref, v int, ext []string) (any, websock
 	c.setPage(j.ctx)
 	c.root = j.root
 	c.layouts = j.layouts
+	c.updatable = j.updates != nil
 	c.doing = "join"
 	return c.s.Join(ref), 0
 }
@@ -1008,12 +1010,13 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		return redirect(), false
 	}
 	c.navs++
-	if !m.Patch {
+	if !m.Patch || !c.updatable {
 		// The page is being left: end its deferred loads now, before the next
 		// page's route runs, so their queries hand the pool and the CPU to the
-		// navigation instead of racing it. A navigation asking for a patch
-		// keeps the page, so its loads go on (startDeferred settles it once
-		// the server has decided).
+		// navigation instead of racing it. Only a navigation asking for a
+		// patch of a page that can take one (it has an Update) may keep the
+		// page, so only then do its loads go on (startDeferred settles it
+		// once the server has decided).
 		c.endLoads()
 	}
 	var j *join
@@ -1072,6 +1075,7 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	c.uri = uri
 	c.layouts = j.layouts
 	c.setPage(j.ctx)
+	c.updatable = j.updates != nil
 	return withToken{reply, c.app.signToken(uri), c.docTitle(ui.PageTitle(j.ctx))}, patch
 }
 

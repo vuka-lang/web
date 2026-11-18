@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -219,6 +220,91 @@ func TestLiveDeferredNavigationEndsLoadsFirst(t *testing.T) {
 	c, _ := joined(t, srv, "/stats")
 	patchesUntil(t, c, "open 3")
 	send(t, c, map[string]any{"type": "navigate", "ref": 2, "url": "/next"})
+	for {
+		m, err := recv(c, 3*time.Second)
+		if err != nil {
+			t.Fatalf("waiting for the navigation's reply: %v", err)
+		}
+		if m.Type == live.Error {
+			t.Fatalf("the navigation failed: %+v", m)
+		}
+		if m.Ref == 2 {
+			break
+		}
+	}
+}
+
+// tabsPage is a live page with a blocking deferred load and no Update: a
+// patch can never keep it, so a tab click remounts it. probe, once set,
+// makes its mount report on mounted whether the load had ended by then.
+type tabsPage struct {
+	ui.Live
+	ctl     *deferCtl
+	probe   *atomic.Bool
+	mounted chan error
+	rows    []string
+}
+
+func (p *tabsPage) LiveSchema(l *ui.LiveSchema) {
+	l.Mount(p.mount)
+	l.Field(&p.rows, ui.Defer("rows"))
+	l.Loads("rows", p.loadRows)
+}
+
+func (p *tabsPage) mount(ctx context.Context) error {
+	if !p.probe.Load() {
+		return nil
+	}
+	select {
+	case err := <-p.ctl.ended:
+		p.mounted <- err
+	case <-time.After(3 * time.Second):
+		p.mounted <- errors.New("the old page's load still ran when the tab's route did")
+	}
+	return nil
+}
+
+func (p *tabsPage) loadRows(ctx context.Context) error {
+	select {
+	case <-p.ctl.release:
+	case <-ctx.Done():
+		p.ctl.ended <- ctx.Err()
+		return ctx.Err()
+	}
+	p.rows = []string{"Ada"}
+	return nil
+}
+
+func (p *tabsPage) Render() ui.Node {
+	text := "rows loading"
+	if !p.Loading("rows") {
+		text = "rows " + strings.Join(p.rows, ",")
+	}
+	return ui.El("main", nil, ui.Text(text))
+}
+
+// A tab's click asks for a patch, but a page without an Update can't take
+// one: the navigation remounts it, so its loads end before the route runs,
+// as any other navigation's do.
+func TestLiveDeferredPatchWithoutUpdateEndsLoadsFirst(t *testing.T) {
+	ctl := &deferCtl{release: make(chan struct{}), ended: make(chan error, 1)}
+	probe := &atomic.Bool{}
+	mounted := make(chan error, 1)
+	a := New(Only("none"))
+	a.Live("/tabs", func() *tabsPage { return &tabsPage{ctl: ctl, probe: probe, mounted: mounted} })
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	c, _ := joined(t, srv, "/tabs")
+	probe.Store(true)
+	send(t, c, map[string]any{"type": "navigate", "ref": 2, "url": "/tabs?tab=2", "patch": true})
+	select {
+	case err := <-mounted:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("mounting again saw %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("the tab's route never ran")
+	}
 	for {
 		m, err := recv(c, 3*time.Second)
 		if err != nil {
