@@ -368,6 +368,8 @@ type join struct {
 	page    ui.Node
 	ctx     context.Context
 	updates map[ui.Stateful]any // a Live page's URLParams for its Update, on a patch
+	route   string              // a Live page's route, "/orders/{id}"
+	where   string              // and its page, "live page main.Order"
 	root    reflect.Type        // the route's root layout (RouteInfo.RootLayout), nil when it has none
 	held    []heldLayout        // on a navigation, the layouts of the page it leaves
 	layouts []heldLayout        // the layouts the route loaded, for the next navigation
@@ -1077,6 +1079,9 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		return redirect(), false // another document: the browser loads it
 	}
 	patch := m.Patch && j.updates != nil
+	if m.Patch && !patch {
+		c.app.warnNoUpdate(ctx, j)
+	}
 	if ahead != nil && patch {
 		// a patch keeps the page's instances, and its slot, which the render
 		// ahead keyed the page below the layouts by: nothing there to take
@@ -1113,6 +1118,19 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	c.layouts = j.layouts
 	c.updatable.Store(j.updates != nil)
 	return withToken{reply, c.app.signToken(uri), c.docTitle(ui.PageTitle(j.ctx))}, patch
+}
+
+// warnNoUpdate says, once for each route and in development only, that a
+// patch navigation asked for a live page that has no Update: it mounts
+// again, as any navigation to it does.
+func (a *App) warnNoUpdate(ctx context.Context, j *join) {
+	if !a.dev || j.route == "" {
+		return
+	}
+	if _, seen := a.noUpdate.LoadOrStore(j.route, true); seen {
+		return
+	}
+	slog.WarnContext(ctx, "a patch link targets a live page without Update, so the page mounts again: add Update(ctx, params) to keep the page on patches", "route", j.route, "page", j.where)
 }
 
 // docTitle is the title of the document the session renders, as a load of

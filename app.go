@@ -90,6 +90,7 @@ type App struct {
 	tb        *toolbar   // nil: no development toolbar
 	devSock   *devSocket // nil: nothing to tell a development page
 	noToolbar bool
+	noUpdate  sync.Map // the routes a patch link was warned about (warnNoUpdate)
 	// graphqlPath is web.GraphQL's path, for the toolbar's GraphiQL panel.
 	graphqlPath string
 

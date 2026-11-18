@@ -289,7 +289,11 @@ func (a *App) compileLive(s *routeSpec) (http.Handler, error) {
 			return
 		}
 		comp := c.Interface().(ui.Stateful)
-		if j, ok := r.Context().Value(joinKey{}).(*join); ok && params != nil {
+		j, joined := r.Context().Value(joinKey{}).(*join)
+		if joined {
+			j.route, j.where = s.path, s.where
+		}
+		if joined && params != nil {
 			pv := reflect.New(params.typ)
 			if err := a.bindProps(pv.Elem(), paramProps, pathNames, r); err != nil {
 				end()
