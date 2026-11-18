@@ -59,13 +59,13 @@ func (b *typingBox) Render() ui.Node {
 // struct form and a component.
 type typingPage struct {
 	ui.Live
-	Q, Note string
-	Notes   []string
-	Rows    []string
-	Ticks   int
-	Form    typingForm
-	next    int
-	items   ui.Stream[typingItem]
+	Q, Note, Trim string
+	Notes         []string
+	Rows          []string
+	Ticks         int
+	Form          typingForm
+	next          int
+	items         ui.Stream[typingItem]
 }
 
 func (p *typingPage) LiveSchema(l *ui.LiveSchema) { l.Mount(p.mount) }
@@ -85,6 +85,7 @@ func (p *typingPage) Update(m typingTick) {
 }
 
 func (p *typingPage) Set(q string)           { p.Q = q }
+func (p *typingPage) SetTrim(q string)       { p.Trim = strings.TrimSpace(q) }
 func (p *typingPage) SetNote(q string)       { p.Note = q }
 func (p *typingPage) Add(n typingNote) error { p.Notes = append(p.Notes, n.Text); return nil }
 func (p *typingPage) Save(typingForm) error  { return nil }
@@ -119,6 +120,7 @@ func (p *typingPage) Render() ui.Node {
 <button id="sdrop" onClick={sdrop}>stream drop</button>
 <button id="sedit" onClick={sedit}>stream edit</button>
 <input id="q" value={q} onInput={set}/>
+<input id="tr" value={trim} onInput={setTrim}/>
 <input id="d" value={q2} onInput={set2} data-vk-debounce="500"/>
 <textarea id="note" onInput={setNote}>{note}</textarea>
 <div id="ed" contenteditable="true">hello</div>
@@ -131,7 +133,7 @@ func (p *typingPage) Render() ui.Node {
 {box}
 </main>`, p.Ticks, p.Tick, p.DropFirst, p.PrependRow, p.Rotate, p.StreamTop,
 		ui.JS.Push(p.StreamDrop, 1), ui.JS.Push(p.StreamEdit, 3),
-		p.Q, p.Set, p.Q, p.Set, p.SetNote, p.Note, rows, idrows, block.Attrs(), block, p.Add, strings.Join(p.Notes, "|"),
+		p.Q, p.Set, p.Trim, p.SetTrim, p.Q, p.Set, p.SetNote, p.Note, rows, idrows, block.Attrs(), block, p.Add, strings.Join(p.Notes, "|"),
 		ui.Form{For: ui.For(&p.Form), OnSubmit: p.Save},
 		ui.Component("box", nil, &typingBox{}))
 }
@@ -381,4 +383,55 @@ func TestBrowserTypingContentEditable(t *testing.T) {
 	p.Keys(" world")
 	a.Broadcast(context.Background(), "typing", typingTick{})
 	wantAll(t, waitSeen(t, p, 1), "ed:hello world:11")
+}
+
+// TestBrowserFocusedFieldKeepsValue: the answer to a focused field's own
+// event echoing another value than the field shows (the server trims what
+// it stores) leaves the field as it is; the server's value is taken when
+// the field loses the focus.
+func TestBrowserFocusedFieldKeepsValue(t *testing.T) {
+	p, _, _ := typingServer(t)
+	p.Click("#tr")
+	p.Eval(`(() => { const q = document.querySelector("#tr"); q.value = "ab "; q.setSelectionRange(3, 3); q.dispatchEvent(new Event("input", {bubbles: true})); })()`, nil)
+	waitSeen(t, p, 1)
+	time.Sleep(100 * time.Millisecond)
+	if v := value(t, p, "#tr"); v != "ab " {
+		t.Fatalf("focused field shows %q after the echo, want %q", v, "ab ")
+	}
+	var at int
+	p.Eval(`document.querySelector("#tr").selectionStart`, &at)
+	if at != 3 {
+		t.Fatalf("caret at %d, want 3", at)
+	}
+	// typing on is sent and answered; the field keeps the focus and its text
+	p.Keys("c")
+	waitSeen(t, p, 1)
+	if v := value(t, p, "#tr"); v != "ab c" {
+		t.Fatalf("focused field shows %q, want %q", v, "ab c")
+	}
+	p.Eval(`(() => { const q = document.querySelector("#tr"); q.value = "ab  "; q.dispatchEvent(new Event("input", {bubbles: true})); })()`, nil)
+	waitSeen(t, p, 1)
+	time.Sleep(100 * time.Millisecond)
+	if v := value(t, p, "#tr"); v != "ab  " {
+		t.Fatalf("focused field shows %q, want %q", v, "ab  ")
+	}
+	p.Eval(`document.activeElement.blur()`, nil)
+	p.Wait(`document.querySelector("#tr").value === "ab"`)
+}
+
+// TestBrowserUnfocusedFieldTakesEcho: a field that lost the focus before
+// the answer takes the server's value, and a focused one the echo equals
+// is untouched.
+func TestBrowserUnfocusedFieldTakesEcho(t *testing.T) {
+	p, _, delay := typingServer(t)
+	delay.Store(int64(250 * time.Millisecond))
+	p.Click("#tr")
+	p.Eval(`(() => { const q = document.querySelector("#tr"); q.value = "xy "; q.dispatchEvent(new Event("input", {bubbles: true})); q.blur(); })()`, nil)
+	p.Wait(`document.querySelector("#tr").value === "xy"`)
+	// focused, the echo equals what was typed
+	p.Click("#tr")
+	p.Eval(`(() => { const q = document.querySelector("#tr"); q.value = "zz"; q.setSelectionRange(1, 1); q.dispatchEvent(new Event("input", {bubbles: true})); })()`, nil)
+	seen(t, p)
+	waitSeen(t, p, 1)
+	wantAll(t, []string{"tr:" + value(t, p, "#tr") + ":1"}, "tr:zz:1")
 }

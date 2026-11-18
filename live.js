@@ -1269,7 +1269,7 @@
     if (shown.length) msg.shown = shown;
     msg.ref = ++ref;
     const f = document.activeElement;
-    sentField = f && isField(f) ? { el: f, shows: fieldShows(f), ref: msg.ref } : null;
+    sentField = f && isField(f) ? { el: f, shows: fieldShows(f), ref: msg.ref, edit: msg.event === "input" || msg.event === "change" } : null;
     if (el && (form || msg.event === "click" || edge(msg.event))) {
       const held = form && msg.event === "submit" && form.hasAttribute("data-vk-form") ? holdForm(form, lastSubmitter) : null;
       busy.set(msg.ref, { el, form, held, shows: form && form.elements && Array.from(form.elements, (c) => isField(c) ? fieldShows(c) : null) });
@@ -1366,8 +1366,20 @@
       // with the answer, if the field still shows what it sent
       if (unanswered && serverValue(el) !== before) { heldServer.add(el); heldEls.add(el); }
       else if (!unanswered) unhold(el);
-    } else if (fresh || serverValue(el) !== before || heldServer.has(el)) takeServer(el);
-    if (!typing) unhold(el);
+    } else if (fresh || serverValue(el) !== before || heldServer.has(el)) {
+      // a focused field's value is never overwritten by a patch: the answer
+      // to its own event (or a value already held) that renders another
+      // value than the field shows — a trimmed search term — waits for the
+      // field to lose the focus
+      if (!fresh && textual(el) && el === document.activeElement && shown && sentField.edit && (replying === sentField.ref || heldServer.has(el)) && serverText(el) !== el.value) {
+        restore(el, seen);
+        heldServer.add(el);
+        heldEls.add(el);
+        return;
+      }
+      takeServer(el);
+      unhold(el);
+    } else unhold(el);
   }
   // A branch's root (data-vk-br) says which branch of an {if} or {match}
   // rendered it: the render tree writes it on the roots of a branch that
@@ -2160,6 +2172,16 @@
     if (el.tagName === "SELECT") return Array.from(el.options).filter((o) => o.hasAttribute("selected")).map((o) => o.value).join("\0");
     return el.getAttribute("value");
   }
+
+  const textual = (el) => !checkable(el) && el.tagName !== "SELECT";
+  const serverText = (el) => (el.tagName === "TEXTAREA" ? el.textContent : el.getAttribute("value")) || "";
+  // a field that held a server value takes it when it loses the focus
+  document.addEventListener("focusout", (e) => {
+    const el = e.target;
+    if (!heldServer.has(el)) return;
+    unhold(el);
+    if (el.isConnected && el !== document.activeElement && textual(el) && el.value !== serverText(el)) takeServer(el);
+  }, true);
 
   function takeServer(el) {
     if (checkable(el)) {
