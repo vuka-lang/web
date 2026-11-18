@@ -197,6 +197,42 @@ func TestLiveDeferredTemplateNavigation(t *testing.T) {
 	}
 }
 
+// Leaving the page ends its loads before the next page's route runs, so a
+// slow load's query hands the database to the navigation instead of racing it.
+func TestLiveDeferredNavigationEndsLoadsFirst(t *testing.T) {
+	ctl := &deferCtl{release: make(chan struct{}), ended: make(chan error, 1)}
+	a := New(Only("none"))
+	a.Live("/stats", func() *statsPage { return &statsPage{ctl: ctl} })
+	a.Get("/next", func() ui.Node {
+		select {
+		case err := <-ctl.ended:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("the load ended with %v", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Error("the old page's load still ran when the next page's route did")
+		}
+		return ui.El("main", nil, ui.Text("next"))
+	})
+	srv := httptest.NewServer(a.Handler())
+	defer srv.Close()
+	c, _ := joined(t, srv, "/stats")
+	patchesUntil(t, c, "open 3")
+	send(t, c, map[string]any{"type": "navigate", "ref": 2, "url": "/next"})
+	for {
+		m, err := recv(c, 3*time.Second)
+		if err != nil {
+			t.Fatalf("waiting for the navigation's reply: %v", err)
+		}
+		if m.Type == live.Error {
+			t.Fatalf("the navigation failed: %+v", m)
+		}
+		if m.Ref == 2 {
+			break
+		}
+	}
+}
+
 // A page rendered for a form posted without script has no connection to
 // receive its deferred fields: they load before it is sent.
 type deferFormPage struct {

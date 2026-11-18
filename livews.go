@@ -581,6 +581,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 	case m.Type == live.Join:
 		c.clearAhead() // made against the session the join replaces
 		if c.s != nil {
+			c.endLoads() // the page the join replaces is gone with it
 			c.s.Close()
 			c.s = nil
 		}
@@ -1007,6 +1008,14 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		return redirect(), false
 	}
 	c.navs++
+	if !m.Patch {
+		// The page is being left: end its deferred loads now, before the next
+		// page's route runs, so their queries hand the pool and the CPU to the
+		// navigation instead of racing it. A navigation asking for a patch
+		// keeps the page, so its loads go on (startDeferred settles it once
+		// the server has decided).
+		c.endLoads()
+	}
 	var j *join
 	var ahead *live.Session // the page rendered at hover, its instances for the taking
 	if a := c.aheadTake(uri); a != nil {
@@ -1192,6 +1201,15 @@ const maxSeenGroups = 64
 // loaded is a deferred load done, waiting in the inbox to be applied.
 type loaded struct{ d *ui.DeferredLoad }
 
+// endLoads ends the deferred loads of the page the connection shows, run
+// on the connection's goroutine as every use of c.loads is.
+func (c *conn) endLoads() {
+	for _, end := range c.loads {
+		end()
+	}
+	c.loads = nil
+}
+
 // startDeferred runs the deferred loads of the page just joined or
 // navigated to, or of the components an event, a broadcast or a load
 // mounted (kept), each on its own goroutine with the page's context; each,
@@ -1204,10 +1222,7 @@ func (c *conn) startDeferred(kept bool) {
 		return
 	}
 	if !kept {
-		for _, end := range c.loads {
-			end()
-		}
-		c.loads = nil
+		c.endLoads()
 	}
 	c.runLoads(ds.Deferred())
 }
