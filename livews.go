@@ -683,19 +683,21 @@ func (c *conn) setPage(ctx context.Context) context.Context {
 }
 
 // leaveEarly ends the page's context from the socket's reader: a navigate
-// has arrived while the loop applies a deferred load — a render, which is
-// read-only — of a page no patch can keep, so the slow query the render
-// runs may stop now instead of making the navigation wait. An event's
-// handler is never ended this way: it may be writing.
+// that leaves the page (anything but a patch of a page with an Update) has
+// arrived while the loop applies a deferred load — a render, which is
+// read-only — so the slow query the render runs may stop now instead of
+// making the navigation wait. An event's handler is never ended this way:
+// it may be writing.
 func (c *conn) leaveEarly(data []byte) {
-	if !c.applying.Load() || c.updatable.Load() {
+	if !c.applying.Load() {
 		return
 	}
 	var m struct {
-		Type string `json:"type"`
+		Type  string `json:"type"`
+		Patch bool   `json:"patch"`
 	}
-	if json.Unmarshal(data, &m) != nil || m.Type != "navigate" {
-		return
+	if json.Unmarshal(data, &m) != nil || m.Type != "navigate" || m.Patch && c.updatable.Load() {
+		return // not a navigate, or a patch that may keep the page
 	}
 	if cancel, ok := c.leave.Load().(context.CancelFunc); ok && cancel != nil {
 		cancel()

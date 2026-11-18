@@ -354,6 +354,8 @@ func (p *slowRenderPage) Render() ui.Node {
 	}))
 }
 
+func (p *slowRenderPage) Update(statsParams) {}
+
 // A navigate arriving while a deferred load's apply renders — a read — ends
 // the page's context, so the slow query the render runs stops instead of
 // making the navigation wait behind it.
