@@ -91,6 +91,9 @@ func Native() bool {
 	return bytes.Contains(b, []byte(`"trees"`))
 }
 
+// SetShared sets the shared components the page may show (live.Session.SetShared).
+func (x native) SetShared(set *live.SharedSet, links live.SharedLinks) { x.s.SetShared(set, links) }
+
 func (x native) Event(m live.ClientMessage) any { return x.s.Handle(m) }
 
 // HTML is the page's HTML as last rendered (live.Session.HTML).

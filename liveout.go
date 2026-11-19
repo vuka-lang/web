@@ -200,5 +200,9 @@ func (c *conn) queue(ctx context.Context, m any, wait bool) bool {
 		f.Report = c.wire.apply(b)
 		c.frames = append(c.frames, f)
 	}
-	return c.send(ctx, b, wait)
+	ok := c.send(ctx, b, wait)
+	if ok && c.pendingShared.Load() {
+		c.activateShared()
+	}
+	return ok
 }

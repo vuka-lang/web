@@ -477,6 +477,9 @@ func stateOf(ctx context.Context) *state {
 		return nil
 	}
 	st, _ := ctx.Value(stateKey{}).(*state)
+	if st == nil {
+		ui.ViewerRead(ctx, "the signed-in identity")
+	}
 	return st
 }
 

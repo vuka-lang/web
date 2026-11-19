@@ -198,12 +198,13 @@ const hubShards = 64
 // its id, the sockets of an address in the shard of the address and those of
 // a page token in the shard of the token. A broadcast takes one lock.
 type hub struct {
-	shards  [hubShards]hubShard
-	seed    maphash.Seed
-	nextID  atomic.Uint64
-	open    atomic.Int64 // the sockets admitted, open or opening
-	closed  atomic.Bool
-	streams sync.Map // the event-stream connections, by id (livesse.go)
+	shards   [hubShards]hubShard
+	seed     maphash.Seed
+	nextID   atomic.Uint64
+	open     atomic.Int64 // the sockets admitted, open or opening
+	closed   atomic.Bool
+	streams  sync.Map                   // the event-stream connections, by id (livesse.go)
+	onShared func(name string, msg any) // a broadcast to a shared component, by its type's name
 
 	joinTimeout, idleTimeout, checkEvery, trimAfter time.Duration
 	maxConns, maxPerIP, maxPerTok                   int
@@ -350,6 +351,12 @@ func (h *hub) setTopics(c *conn, ts []string) {
 }
 
 func (h *hub) deliver(topic string, msg any) {
+	if name, ok := strings.CutPrefix(topic, sharedTopicPrefix); ok {
+		if h.onShared != nil {
+			h.onShared(name, msg)
+		}
+		return
+	}
 	if topic == "" {
 		h.each(func(c *conn) { c.post(topic, msg) })
 		return
@@ -420,12 +427,18 @@ type conn struct {
 	ahead   map[string]*aheadNav // pages mounted ahead of a click, by URL (liveprefetch.go)
 	aheadTB *tbEntry             // the toolbar record of a used prefetch's run, for navigated
 
-	mu      sync.Mutex
-	inbox   []delivery
-	wake    chan struct{}
-	ending  atomic.Bool // CloseLive matched the page: it closes before anything else
-	out     outbox      // the frames waiting for its socket
-	closing atomic.Bool // closeConn ran
+	mu     sync.Mutex
+	inbox  []delivery
+	wake   chan struct{}
+	ending atomic.Bool // CloseLive matched the page: it closes before anything else
+	out    outbox      // the frames waiting for its socket
+
+	smu           sync.Mutex // the shared components it shows: ordering of their frames in out
+	sh            map[*sharedRun]*sharedSt
+	known         []uint64    // the shared statics ids its browser holds, as a bitset
+	pendingShared atomic.Bool // a shared component was attached by a render whose message isn't queued yet
+	overflowing   atomic.Bool
+	closing       atomic.Bool // closeConn ran
 }
 
 type delivery struct {
@@ -521,6 +534,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		if c.s != nil {
 			c.s.Close()
 		}
+		c.dropShared()
 	}()
 	// The reader keeps reading while the loop is busy, so a navigate that
 	// leaves the page is seen behind the events queued before it.
@@ -1029,6 +1043,11 @@ func (c *conn) join(ctx context.Context, ref, v int, ext []string, build string)
 		c.s = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax), ext...)
 	}
 	c.noteJoin(s != nil, min(v, c.app.liveMax))
+	if e, ok := c.s.(interface {
+		SetShared(*live.SharedSet, live.SharedLinks)
+	}); ok {
+		e.SetShared(c.app.shared, c)
+	}
 	if e, ok := c.s.(interface{ SetErrorText(func(error) string) }); ok {
 		e.SetErrorText(c.errorText)
 	}
