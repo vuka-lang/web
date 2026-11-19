@@ -5,7 +5,7 @@ go 1.27
 require (
 	github.com/andybalholm/brotli v1.2.7
 	github.com/coder/websocket v1.8.15
-	github.com/vuka-lang/ui/v2 v2.22.0
+	github.com/vuka-lang/ui/v2 v2.22.1-0.20261119015905-4f5fd98e7a81
 	github.com/vuka-lang/vuka/v2 v2.22.0
 	golang.org/x/crypto v0.55.0
 	golang.org/x/text v0.42.0
