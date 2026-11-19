@@ -17,13 +17,19 @@ import (
 type Session interface {
 	Join(ref int) any               // the page's render, or an error message
 	Event(m live.ClientMessage) any // the reply to an event
-	Info(topic string, msg any) any // what a broadcast changed; nil when nothing
+	InfoBatch(ms []Message) any     // what broadcasts, delivered in order and rendered once, changed; nil when nothing
 	Topics() []string               // the topics its instances subscribe to
 	Close()
 	// Navigate makes rt's page the session's (live.Session.Navigate): the
 	// reply to the navigate message ref, carrying url, and whether it is a
 	// patch (not an error).
 	Navigate(ref int, url string, rt live.Route, patch bool) (any, bool)
+}
+
+// Message is a broadcast: a topic and what was sent to it.
+type Message struct {
+	Topic string
+	Msg   any
 }
 
 // Render is a page's render function.
@@ -190,8 +196,12 @@ func (x native) NavigateFrom(ref int, url string, rt live.Route, ahead *live.Ses
 	return m, true
 }
 
-func (x native) Info(topic string, msg any) any {
-	p, err := x.s.Info(topic, msg)
+func (x native) InfoBatch(ms []Message) any {
+	ds := make([]live.Delivery, len(ms))
+	for i, m := range ms {
+		ds[i] = live.Delivery{Topic: m.Topic, Msg: m.Msg}
+	}
+	p, err := x.s.InfoBatch(ds)
 	switch {
 	case err != nil:
 		return live.ServerMessage{Type: live.Error, Error: x.s.ErrorText(err)}

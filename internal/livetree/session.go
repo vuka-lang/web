@@ -68,8 +68,12 @@ func (x *session) Navigate(ref int, url string, rt live.Route, patch bool) (any,
 	return m, true
 }
 
-func (x *session) Info(topic string, msg any) any {
-	p, err := x.s.Info(topic, msg)
+func (x *session) InfoBatch(ms []liveproto.Message) any {
+	ds := make([]live.Delivery, len(ms))
+	for i, m := range ms {
+		ds[i] = live.Delivery{Topic: m.Topic, Msg: m.Msg}
+	}
+	p, err := x.s.InfoBatch(ds)
 	switch {
 	case err != nil:
 		return live.ServerMessage{Type: live.Error, Error: x.s.ErrorText(err)}

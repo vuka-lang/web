@@ -1474,7 +1474,10 @@ func (c *conn) runLoads(loads []*ui.DeferredLoad) {
 }
 
 // drain delivers the broadcasts waiting for the page; before a join there is
-// nothing to deliver them to, and the join renders the page fresh.
+// nothing to deliver them to, and the join renders the page fresh. Each
+// message reaches its Update in the order it arrived, but the broadcasts
+// that wait side by side are one batch: the page renders once and sends one
+// patch for them.
 func (c *conn) drain(ctx context.Context) bool {
 	c.mu.Lock()
 	batch := c.inbox
@@ -1483,52 +1486,86 @@ func (c *conn) drain(ctx context.Context) bool {
 	if c.s == nil || len(batch) == 0 {
 		return true
 	}
-	for _, d := range batch {
-		if e, ok := d.msg.(aheadExpired); ok {
-			c.expired(e)
-			continue
-		}
-		if l, ok := d.msg.(loaded); ok {
-			ds, _ := c.s.(deferredSession)
-			if ds == nil {
-				continue
-			}
-			c.doing = "load " + l.d.Group
-			end := noop
-			if c.tb != nil {
-				end = c.recording("load", l.d.Group, 0, nil)
-			}
-			c.vars.newEvent()
-			c.beginRead()
-			m := ds.Loaded(l.d)
-			c.endRead()
-			if c.varsRefused() {
+	for i := 0; i < len(batch); {
+		switch d := batch[i].msg.(type) {
+		case aheadExpired:
+			c.expired(d)
+			i++
+		case loaded:
+			if !c.applyLoaded(ctx, d) {
 				return false
 			}
-			if m != nil {
-				c.write(ctx, m)
+			i++
+		default:
+			j := i + 1
+			for j < len(batch) && !isLoadMsg(batch[j].msg) {
+				j++
 			}
-			end()
-			continue
+			if !c.broadcasts(ctx, batch[i:j]) {
+				return false
+			}
+			i = j
 		}
-		c.aheadHeard(d.topic)
-		c.doing = "broadcast " + cmp.Or(d.topic, `""`)
-		end := noop
-		if c.tb != nil {
-			end = c.recordInfo(d)
-		}
-		c.vars.newEvent()
-		m := c.answer(func() any { return c.s.Info(d.topic, d.msg) })
-		if c.varsRefused() {
-			return false
-		}
-		if m != nil {
-			c.write(ctx, m)
-		}
-		end()
 	}
 	c.startDeferred(true) // a component a broadcast or a load mounted
 	c.syncTopics()
+	return true
+}
+
+func isLoadMsg(m any) bool {
+	switch m.(type) {
+	case aheadExpired, loaded:
+		return true
+	}
+	return false
+}
+
+// applyLoaded gives the page what a deferred load loaded.
+func (c *conn) applyLoaded(ctx context.Context, l loaded) bool {
+	ds, _ := c.s.(deferredSession)
+	if ds == nil {
+		return true
+	}
+	c.doing = "load " + l.d.Group
+	end := noop
+	if c.tb != nil {
+		end = c.recording("load", l.d.Group, 0, nil)
+	}
+	c.vars.newEvent()
+	c.beginRead()
+	m := ds.Loaded(l.d)
+	c.endRead()
+	if c.varsRefused() {
+		return false
+	}
+	if m != nil {
+		c.write(ctx, m)
+	}
+	end()
+	return true
+}
+
+// broadcasts delivers a run of broadcasts and sends the patch they made.
+func (c *conn) broadcasts(ctx context.Context, run []delivery) bool {
+	msgs := make([]liveproto.Message, len(run))
+	for i, d := range run {
+		c.aheadHeard(d.topic)
+		msgs[i] = liveproto.Message{Topic: d.topic, Msg: d.msg}
+	}
+	c.doing = "broadcast " + cmp.Or(run[0].topic, `""`)
+	end := noop
+	if c.tb != nil {
+		end = c.recordInfo(run)
+	}
+	c.vars.newEvent()
+	m := c.answer(func() any { return c.s.InfoBatch(msgs) })
+	if c.varsRefused() {
+		return false
+	}
+	if m != nil {
+		c.write(ctx, m)
+	}
+	end()
 	return true
 }
 
@@ -1575,8 +1612,13 @@ func (c *conn) record(m live.ClientMessage, data []byte) func() {
 }
 
 // recordInfo starts recording a broadcast's delivery.
-func (c *conn) recordInfo(d delivery) func() {
-	return c.recording("broadcast", fmt.Sprintf("%s %T", cmp.Or(d.topic, `""`), d.msg), 0, nil)
+func (c *conn) recordInfo(run []delivery) func() {
+	d := run[0]
+	subject := fmt.Sprintf("%s %T", cmp.Or(d.topic, `""`), d.msg)
+	if len(run) > 1 {
+		subject += fmt.Sprintf(" (and %d more, rendered together)", len(run)-1)
+	}
+	return c.recording("broadcast", subject, 0, nil)
 }
 
 func (c *conn) recording(typ, subject string, ref int, client []byte) func() {
