@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vuka-lang/ui/v2/live"
 	"io/fs"
 	"log"
 	"net"
@@ -72,6 +73,8 @@ type App struct {
 	liveMax     int // the newest live protocol version spoken
 	relay       Relay
 	hub         *hub
+	shared      *live.SharedSet                // the shared components (ui.SharedLive) of the app
+	sharedRuns  sync.Map                       // reflect.Type → *sharedRun
 	adoptWindow time.Duration                  // LiveAdopt: 0 or less mounts fresh on every join
 	liveIDs     []func(context.Context) string // LiveIdentity
 	parked      parkStore[*parkedPage]         // live sessions between a render and its join
@@ -147,6 +150,8 @@ func New(opts ...Option) *App {
 	if a.devTools && devActive() {
 		a.tools = a.newDevTools()
 	}
+	a.shared = live.NewSharedSet(a.sharedCtx, a.dev)
+	a.hub.onShared = a.onShared
 	a.compressor = newCompressor(a.compression)
 	a.css = a.appCSS()
 	a.assets = a.appAssets()

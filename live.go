@@ -589,6 +589,7 @@ func (a *App) page(rq *request, n ui.Node) {
 	if err == nil && (info.Live || info.Opaque && pageLive(html)) {
 		parts = nil // a live session renders the page again, its parts in place
 		s = live.NewSession(rq.ctx, func(context.Context) ui.Node { return n })
+		s.SetShared(a.shared, nil)
 		var out string
 		if out, err = s.Render(); err == nil {
 			buf.Reset()

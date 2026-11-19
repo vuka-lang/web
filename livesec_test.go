@@ -273,7 +273,7 @@ func TestLiveLimits(t *testing.T) {
 				t.Fatalf("over the cap: %v", err)
 			}
 			dropConnections(app)
-			waitFor(t, func() bool { app.hub.mu.Lock(); defer app.hub.mu.Unlock(); return app.hub.open == 0 })
+			waitFor(t, func() bool { return app.hub.open.Load() == 0 })
 			if _, err := dial(t, srv, tok, nil); err != nil {
 				t.Fatalf("a place freed: %v", err)
 			}

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -188,98 +189,185 @@ func (m LiveCompressionMode) mode() websocket.CompressionMode {
 	return websocket.CompressionDisabled
 }
 
-// hub is the app's live connections, and the topics each subscribes to.
+// hubShards is how many parts the hub's tables split into, a power of two.
+const hubShards = 64
+
+// hub is the app's live connections, and the topics each subscribes to. Its
+// tables are split by hash into shards, each under its own lock: a topic's
+// subscribers live in the shard of the topic, a connection in the shard of
+// its id, the sockets of an address in the shard of the address and those of
+// a page token in the shard of the token. A broadcast takes one lock.
 type hub struct {
-	mu       sync.Mutex
-	conns    map[*conn]bool
-	topics   map[string]map[*conn]bool
-	closed   bool
-	open     int            // the sockets admitted, open or opening
-	perIP    map[string]int // of them, by client address
-	perToken map[string]int // by page token
-	streams  sync.Map       // the event-stream connections, by id (livesse.go)
+	shards   [hubShards]hubShard
+	seed     maphash.Seed
+	nextID   atomic.Uint64
+	open     atomic.Int64 // the sockets admitted, open or opening
+	closed   atomic.Bool
+	streams  sync.Map                   // the event-stream connections, by id (livesse.go)
+	onShared func(name string, msg any) // a broadcast to a shared component, by its type's name
 
 	joinTimeout, idleTimeout, checkEvery, trimAfter time.Duration
 	maxConns, maxPerIP, maxPerTok                   int
 }
 
+type hubShard struct {
+	mu       sync.Mutex
+	conns    map[*conn]bool
+	topics   map[string]map[*conn]bool
+	perIP    map[string]int
+	perToken map[string]int
+}
+
 func newHub() *hub {
-	return &hub{conns: map[*conn]bool{}, topics: map[string]map[*conn]bool{}, perIP: map[string]int{}, perToken: map[string]int{},
+	h := &hub{seed: maphash.MakeSeed(),
 		joinTimeout: defaultLiveJoinTimeout, idleTimeout: defaultLiveIdleTimeout, checkEvery: defaultLiveCheckEvery,
 		maxConns: defaultLiveMaxConns, maxPerIP: defaultLiveMaxConnsPerIP, maxPerTok: defaultLiveMaxConnsPerTok}
+	for i := range h.shards {
+		h.shards[i] = hubShard{conns: map[*conn]bool{}, topics: map[string]map[*conn]bool{}, perIP: map[string]int{}, perToken: map[string]int{}}
+	}
+	return h
 }
+
+// shard is the shard of the key s (a topic, an address, a token).
+func (h *hub) shard(s string) *hubShard {
+	return &h.shards[maphash.String(h.seed, s)&(hubShards-1)]
+}
+
+// connShard is the shard c is registered in.
+func (h *hub) connShard(c *conn) *hubShard { return &h.shards[c.id&(hubShards-1)] }
 
 // admit counts a socket from ip with the page token tok against the caps:
 // the status refusing it, else 0 and the function releasing its place.
 func (h *hub) admit(ip, tok string) (int, func()) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	switch {
-	case h.maxConns > 0 && h.open >= h.maxConns:
+	if n := h.open.Add(1); h.maxConns > 0 && n > int64(h.maxConns) {
+		h.open.Add(-1)
 		return http.StatusServiceUnavailable, nil
-	case h.maxPerIP > 0 && h.perIP[ip] >= h.maxPerIP, h.maxPerTok > 0 && h.perToken[tok] >= h.maxPerTok:
+	}
+	ips, toks := h.shard(ip), h.shard(tok)
+	ips.mu.Lock()
+	if h.maxPerIP > 0 && ips.perIP[ip] >= h.maxPerIP {
+		ips.mu.Unlock()
+		h.open.Add(-1)
 		return http.StatusTooManyRequests, nil
 	}
-	h.open++
-	h.perIP[ip]++
-	h.perToken[tok]++
+	ips.perIP[ip]++
+	ips.mu.Unlock()
+	toks.mu.Lock()
+	if h.maxPerTok > 0 && toks.perToken[tok] >= h.maxPerTok {
+		toks.mu.Unlock()
+		ips.release(ip, "")
+		h.open.Add(-1)
+		return http.StatusTooManyRequests, nil
+	}
+	toks.perToken[tok]++
+	toks.mu.Unlock()
 	return 0, func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		h.open--
-		if h.perIP[ip]--; h.perIP[ip] <= 0 {
-			delete(h.perIP, ip)
+		ips.release(ip, "")
+		toks.release("", tok)
+		h.open.Add(-1)
+	}
+}
+
+// release gives back a place counted for ip or tok (the other "").
+func (sh *hubShard) release(ip, tok string) {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if ip != "" {
+		if sh.perIP[ip]--; sh.perIP[ip] <= 0 {
+			delete(sh.perIP, ip)
 		}
-		if h.perToken[tok]--; h.perToken[tok] <= 0 {
-			delete(h.perToken, tok)
+	}
+	if tok != "" {
+		if sh.perToken[tok]--; sh.perToken[tok] <= 0 {
+			delete(sh.perToken, tok)
 		}
 	}
 }
 
 func (h *hub) add(c *conn) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.closed {
-		h.conns[c] = true
+	c.id = h.nextID.Add(1)
+	sh := h.connShard(c)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if h.closed.Load() {
+		return false
 	}
-	return !h.closed
+	sh.conns[c] = true
+	return true
 }
 
 func (h *hub) remove(c *conn) {
 	h.setTopics(c, nil)
-	h.mu.Lock()
-	delete(h.conns, c)
-	h.mu.Unlock()
+	sh := h.connShard(c)
+	sh.mu.Lock()
+	delete(sh.conns, c)
+	sh.mu.Unlock()
 }
 
-func (h *hub) setTopics(c *conn, ts []string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, t := range c.topics {
-		if delete(h.topics[t], c); len(h.topics[t]) == 0 {
-			delete(h.topics, t)
+// each calls f for every connection, one shard at a time with its lock
+// released, so f may take locks of its own.
+func (h *hub) each(f func(*conn)) {
+	for i := range h.shards {
+		sh := &h.shards[i]
+		sh.mu.Lock()
+		cs := make([]*conn, 0, len(sh.conns))
+		for c := range sh.conns {
+			cs = append(cs, c)
+		}
+		sh.mu.Unlock()
+		for _, c := range cs {
+			f(c)
 		}
 	}
-	for _, t := range ts {
-		if h.topics[t] == nil {
-			h.topics[t] = map[*conn]bool{}
+}
+
+// setTopics makes ts the topics c is subscribed to. Only c's own goroutine
+// calls it, so c.topics needs no lock.
+func (h *hub) setTopics(c *conn, ts []string) {
+	for _, t := range c.topics {
+		if slices.Contains(ts, t) {
+			continue
 		}
-		h.topics[t][c] = true
+		sh := h.shard(t)
+		sh.mu.Lock()
+		if delete(sh.topics[t], c); len(sh.topics[t]) == 0 {
+			delete(sh.topics, t)
+		}
+		sh.mu.Unlock()
+	}
+	for _, t := range ts {
+		if slices.Contains(c.topics, t) {
+			continue
+		}
+		sh := h.shard(t)
+		sh.mu.Lock()
+		if sh.topics[t] == nil {
+			sh.topics[t] = map[*conn]bool{}
+		}
+		sh.topics[t][c] = true
+		sh.mu.Unlock()
 	}
 	c.topics = ts
 }
 
 func (h *hub) deliver(topic string, msg any) {
-	h.mu.Lock()
-	set := h.topics[topic]
-	if topic == "" {
-		set = h.conns
+	if name, ok := strings.CutPrefix(topic, sharedTopicPrefix); ok {
+		if h.onShared != nil {
+			h.onShared(name, msg)
+		}
+		return
 	}
-	to := make([]*conn, 0, len(set))
-	for c := range set {
+	if topic == "" {
+		h.each(func(c *conn) { c.post(topic, msg) })
+		return
+	}
+	sh := h.shard(topic)
+	sh.mu.Lock()
+	to := make([]*conn, 0, len(sh.topics[topic]))
+	for c := range sh.topics[topic] {
 		to = append(to, c)
 	}
-	h.mu.Unlock()
+	sh.mu.Unlock()
 	for _, c := range to {
 		c.post(topic, msg)
 	}
@@ -288,13 +376,9 @@ func (h *hub) deliver(topic string, msg any) {
 // closeAll closes every connection (going away: the runtime reconnects) and
 // refuses new ones.
 func (h *hub) closeAll() {
-	h.mu.Lock()
-	h.closed = true
-	conns := make([]*conn, 0, len(h.conns))
-	for c := range h.conns {
-		conns = append(conns, c)
-	}
-	h.mu.Unlock()
+	h.closed.Store(true)
+	var conns []*conn
+	h.each(func(c *conn) { conns = append(conns, c) })
 	var wg sync.WaitGroup
 	for _, c := range conns {
 		wg.Go(func() {
@@ -317,7 +401,8 @@ type conn struct {
 	s      liveproto.Session
 	page   context.Context                 // the context the page's route ran with: the join's, else the latest navigation's
 	root   reflect.Type                    // the page's root layout, nil when it has none
-	topics []string                        // guarded by the hub's mutex
+	topics []string                        // what the hub has it subscribed to, set by its own goroutine
+	id     uint64                          // the hub's number for it
 	tb     *tbSink                         // the development toolbar's record of the page, its messages under it
 	wire   *wireMirror                     // with tb, what the browser holds, to decode the frames sent
 	frames []tbFrame                       // with tb, the frames the message being recorded sent
@@ -346,6 +431,14 @@ type conn struct {
 	inbox  []delivery
 	wake   chan struct{}
 	ending atomic.Bool // CloseLive matched the page: it closes before anything else
+	out    outbox      // the frames waiting for its socket
+
+	smu           sync.Mutex // the shared components it shows: ordering of their frames in out
+	sh            map[*sharedRun]*sharedSt
+	known         []uint64    // the shared statics ids its browser holds, as a bitset
+	pendingShared atomic.Bool // a shared component was attached by a render whose message isn't queued yet
+	overflowing   atomic.Bool
+	closing       atomic.Bool // closeConn ran
 }
 
 type delivery struct {
@@ -421,7 +514,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer a.recoverSocket(ws, r)
-	c := &conn{app: a, ws: ws, r: r, uri: uri, tok: tok, wake: make(chan struct{}, 1)}
+	c := &conn{app: a, ws: ws, r: r, uri: uri, tok: tok, wake: make(chan struct{}, 1), out: outbox{space: make(chan struct{}, 1)}}
 	if a.tb != nil {
 		if c.tb = a.tb.liveSink(r.URL.Query().Get("tb"), uri); c.tb != nil {
 			ctx = context.WithValue(ctx, tbKey{}, c.tb)
@@ -441,6 +534,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		if c.s != nil {
 			c.s.Close()
 		}
+		c.dropShared()
 	}()
 	// The reader keeps reading while the loop is busy, so a navigate that
 	// leaves the page is seen behind the events queued before it.
@@ -496,10 +590,10 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			}
 			if c.ending.Load() {
 				c.noteClose(closeReload, "live: the page must load again", "CloseLive closed the page")
-				ws.Close(closeReload, "live: the page must load again")
+				c.closeConn(closeReload, "live: the page must load again")
 				return
 			}
-			if !c.handle(ctx, msg.data) {
+			if !c.handle(ctx, msg.data) || c.out.isDead() {
 				return
 			}
 			if c.s != nil {
@@ -516,15 +610,15 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		case <-deadline.C:
 			if c.s == nil {
 				c.noteClose(websocket.StatusPolicyViolation, "live: no join in time", "the socket sent no join within "+cmp.Or(a.hub.joinTimeout, defaultLiveJoinTimeout).String())
-				ws.Close(websocket.StatusPolicyViolation, "live: no join in time")
+				c.closeConn(websocket.StatusPolicyViolation, "live: no join in time")
 			} else {
 				c.noteClose(closeIdle, "live: the page sat idle", "no message or broadcast for "+a.hub.idleTimeout.String()+" (LiveIdleTimeout)")
-				ws.Close(closeIdle, "live: the page sat idle")
+				c.closeConn(closeIdle, "live: the page sat idle")
 			}
 			return
 		case <-checks:
 			if c.s != nil && !c.check() {
-				ws.Close(closeReload, "live: the page must load again")
+				c.closeConn(closeReload, "live: the page must load again")
 				return
 			}
 			checkTimer.Reset(a.hub.checkEvery)
@@ -532,7 +626,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			active()
 			if c.ending.Load() {
 				c.noteClose(closeReload, "live: the page must load again", "CloseLive closed the page")
-				ws.Close(closeReload, "live: the page must load again")
+				c.closeConn(closeReload, "live: the page must load again")
 				return
 			}
 			if !c.drain(ctx) {
@@ -544,7 +638,9 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 				defer done()
 				if err := ws.Ping(pctx); err != nil {
 					c.noteConn("drop", 0, "the browser stopped answering pings", err.Error())
-					cancel()
+					if c.closeConn(closeReload, "live: the page must load again") {
+						cancel()
+					}
 				}
 			}()
 		}
@@ -556,25 +652,6 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 // restart) don't all check together.
 func firstCheck(every time.Duration) time.Duration {
 	return time.Duration(rand.Int64N(int64(every))) + 1
-}
-
-func (c *conn) write(ctx context.Context, m any) {
-	var buf bytes.Buffer
-	e := json.NewEncoder(&buf)
-	e.SetEscapeHTML(false) // markup as markup, not \u003c…
-	e.Encode(m)
-	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
-	if c.tb != nil {
-		f := newFrame("server", b)
-		f.Report = c.wire.apply(b)
-		c.frames = append(c.frames, f)
-	}
-	wctx, done := context.WithTimeout(ctx, writeTimeout)
-	defer done()
-	if err := c.ws.Write(wctx, websocket.MessageText, b); err != nil {
-		c.noteConn("drop", 0, "a write to the browser failed", err.Error())
-		c.ws.CloseNow()
-	}
 }
 
 // handle answers a client message; false ends the connection.
@@ -611,7 +688,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		c.write(ctx, reply)
 		if code != 0 {
 			c.noteClose(code, cmp.Or(reply.(live.ServerMessage).Error, "redirected to "+reply.(live.ServerMessage).URL), "the join's run of the page's route")
-			c.ws.Close(code, reply.(live.ServerMessage).Error)
+			c.closeConn(code, reply.(live.ServerMessage).Error)
 			return false
 		}
 		c.startDeferred(false)
@@ -680,7 +757,7 @@ func (c *conn) varsRefused() bool {
 		return false
 	}
 	c.noteClose(closeReload, "live: the page must load again", "a gate refused a read of the page's variables: "+err.Error())
-	c.ws.Close(closeReload, "live: the page must load again")
+	c.closeConn(closeReload, "live: the page must load again")
 	return true
 }
 
@@ -966,6 +1043,11 @@ func (c *conn) join(ctx context.Context, ref, v int, ext []string, build string)
 		c.s = liveproto.New(j.ctx, c.render(j.page), min(v, c.app.liveMax), ext...)
 	}
 	c.noteJoin(s != nil, min(v, c.app.liveMax))
+	if e, ok := c.s.(interface {
+		SetShared(*live.SharedSet, live.SharedLinks)
+	}); ok {
+		e.SetShared(c.app.shared, c)
+	}
 	if e, ok := c.s.(interface{ SetErrorText(func(error) string) }); ok {
 		e.SetErrorText(c.errorText)
 	}
@@ -1396,7 +1478,10 @@ func (c *conn) runLoads(loads []*ui.DeferredLoad) {
 }
 
 // drain delivers the broadcasts waiting for the page; before a join there is
-// nothing to deliver them to, and the join renders the page fresh.
+// nothing to deliver them to, and the join renders the page fresh. Each
+// message reaches its Update in the order it arrived, but the broadcasts
+// that wait side by side are one batch: the page renders once and sends one
+// patch for them.
 func (c *conn) drain(ctx context.Context) bool {
 	c.mu.Lock()
 	batch := c.inbox
@@ -1405,52 +1490,91 @@ func (c *conn) drain(ctx context.Context) bool {
 	if c.s == nil || len(batch) == 0 {
 		return true
 	}
-	for _, d := range batch {
-		if e, ok := d.msg.(aheadExpired); ok {
-			c.expired(e)
-			continue
-		}
-		if l, ok := d.msg.(loaded); ok {
-			ds, _ := c.s.(deferredSession)
-			if ds == nil {
-				continue
-			}
-			c.doing = "load " + l.d.Group
-			end := noop
-			if c.tb != nil {
-				end = c.recording("load", l.d.Group, 0, nil)
-			}
-			c.vars.newEvent()
-			c.beginRead()
-			m := ds.Loaded(l.d)
-			c.endRead()
-			if c.varsRefused() {
+	for i := 0; i < len(batch); {
+		switch d := batch[i].msg.(type) {
+		case aheadExpired:
+			c.expired(d)
+			i++
+		case loaded:
+			if !c.applyLoaded(ctx, d) {
 				return false
 			}
-			if m != nil {
-				c.write(ctx, m)
+			i++
+		default:
+			j := i + 1
+			for j < len(batch) && !isLoadMsg(batch[j].msg) {
+				j++
 			}
-			end()
-			continue
+			if !c.broadcasts(ctx, batch[i:j]) {
+				return false
+			}
+			i = j
 		}
-		c.aheadHeard(d.topic)
-		c.doing = "broadcast " + cmp.Or(d.topic, `""`)
-		end := noop
-		if c.tb != nil {
-			end = c.recordInfo(d)
-		}
-		c.vars.newEvent()
-		m := c.answer(func() any { return c.s.Info(d.topic, d.msg) })
-		if c.varsRefused() {
-			return false
-		}
-		if m != nil {
-			c.write(ctx, m)
-		}
-		end()
 	}
 	c.startDeferred(true) // a component a broadcast or a load mounted
 	c.syncTopics()
+	return true
+}
+
+func isLoadMsg(m any) bool {
+	switch m.(type) {
+	case aheadExpired, loaded:
+		return true
+	}
+	return false
+}
+
+// applyLoaded gives the page what a deferred load loaded.
+func (c *conn) applyLoaded(ctx context.Context, l loaded) bool {
+	ds, _ := c.s.(deferredSession)
+	if ds == nil {
+		return true
+	}
+	c.doing = "load " + l.d.Group
+	end := noop
+	if c.tb != nil {
+		end = c.recording("load", l.d.Group, 0, nil)
+	}
+	c.vars.newEvent()
+	c.beginRead()
+	m := ds.Loaded(l.d)
+	c.endRead()
+	if c.varsRefused() {
+		return false
+	}
+	if m != nil && !c.push(ctx, m) {
+		return false
+	}
+	end()
+	return true
+}
+
+// broadcasts delivers a run of broadcasts and sends the patch they made.
+func (c *conn) broadcasts(ctx context.Context, run []delivery) bool {
+	msgs := make([]liveproto.Message, len(run))
+	for i, d := range run {
+		c.aheadHeard(d.topic)
+		msgs[i] = liveproto.Message{Topic: d.topic, Msg: d.msg}
+	}
+	c.doing = "broadcast " + cmp.Or(run[0].topic, `""`)
+	end := noop
+	if c.tb != nil {
+		end = c.recordInfo(run)
+	}
+	c.vars.newEvent()
+	release := broadcastGate.acquire(ctx)
+	if release == nil {
+		return false
+	}
+	m := c.answer(func() any { return c.s.InfoBatch(msgs) })
+	release()
+	if c.varsRefused() {
+		return false
+	}
+	if m != nil && !c.push(ctx, m) {
+		return false
+	}
+	end()
 	return true
 }
 
@@ -1459,10 +1583,7 @@ func (c *conn) syncTopics() {
 		return
 	}
 	ts := c.aheadTopics(c.s.Topics())
-	c.app.hub.mu.Lock()
-	same := slices.Equal(ts, c.topics)
-	c.app.hub.mu.Unlock()
-	if !same {
+	if !slices.Equal(ts, c.topics) {
 		c.app.hub.setTopics(c, ts)
 	}
 }
@@ -1500,8 +1621,13 @@ func (c *conn) record(m live.ClientMessage, data []byte) func() {
 }
 
 // recordInfo starts recording a broadcast's delivery.
-func (c *conn) recordInfo(d delivery) func() {
-	return c.recording("broadcast", fmt.Sprintf("%s %T", cmp.Or(d.topic, `""`), d.msg), 0, nil)
+func (c *conn) recordInfo(run []delivery) func() {
+	d := run[0]
+	subject := fmt.Sprintf("%s %T", cmp.Or(d.topic, `""`), d.msg)
+	if len(run) > 1 {
+		subject += fmt.Sprintf(" (and %d more, rendered together)", len(run)-1)
+	}
+	return c.recording("broadcast", subject, 0, nil)
 }
 
 func (c *conn) recording(typ, subject string, ref int, client []byte) func() {

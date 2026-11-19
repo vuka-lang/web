@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/vuka-lang/ui/v2"
 )
 
 // The context processors web provides, which an app lists in
@@ -43,6 +45,7 @@ type RequestVars struct {
 func RequestContext(ctx context.Context) (RequestVars, error) {
 	rq, _ := ctx.Value(ctxKey{}).(*request)
 	if rq == nil {
+		ui.ViewerRead(ctx, "RequestContext")
 		return RequestVars{}, errors.New("web: RequestContext: no request here")
 	}
 	recordRequest(ctx)
@@ -353,6 +356,7 @@ type CSRFVars struct {
 func CSRFContext(ctx context.Context) (CSRFVars, error) {
 	rq, _ := ctx.Value(ctxKey{}).(*request)
 	if rq == nil {
+		ui.ViewerRead(ctx, "CSRFContext")
 		return CSRFVars{}, errors.New("web: CSRFContext: no request here")
 	}
 	return CSRFVars{CSRFToken: rq.app.csrfToken(rq, true)}, nil

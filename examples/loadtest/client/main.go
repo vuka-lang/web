@@ -60,7 +60,7 @@ func main() {
 	var o options
 	flag.StringVar(&o.url, "url", "http://127.0.0.1:18090", "the app; with -ports, the first of its addresses")
 	flag.IntVar(&o.ports, "ports", 1, "the app's consecutive ports from -url's, users dialling them in turn: the ephemeral ports of one address are about 16,000")
-	flag.StringVar(&o.scenario, "scenario", "pg", "pg (the Postgres dashboard) or mem (/counter and /feed, no database)")
+	flag.StringVar(&o.scenario, "scenario", "pg", "pg (the Postgres dashboard), mem (/counter and /feed, no database) or mem-shared (mem, the feed pages showing one shared fragment)")
 	flag.IntVar(&o.sockets, "sockets", 1000, "users, one socket each")
 	flag.IntVar(&o.owners, "owners", 1000, "pg: the owners they view, in turn")
 	flag.IntVar(&o.rate, "rate", 200, "users joining per second")
@@ -213,12 +213,24 @@ func assign(n int, inter, slowFrac float64) []class {
 	return cs
 }
 
+// mem is whether the scenario is a database-free one.
+func (r *runner) mem() bool { return r.o.scenario == "mem" || r.o.scenario == "mem-shared" }
+
+// bcast is the address of the broadcast a phase makes: on the topic, or to the
+// shared fragment.
+func (r *runner) bcast() string {
+	if r.o.scenario == "mem-shared" {
+		return "/debug/broadcast?shared=1"
+	}
+	return "/debug/broadcast?topic=" + url.QueryEscape(r.o.topic)
+}
+
 func (r *runner) has(phase string) bool {
 	return slices.Contains(strings.Split(r.o.phases, ","), phase)
 }
 
 func run(o options) error {
-	mem := o.scenario == "mem"
+	mem := o.scenario == "mem" || o.scenario == "mem-shared"
 	if o.scenario != "pg" && !mem {
 		return fmt.Errorf("unknown scenario %q", o.scenario)
 	}
@@ -483,7 +495,7 @@ func (r *runner) broadcastPhase(lag *lagProbe) map[string]any {
 	complete := 0
 	for k := range r.o.bcasts {
 		expected := int(r.alive[normal].Load())
-		resp := r.post("/debug/broadcast?topic=" + url.QueryEscape(r.o.topic))
+		resp := r.post(r.bcast())
 		deadline := time.Now().Add(r.o.bcastWait)
 		for int(tab.count[k].Load()) < expected && time.Now().Before(deadline) && r.ctx.Err() == nil {
 			time.Sleep(5 * time.Millisecond)
@@ -539,7 +551,7 @@ func (r *runner) stormPhase(lag *lagProbe) map[string]any {
 	for time.Since(t0) < r.o.stormFor && r.ctx.Err() == nil {
 		select {
 		case <-tick.C:
-			resp := r.post("/debug/broadcast?topic=" + url.QueryEscape(r.o.topic))
+			resp := r.post(r.bcast())
 			if _, bad := resp["error"]; bad || resp["seq"] == nil {
 				failed++
 				continue
@@ -597,8 +609,8 @@ func (r *runner) drainSlow() map[string]any {
 	out["server_live_conns_at_drain"] = num(r.get("/debug/metrics"), "live_conns")
 	want := r.alive[slow].Load()
 	close(r.resume)
-	if r.o.scenario == "mem" {
-		r.post("/debug/broadcast?topic=" + url.QueryEscape(r.o.topic))
+	if r.mem() {
+		r.post(r.bcast())
 	}
 	deadline := time.Now().Add(r.o.slowDrain + 5*time.Second)
 	for r.slowResolved.Load() < want && r.alive[slow].Load() > 0 && time.Now().Before(deadline) && r.ctx.Err() == nil {

@@ -61,6 +61,9 @@ func (r *runner) pageFor(i int, cl class) (path, button string) {
 	case cl == interactive:
 		return "/counter?rows=" + strconv.Itoa(r.o.rows), "bump"
 	}
+	if r.o.scenario == "mem-shared" {
+		return "/sharedfeed", ""
+	}
 	return "/feed?rows=" + strconv.Itoa(r.o.rows) + "&topic=" + url.QueryEscape(r.o.topic), ""
 }
 

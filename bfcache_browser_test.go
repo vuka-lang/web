@@ -25,9 +25,7 @@ func pageTransition(t *testing.T, p *chrome.Page, name string, persisted bool) {
 }
 
 func liveConns(app *App) int {
-	app.hub.mu.Lock()
-	defer app.hub.mu.Unlock()
-	return app.hub.open
+	return int(app.hub.open.Load())
 }
 
 // A live page being hidden (pagehide) closes its connection, as the

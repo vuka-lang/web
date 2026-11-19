@@ -57,6 +57,7 @@ type request struct {
 func (a *App) newRequest(w http.ResponseWriter, r *http.Request, s *routeSpec) *request {
 	rq := &request{w: w, r: r, app: a, route: s}
 	rq.ctx = ui.WithInjector(context.WithValue(r.Context(), ctxKey{}, rq), injector{a})
+	rq.ctx = ui.WithSharedBroadcaster(rq.ctx, a)
 	rq.ctx = ui.WithPageURL(rq.ctx, r.URL, a.pathParam(r))
 	rq.ctx = ui.WithFormHost(rq.ctx, formHost{a})
 	if s != nil {
@@ -99,6 +100,7 @@ func (a *App) pathParam(r *http.Request) func(string) string {
 func Request(ctx context.Context) *http.Request {
 	rq, _ := ctx.Value(ctxKey{}).(*request)
 	if rq == nil {
+		ui.ViewerRead(ctx, "web.Request")
 		return nil
 	}
 	recordRequest(ctx)
@@ -109,6 +111,7 @@ func Request(ctx context.Context) *http.Request {
 func ResponseWriter(ctx context.Context) http.ResponseWriter {
 	rq, _ := ctx.Value(ctxKey{}).(*request)
 	if rq == nil {
+		ui.ViewerRead(ctx, "web.ResponseWriter")
 		return nil
 	}
 	return rq.w

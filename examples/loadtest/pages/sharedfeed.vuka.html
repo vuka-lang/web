@@ -1,0 +1,17 @@
+<script lang="go">
+package pages
+
+import (
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2/examples/loadtest/components"
+)
+
+// SharedFeed is the feed page of the shared scenario: the fragment of
+// components.SharedFeed, rendered once for every page that shows it.
+type SharedFeed struct {
+	ui.Live
+}
+
+func (p *SharedFeed) Title() string { return "Shared feed" }
+</script>
+<components.SharedFeed/>

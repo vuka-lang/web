@@ -27,7 +27,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:18090", "the app's address")
 	ports := flag.Int("ports", 1, "listen on this many consecutive ports from addr's: a client's connections to one address are limited by its ephemeral ports")
 	debug := flag.String("debug", "127.0.0.1:18099", "pprof's, the metrics' and the broadcast endpoint's address")
-	scenario := flag.String("scenario", "pg", "pg (the Postgres dashboard at /) or mem (/counter and /feed, no database)")
+	scenario := flag.String("scenario", "pg", "pg (the Postgres dashboard at /), mem (/counter and /feed, no database) or mem-shared (mem, with /feed?shared=1 showing a shared fragment)")
 	dbURL := flag.String("db", os.Getenv("LOADTEST_DB"), "the Postgres URL; add pool_max=N for the pool")
 	owners := flag.Int("owners", 1000, "owners to seed")
 	perOwner := flag.Int("orders", 100, "orders per owner to seed")
@@ -48,7 +48,7 @@ func main() {
 		if *checks {
 			opts = append(opts, web.LiveCheck(checkOwner))
 		}
-	case "mem":
+	case "mem", "mem-shared":
 	default:
 		log.Fatalf("unknown scenario %q", *scenario)
 	}

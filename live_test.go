@@ -521,11 +521,7 @@ func TestLiveStopClosesConnections(t *testing.T) {
 }
 
 func dropConnections(a *App) {
-	a.hub.mu.Lock()
-	defer a.hub.mu.Unlock()
-	for c := range a.hub.conns {
-		c.ws.CloseNow()
-	}
+	a.hub.each(func(c *conn) { c.ws.CloseNow() })
 }
 
 func TestBrowserReconnect(t *testing.T) {
