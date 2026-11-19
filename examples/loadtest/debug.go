@@ -24,24 +24,24 @@ import (
 )
 
 var (
-	liveOpen, liveTotal atomic.Int64
-	broadcasts          atomic.Int64
+	liveTotal  atomic.Int64
+	broadcasts atomic.Int64
 )
 
-// countLive counts the live sockets the app holds: a connection's request is
-// in flight for as long as the socket is open.
+// countLive counts the live sockets the app accepted.
 func countLive(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/_vuka/live" {
-			liveOpen.Add(1)
 			liveTotal.Add(1)
-			defer liveOpen.Add(-1)
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
+var debugApp *web.App
+
 func serveDebug(addr string, app *web.App) {
+	debugApp = app
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
 	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
@@ -111,7 +111,7 @@ func stats(w http.ResponseWriter, r *http.Request) {
 	runtime.ReadMemStats(&m)
 	out := map[string]any{
 		"rss_bytes":       rssBytes(),
-		"live_conns":      liveOpen.Load(),
+		"live_conns":      debugApp.LiveConns(),
 		"live_accepted":   liveTotal.Load(),
 		"broadcasts":      broadcasts.Load(),
 		"goroutines":      runtime.NumGoroutine(),

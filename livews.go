@@ -487,14 +487,21 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(status), status)
 		return
 	}
-	defer release()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
 	var ws liveTransport
-	if r.URL.Query().Get("transport") == "sse" {
+	parent := r.Context()
+	stream := r.URL.Query().Get("transport") == "sse"
+	if stream {
 		s, sr := a.acceptStream(w, r) // livesse.go
 		if s == nil {
 			return
 		}
 		ws, r = s, sr
+		parent = r.Context()
 	} else {
 		wc, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: a.liveOrigins, CompressionMode: a.liveDeflate.mode(), CompressionThreshold: liveDeflateThreshold})
 		if err != nil {
@@ -510,10 +517,30 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		ws.Close(closeReload, terr.Error())
 		return
 	}
+	rel := release
+	release = nil
+	if stream {
+		a.liveLoop(parent, ws, liveRequest(r, parent), uri, tok, rel, false)
+		return
+	}
+	// The socket is the connection's now: the handler returns, and with it
+	// the upgrade request, its response and the server's state for it go, as
+	// the session keeps only liveRequest's trimmed copy. Its context ends
+	// with the socket, not with the handler.
+	parent = context.WithoutCancel(parent)
+	go a.liveLoop(parent, ws, liveRequest(r, parent), uri, tok, rel, true)
+}
+
+// liveLoop is a live connection's session: the loop that serves its socket
+// until it closes. r is the request it was made with (liveRequest); parent
+// the context its own derives from. When detached, it runs on a goroutine of
+// its own, after the upgrade handler has returned.
+func (a *App) liveLoop(parent context.Context, ws liveTransport, r *http.Request, uri, tok string, release func(), detached bool) {
+	defer release()
 	defer ws.CloseNow()
-	ctx, cancel := context.WithCancel(r.Context())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
-	defer a.recoverSocket(ws, r)
+	defer a.recoverSocket(ws, r, detached)
 	c := &conn{app: a, ws: ws, r: r, uri: uri, tok: tok, wake: make(chan struct{}, 1), out: outbox{space: make(chan struct{}, 1)}}
 	if a.tb != nil {
 		if c.tb = a.tb.liveSink(r.URL.Query().Get("tb"), uri); c.tb != nil {
