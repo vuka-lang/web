@@ -16,7 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/vuka-lang/ui/v2"
 	"github.com/vuka-lang/web/v2"
+	"github.com/vuka-lang/web/v2/examples/loadtest/components"
 	"github.com/vuka-lang/web/v2/examples/loadtest/feed"
 	"github.com/vuka-lang/web/v2/examples/loadtest/store"
 )
@@ -55,7 +57,13 @@ func serveDebug(addr string, app *web.App) {
 		}
 		seq := int(broadcasts.Add(1))
 		at := time.Now()
-		err := app.Broadcast(r.Context(), topic, feed.Tick{Seq: seq, At: at.UnixNano()})
+		tick := feed.Tick{Seq: seq, At: at.UnixNano()}
+		var err error
+		if r.URL.Query().Get("shared") != "" {
+			err = ui.Broadcast[*components.SharedFeed](ui.WithSharedBroadcaster(r.Context(), app), tick)
+		} else {
+			err = app.Broadcast(r.Context(), topic, tick)
+		}
 		out := map[string]any{"seq": seq, "at": at.UnixNano(), "dispatch_us": time.Since(at).Microseconds()}
 		if err != nil {
 			out["error"] = err.Error()
