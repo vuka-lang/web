@@ -666,7 +666,8 @@ func (a *App) Stop(ctx context.Context) error {
 }
 
 // Run serves the app on addr (":" + $PORT, else ":8080", when empty) until
-// SIGINT or SIGTERM, then shuts down gracefully and stops the services.
+// SIGINT or SIGTERM, then shuts down gracefully and stops the services. When
+// Restart ended it, it exits the process with RestartStatus after that.
 func (a *App) Run(addr string) error {
 	if addr == "" {
 		addr = ":8080"
@@ -676,6 +677,8 @@ func (a *App) Run(addr string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	restarted, unregister := onRestart(cancel)
+	defer unregister()
 	if err := a.Start(ctx); err != nil {
 		return err
 	}
@@ -702,7 +705,14 @@ func (a *App) Run(addr string) error {
 	}
 	sctx, done := context.WithTimeout(context.Background(), 10*time.Second)
 	defer done()
-	return errors.Join(err, a.Stop(sctx))
+	err = errors.Join(err, a.Stop(sctx))
+	if restarted.Load() {
+		if err != nil {
+			log.Printf("web: stopping for a restart: %v", err)
+		}
+		exit(RestartStatus)
+	}
+	return err
 }
 
 // browseURL is the address a browser opens for a listener: localhost for
