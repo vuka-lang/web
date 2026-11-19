@@ -134,11 +134,13 @@ func LiveCheckEvery(d time.Duration) Option {
 }
 
 // LiveTrimAfter makes a joined page that sends and receives nothing for d
-// release what its session can rebuild (the hashes of what the browser holds),
-// to make them again on its next event or broadcast. It is off by default (0):
-// it saves about a tenth of an idle page's memory, and a mistake in it would
-// show as a wrong update rather than an error. Replies don't change, and the
-// page stays open; LiveIdleTimeout is what ends it.
+// release what its session can rebuild, to make it again on its next event or
+// broadcast. The session's render trees, and the tree the browser holds, are
+// stored once for every page that shows the same markup, so a page has little
+// of its own left to release and this saves little; it is kept for the rare
+// page whose browser tree is not its last render. It is off by default (0).
+// Replies don't change, and the page stays open; LiveIdleTimeout is what ends
+// it.
 func LiveTrimAfter(d time.Duration) Option {
 	return OptionFunc(func(a *App) { a.hub.trimAfter = d })
 }
