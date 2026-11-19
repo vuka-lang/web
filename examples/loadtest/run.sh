@@ -9,7 +9,8 @@
 # MEASURE (120s), WARMUP (30s), RATE (200), PORTS (one per 8,000 sockets: the
 # ephemeral ports of one address are about 16,000), STEP (1000), SETTLE (10s),
 # PHASES (the client's default for the scenario), SERVER_ARGS, CLIENT_ARGS,
-# MAX_RSS_KB (7 GB), MAX_SWAP_GROWTH_MB (1024), MAX_LOAD (6).
+# ADDR (127.0.0.1:18090, the first app port) and DEBUG_ADDR (127.0.0.1:18099),
+# for runs beside another, MAX_RSS_KB (7 GB), MAX_SWAP_GROWTH_MB (1024), MAX_LOAD (6).
 set -u
 sockets=$1
 out=$2
@@ -18,7 +19,8 @@ profile=${3:-}
 : "${SERVER_PROCS:=4}" "${CLIENT_PROCS:=3}" "${EVERY:=5s}" "${MEASURE:=120s}" "${WARMUP:=30s}" "${RATE:=200}"
 : "${PORTS:=$(((sockets + 7999) / 8000))}" "${STEP:=1000}" "${SETTLE:=10s}" "${PHASES:=}" "${CLIENT_ARGS:=}"
 : "${MAX_RSS_KB:=7340032}" "${MAX_SWAP_GROWTH_MB:=1024}" "${MAX_LOAD:=6}" "${SERVER_ARGS:=}"
-debug=127.0.0.1:18099
+: "${ADDR:=127.0.0.1:18090}" "${DEBUG_ADDR:=127.0.0.1:18099}"
+debug=$DEBUG_ADDR
 mkdir -p "$out"
 
 # One socket is a file descriptor in the client and one in the server, each
@@ -59,7 +61,7 @@ echo "load before: $start_load, swap used: ${start_swap} MB, waited $((i * 5))s,
 prof=""
 [ -n "$profile" ] && prof="-block-rate 1000000 -mutex-fraction 100"
 # shellcheck disable=SC2086
-GOMAXPROCS=$SERVER_PROCS GODEBUG=gctrace=1 "$SERVER" -scenario "$SCENARIO" -ports "$PORTS" -debug "$debug" $prof $SERVER_ARGS >"$out/server.log" 2>&1 &
+GOMAXPROCS=$SERVER_PROCS GODEBUG=gctrace=1 "$SERVER" -scenario "$SCENARIO" -addr "$ADDR" -ports "$PORTS" -debug "$debug" $prof $SERVER_ARGS >"$out/server.log" 2>&1 &
 server=$!
 stop() { kill "$server" 2>/dev/null; wait "$server" 2>/dev/null; kill "${sampler:-0}" 2>/dev/null; }
 trap stop EXIT
@@ -93,7 +95,7 @@ sampler=$!
 mark=$out/.measuring
 rm -f "$mark"
 # shellcheck disable=SC2086
-GOMAXPROCS=$CLIENT_PROCS "$CLIENT" -scenario "$SCENARIO" -ports "$PORTS" -sockets "$sockets" -rate "$RATE" -every "$EVERY" -warmup "$WARMUP" -measure "$MEASURE" -step "$STEP" -settle "$SETTLE" -phases "$PHASES" -debug "http://$debug" -mark "$mark" -out "$out/result.json" $CLIENT_ARGS >"$out/client.log" 2>&1 &
+GOMAXPROCS=$CLIENT_PROCS "$CLIENT" -scenario "$SCENARIO" -url "http://$ADDR" -ports "$PORTS" -sockets "$sockets" -rate "$RATE" -every "$EVERY" -warmup "$WARMUP" -measure "$MEASURE" -step "$STEP" -settle "$SETTLE" -phases "$PHASES" -debug "http://$debug" -mark "$mark" -out "$out/result.json" $CLIENT_ARGS >"$out/client.log" 2>&1 &
 client=$!
 
 if [ -n "$profile" ]; then
