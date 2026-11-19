@@ -258,6 +258,7 @@ class Document extends Node {
     return { nextNode: () => all[i++] || null };
   }
   importNode(n, deep) { return n.cloneNode(deep, this); }
+  getElementsByTagName(tag) { return this.querySelectorAll(tag); }
   getElementById(id) { return this.querySelectorAll("*").find((e) => e.id === id) || null; }
   execCommand() { return true; }
 }
