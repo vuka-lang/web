@@ -553,6 +553,11 @@ func (a *Auth) middleware(next http.Handler) http.Handler {
 		}
 		r = r.WithContext(context.WithValue(r.Context(), stateKey{}, st))
 		a.noteIdentity(r.Context())
+		if isLive(r) {
+			// the page outlives this run, and its context keeps the state: a
+			// live page has no response to sign in or out on
+			defer func() { st.w = nil }()
+		}
 		next.ServeHTTP(w, r)
 	})
 }

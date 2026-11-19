@@ -505,6 +505,7 @@ func (a *App) page(rq *request, n ui.Node) {
 	}
 	if j, ok := r.Context().Value(joinKey{}).(*join); ok {
 		j.page, j.ctx = n, rq.ctx
+		rq.w = &discardWriter{} // the route's response was for the run; the page outlives it
 		return
 	}
 	if id := r.Header.Get(LazyHeader); id != "" && r.Method == http.MethodGet && n != nil {
