@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/maphash"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -188,98 +189,178 @@ func (m LiveCompressionMode) mode() websocket.CompressionMode {
 	return websocket.CompressionDisabled
 }
 
-// hub is the app's live connections, and the topics each subscribes to.
+// hubShards is how many parts the hub's tables split into, a power of two.
+const hubShards = 64
+
+// hub is the app's live connections, and the topics each subscribes to. Its
+// tables are split by hash into shards, each under its own lock: a topic's
+// subscribers live in the shard of the topic, a connection in the shard of
+// its id, the sockets of an address in the shard of the address and those of
+// a page token in the shard of the token. A broadcast takes one lock.
 type hub struct {
-	mu       sync.Mutex
-	conns    map[*conn]bool
-	topics   map[string]map[*conn]bool
-	closed   bool
-	open     int            // the sockets admitted, open or opening
-	perIP    map[string]int // of them, by client address
-	perToken map[string]int // by page token
-	streams  sync.Map       // the event-stream connections, by id (livesse.go)
+	shards  [hubShards]hubShard
+	seed    maphash.Seed
+	nextID  atomic.Uint64
+	open    atomic.Int64 // the sockets admitted, open or opening
+	closed  atomic.Bool
+	streams sync.Map // the event-stream connections, by id (livesse.go)
 
 	joinTimeout, idleTimeout, checkEvery, trimAfter time.Duration
 	maxConns, maxPerIP, maxPerTok                   int
 }
 
+type hubShard struct {
+	mu       sync.Mutex
+	conns    map[*conn]bool
+	topics   map[string]map[*conn]bool
+	perIP    map[string]int
+	perToken map[string]int
+}
+
 func newHub() *hub {
-	return &hub{conns: map[*conn]bool{}, topics: map[string]map[*conn]bool{}, perIP: map[string]int{}, perToken: map[string]int{},
+	h := &hub{seed: maphash.MakeSeed(),
 		joinTimeout: defaultLiveJoinTimeout, idleTimeout: defaultLiveIdleTimeout, checkEvery: defaultLiveCheckEvery,
 		maxConns: defaultLiveMaxConns, maxPerIP: defaultLiveMaxConnsPerIP, maxPerTok: defaultLiveMaxConnsPerTok}
+	for i := range h.shards {
+		h.shards[i] = hubShard{conns: map[*conn]bool{}, topics: map[string]map[*conn]bool{}, perIP: map[string]int{}, perToken: map[string]int{}}
+	}
+	return h
 }
+
+// shard is the shard of the key s (a topic, an address, a token).
+func (h *hub) shard(s string) *hubShard {
+	return &h.shards[maphash.String(h.seed, s)&(hubShards-1)]
+}
+
+// connShard is the shard c is registered in.
+func (h *hub) connShard(c *conn) *hubShard { return &h.shards[c.id&(hubShards-1)] }
 
 // admit counts a socket from ip with the page token tok against the caps:
 // the status refusing it, else 0 and the function releasing its place.
 func (h *hub) admit(ip, tok string) (int, func()) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	switch {
-	case h.maxConns > 0 && h.open >= h.maxConns:
+	if n := h.open.Add(1); h.maxConns > 0 && n > int64(h.maxConns) {
+		h.open.Add(-1)
 		return http.StatusServiceUnavailable, nil
-	case h.maxPerIP > 0 && h.perIP[ip] >= h.maxPerIP, h.maxPerTok > 0 && h.perToken[tok] >= h.maxPerTok:
+	}
+	ips, toks := h.shard(ip), h.shard(tok)
+	ips.mu.Lock()
+	if h.maxPerIP > 0 && ips.perIP[ip] >= h.maxPerIP {
+		ips.mu.Unlock()
+		h.open.Add(-1)
 		return http.StatusTooManyRequests, nil
 	}
-	h.open++
-	h.perIP[ip]++
-	h.perToken[tok]++
+	ips.perIP[ip]++
+	ips.mu.Unlock()
+	toks.mu.Lock()
+	if h.maxPerTok > 0 && toks.perToken[tok] >= h.maxPerTok {
+		toks.mu.Unlock()
+		ips.release(ip, "")
+		h.open.Add(-1)
+		return http.StatusTooManyRequests, nil
+	}
+	toks.perToken[tok]++
+	toks.mu.Unlock()
 	return 0, func() {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-		h.open--
-		if h.perIP[ip]--; h.perIP[ip] <= 0 {
-			delete(h.perIP, ip)
+		ips.release(ip, "")
+		toks.release("", tok)
+		h.open.Add(-1)
+	}
+}
+
+// release gives back a place counted for ip or tok (the other "").
+func (sh *hubShard) release(ip, tok string) {
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if ip != "" {
+		if sh.perIP[ip]--; sh.perIP[ip] <= 0 {
+			delete(sh.perIP, ip)
 		}
-		if h.perToken[tok]--; h.perToken[tok] <= 0 {
-			delete(h.perToken, tok)
+	}
+	if tok != "" {
+		if sh.perToken[tok]--; sh.perToken[tok] <= 0 {
+			delete(sh.perToken, tok)
 		}
 	}
 }
 
 func (h *hub) add(c *conn) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.closed {
-		h.conns[c] = true
+	c.id = h.nextID.Add(1)
+	sh := h.connShard(c)
+	sh.mu.Lock()
+	defer sh.mu.Unlock()
+	if h.closed.Load() {
+		return false
 	}
-	return !h.closed
+	sh.conns[c] = true
+	return true
 }
 
 func (h *hub) remove(c *conn) {
 	h.setTopics(c, nil)
-	h.mu.Lock()
-	delete(h.conns, c)
-	h.mu.Unlock()
+	sh := h.connShard(c)
+	sh.mu.Lock()
+	delete(sh.conns, c)
+	sh.mu.Unlock()
 }
 
-func (h *hub) setTopics(c *conn, ts []string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, t := range c.topics {
-		if delete(h.topics[t], c); len(h.topics[t]) == 0 {
-			delete(h.topics, t)
+// each calls f for every connection, one shard at a time with its lock
+// released, so f may take locks of its own.
+func (h *hub) each(f func(*conn)) {
+	for i := range h.shards {
+		sh := &h.shards[i]
+		sh.mu.Lock()
+		cs := make([]*conn, 0, len(sh.conns))
+		for c := range sh.conns {
+			cs = append(cs, c)
+		}
+		sh.mu.Unlock()
+		for _, c := range cs {
+			f(c)
 		}
 	}
-	for _, t := range ts {
-		if h.topics[t] == nil {
-			h.topics[t] = map[*conn]bool{}
+}
+
+// setTopics makes ts the topics c is subscribed to. Only c's own goroutine
+// calls it, so c.topics needs no lock.
+func (h *hub) setTopics(c *conn, ts []string) {
+	for _, t := range c.topics {
+		if slices.Contains(ts, t) {
+			continue
 		}
-		h.topics[t][c] = true
+		sh := h.shard(t)
+		sh.mu.Lock()
+		if delete(sh.topics[t], c); len(sh.topics[t]) == 0 {
+			delete(sh.topics, t)
+		}
+		sh.mu.Unlock()
+	}
+	for _, t := range ts {
+		if slices.Contains(c.topics, t) {
+			continue
+		}
+		sh := h.shard(t)
+		sh.mu.Lock()
+		if sh.topics[t] == nil {
+			sh.topics[t] = map[*conn]bool{}
+		}
+		sh.topics[t][c] = true
+		sh.mu.Unlock()
 	}
 	c.topics = ts
 }
 
 func (h *hub) deliver(topic string, msg any) {
-	h.mu.Lock()
-	set := h.topics[topic]
 	if topic == "" {
-		set = h.conns
+		h.each(func(c *conn) { c.post(topic, msg) })
+		return
 	}
-	to := make([]*conn, 0, len(set))
-	for c := range set {
+	sh := h.shard(topic)
+	sh.mu.Lock()
+	to := make([]*conn, 0, len(sh.topics[topic]))
+	for c := range sh.topics[topic] {
 		to = append(to, c)
 	}
-	h.mu.Unlock()
+	sh.mu.Unlock()
 	for _, c := range to {
 		c.post(topic, msg)
 	}
@@ -288,13 +369,9 @@ func (h *hub) deliver(topic string, msg any) {
 // closeAll closes every connection (going away: the runtime reconnects) and
 // refuses new ones.
 func (h *hub) closeAll() {
-	h.mu.Lock()
-	h.closed = true
-	conns := make([]*conn, 0, len(h.conns))
-	for c := range h.conns {
-		conns = append(conns, c)
-	}
-	h.mu.Unlock()
+	h.closed.Store(true)
+	var conns []*conn
+	h.each(func(c *conn) { conns = append(conns, c) })
 	var wg sync.WaitGroup
 	for _, c := range conns {
 		wg.Go(func() {
@@ -317,7 +394,8 @@ type conn struct {
 	s      liveproto.Session
 	page   context.Context                 // the context the page's route ran with: the join's, else the latest navigation's
 	root   reflect.Type                    // the page's root layout, nil when it has none
-	topics []string                        // guarded by the hub's mutex
+	topics []string                        // what the hub has it subscribed to, set by its own goroutine
+	id     uint64                          // the hub's number for it
 	tb     *tbSink                         // the development toolbar's record of the page, its messages under it
 	wire   *wireMirror                     // with tb, what the browser holds, to decode the frames sent
 	frames []tbFrame                       // with tb, the frames the message being recorded sent
@@ -1459,10 +1537,7 @@ func (c *conn) syncTopics() {
 		return
 	}
 	ts := c.aheadTopics(c.s.Topics())
-	c.app.hub.mu.Lock()
-	same := slices.Equal(ts, c.topics)
-	c.app.hub.mu.Unlock()
-	if !same {
+	if !slices.Equal(ts, c.topics) {
 		c.app.hub.setTopics(c, ts)
 	}
 }

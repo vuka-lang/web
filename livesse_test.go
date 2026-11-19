@@ -280,11 +280,9 @@ func TestLiveStreamLimits(t *testing.T) {
 	}
 	dropConnections(app)
 	waitFor(t, func() bool {
-		app.hub.mu.Lock()
-		defer app.hub.mu.Unlock()
 		n := 0
 		app.hub.streams.Range(func(any, any) bool { n++; return true })
-		return app.hub.open == 0 && n == 0
+		return app.hub.open.Load() == 0 && n == 0
 	})
 	if c, res := dialSSE(t, srv, tok, nil); c == nil {
 		t.Fatalf("a place freed: %d", res.StatusCode)

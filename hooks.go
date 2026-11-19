@@ -186,12 +186,8 @@ func LiveCheck(f func(ctx context.Context) error) Option {
 // is done. match runs on the caller's goroutine, once per joined page: a
 // library ending a session closes the pages signed in with it this way.
 func (a *App) CloseLive(match func(ctx context.Context) bool) int {
-	a.hub.mu.Lock()
-	conns := make([]*conn, 0, len(a.hub.conns))
-	for c := range a.hub.conns {
-		conns = append(conns, c)
-	}
-	a.hub.mu.Unlock()
+	var conns []*conn
+	a.hub.each(func(c *conn) { conns = append(conns, c) })
 	n := 0
 	for _, c := range conns {
 		ctx := c.pageCtx()
