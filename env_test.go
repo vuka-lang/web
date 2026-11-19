@@ -333,3 +333,22 @@ func TestEnvDevLog(t *testing.T) {
 		t.Errorf("dev %v, log %q", a.dev, buf.String())
 	}
 }
+
+func TestEnvFromFile(t *testing.T) {
+	envSandbox(t, map[string]string{".env": "SHOP_FILE=a\nSHOP_REAL=b\nSHOP_LATER=c\n"})
+	t.Setenv("SHOP_REAL", "real")
+	bootEnv(t)
+	if !EnvFromFile("SHOP_FILE") || !EnvFromFile("SHOP_LATER") {
+		t.Error("keys set from the file")
+	}
+	if EnvFromFile("SHOP_REAL") {
+		t.Error("a key the real environment had first")
+	}
+	if EnvFromFile("SHOP_NONE") {
+		t.Error("a key nothing set")
+	}
+	os.Setenv("SHOP_LATER", "changed")
+	if EnvFromFile("SHOP_LATER") {
+		t.Error("a key changed since the file set it")
+	}
+}
