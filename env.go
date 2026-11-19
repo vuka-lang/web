@@ -287,8 +287,10 @@ func (a *App) checkRequired() error {
 // encoding.TextUnmarshaler, or a slice of those (comma-separated). When key
 // is unset or empty it returns def (or the zero value); when the value doesn't
 // convert, it returns def too and the next Build or Start reports the error.
-func Env[T any](key string, def ...T) T {
-	v, set, err := lookupEnv[T](key)
+func Env[T any](key string, def ...T) T { return envOr(key, os.Getenv(key), def) }
+
+func envOr[T any](key, raw string, def []T) T {
+	v, set, err := parseEnv[T](key, raw)
 	if err != nil {
 		envState.Lock()
 		envState.errs = append(envState.errs, err)
@@ -325,9 +327,10 @@ func takeEnvErrors() []error {
 	return errs
 }
 
-func lookupEnv[T any](key string) (T, bool, error) {
+func lookupEnv[T any](key string) (T, bool, error) { return parseEnv[T](key, os.Getenv(key)) }
+
+func parseEnv[T any](key, s string) (T, bool, error) {
 	var v T
-	s := os.Getenv(key)
 	if s == "" {
 		return v, false, nil
 	}
