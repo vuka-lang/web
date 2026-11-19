@@ -1326,6 +1326,7 @@
   function morph(el, next) {
     placed.add(el);
     if (el.tagName !== next.tagName || branchChanged(el, next)) return el.replaceWith(place(document.importNode(whole(next), true)));
+    if (el.tagName === "VK-AWAIT" && awaits.has(el) && holdAwait(el, next)) return;
     if (el.hasAttribute("data-vk-ignore") && el.id && el.id === next.id) return;
     if (keptOnce(el, next)) return;
     if (instanceChanged(el, next)) disown(el);
@@ -1410,6 +1411,67 @@
     ownedKids.delete(el);
     for (const c of el.querySelectorAll("*")) { owned.delete(c); ownedKids.delete(c); }
   }
+  // Sections (ui.Await with a Delay or MinShow): a <vk-await> holds a
+  // deferred group's fallback, then its content, in place. While it is
+  // pending the server renders it invisible (visibility: hidden, its space
+  // kept) for data-vk-delay ms, which the runtime counts from the section
+  // appearing, then shows it; and once the fallback is visible, content
+  // that arrives sooner than data-vk-min ms after waits: only that
+  // section's morph is held, the rest of the patch applies. When the time
+  // is up the instance is morphed again with the newest markup the server
+  // sent (a later patch for the section replaces the held one). The runtime
+  // owns a tracked section's style while it is pending.
+  const awaits = new WeakMap(); // pending <vk-await> → { min, shown, timer, flush, held, flushing }
+  function awaitsIn() {
+    const els = document.getElementsByTagName("vk-await");
+    if (!els.length) return;
+    for (const el of Array.from(els)) {
+      if (awaits.has(el) || el.getAttribute("data-vk-await") !== "pending") continue;
+      const delay = +el.getAttribute("data-vk-delay") || 0, st = { min: +el.getAttribute("data-vk-min") || 0, shown: delay ? null : performance.now(), timer: 0, flush: 0, held: null, flushing: false };
+      awaits.set(el, st);
+      if (delay) st.timer = setTimeout(() => {
+        st.timer = 0;
+        st.shown = performance.now();
+        quiet(() => el.style.removeProperty("visibility"));
+      }, delay);
+    }
+  }
+  // holdAwait reports whether el's morph into next is held: next shows the
+  // content while the fallback has not been visible for data-vk-min yet.
+  function holdAwait(el, next) {
+    const st = awaits.get(el);
+    if (next.getAttribute("data-vk-await") === "pending") {
+      clearTimeout(st.flush);
+      st.flush = 0;
+      st.held = null;
+      return false;
+    }
+    const left = st.shown === null || st.flushing ? 0 : st.shown + st.min - performance.now();
+    if (left > 0) {
+      st.held = next;
+      clearTimeout(st.flush);
+      st.flush = setTimeout(() => flushAwait(el, st), left);
+      return true;
+    }
+    clearTimeout(st.timer);
+    clearTimeout(st.flush);
+    awaits.delete(el);
+    return false;
+  }
+  function flushAwait(el, st) {
+    st.flush = 0;
+    const next = st.held;
+    st.held = null;
+    if (!el.isConnected || !next) return;
+    st.flushing = true;
+    try {
+      const root = el.closest("[data-vk-id]"), id = root ? root.getAttribute("data-vk-id") : "c0";
+      if (trees) apply({ id, html: trees.html(id) });
+      else quiet(() => { morph(el, next); bindIn(el, next.outerHTML); });
+      emit("vk:patched", { ids: [id] });
+    } finally { st.flushing = false; }
+  }
+
   // A value shown once (ui.ShowOnce) stays as the browser has it while the
   // page renders its place with no value, or with the one it shows; another
   // value replaces it. A move to another page (leavingPage) takes it off.
@@ -2155,12 +2217,13 @@
       own.set(name, next.getAttribute(name));
       return true;
     };
+    const sty = awaits.has(el);
     for (const a of Array.from(el.attributes)) {
-      if (next.hasAttribute(a.name) || a.name === "id" && minted.has(el) || own && own.has(a.name) || vis && a.name === "hidden" || waiting && a.name === "aria-busy" || /^data-vk-(pending|failed)$/.test(a.name) || seed(a.name)) continue;
+      if (sty && a.name === "style" || next.hasAttribute(a.name) || a.name === "id" && minted.has(el) || own && own.has(a.name) || vis && a.name === "hidden" || waiting && a.name === "aria-busy" || /^data-vk-(pending|failed)$/.test(a.name) || seed(a.name)) continue;
       el.removeAttribute(a.name);
     }
     for (const a of Array.from(next.attributes)) {
-      if (own && own.has(a.name) || vis && a.name === "hidden" || el.getAttribute(a.name) === a.value || seed(a.name)) continue;
+      if (sty && a.name === "style" || own && own.has(a.name) || vis && a.name === "hidden" || el.getAttribute(a.name) === a.value || seed(a.name)) continue;
       el.setAttribute(a.name, a.value);
     }
     if (own && !own.size) owned.delete(el);
@@ -3905,6 +3968,7 @@
   // (fastRows): the rows it left are as the last bindIn left them, and are
   // skipped.
   function bindIn(root, html, scoped) {
+    awaitsIn();
     for (const r of root ? rootsOf(root) : []) bindOne(r, html, r === root ? scoped : null);
     teleport(html || "");
   }
@@ -5327,6 +5391,7 @@
   listenIn(page0);
   bindIn(document.body, page0);
   markActive();
+  awaitsIn();
   clientTables();
   watchViewport();
   watchShown();
