@@ -221,6 +221,24 @@ key := web.MustEnv[string]("SECRET_KEY")        // panics when unset or invalid
 app := web.New(web.Require("DATABASE_URL", "SECRET_KEY"))
 ```
 
+Values that change while the app runs (a config source calls `web.ApplyEnv`)
+are seen by `web.Env` at its next call. A value kept from start-up follows
+the change through a callback or a handle:
+
+```go
+web.OnEnvChange("RATE_LIMIT", func(old, new string) { limiter.SetRate(web.Env[int]("RATE_LIMIT")) })
+limit := web.Hot[int]("RATE_LIMIT", 100)        // limit.Get() is always current; parsed once per change
+```
+
+`web.ApplyEnv(source, values)` sets values below the real environment and
+above the env files, and returns the keys that changed. A source owns the
+keys it set: a key it stops providing goes back to its env file's value (or is
+unset), and a key the real environment holds, or `os.Setenv` changed since,
+is left alone. Callbacks run in order after the apply, a panic in one is logged
+without the value, and `OnEnvChange` returns the function that unregisters it.
+Keys change one at a time, so a reader of several keys can see some old and
+some new.
+
 A value that doesn't convert gives the default, and the next `app.Build()` (or
 `app.Start`, for constructors) fails naming the variable. `web.Require` fails
 Build listing every missing variable, the files looked for and the keys of
