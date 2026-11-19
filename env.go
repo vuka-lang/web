@@ -210,6 +210,26 @@ func undoEnv(l *envLoad) {
 	envState.boot = nil
 }
 
+// EnvFromFile reports whether the current value of the environment variable
+// key is the one an env file gave it, as opposed to the real environment, a
+// call to os.Setenv or a variable no file defines. A package that supplies
+// values from another source, below the real environment and above the env
+// files, sets only the keys for which it is true or that are unset.
+func EnvFromFile(key string) bool {
+	cur, ok := os.LookupEnv(key)
+	if !ok {
+		return false
+	}
+	envState.Lock()
+	defer envState.Unlock()
+	for _, l := range envState.loads {
+		if v, set := l.set[key]; set && v == cur {
+			return true
+		}
+	}
+	return false
+}
+
 // DotEnv replaces the env files New reads (see LoadEnv); the first listed
 // wins. Relative paths are read from the working directory, or the nearest
 // parent up to the module root holding one of them.
