@@ -1543,7 +1543,12 @@ func (c *conn) broadcasts(ctx context.Context, run []delivery) bool {
 		end = c.recordInfo(run)
 	}
 	c.vars.newEvent()
+	release := broadcastGate.acquire(ctx)
+	if release == nil {
+		return false
+	}
 	m := c.answer(func() any { return c.s.InfoBatch(msgs) })
+	release()
 	if c.varsRefused() {
 		return false
 	}
