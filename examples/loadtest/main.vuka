@@ -1,20 +1,21 @@
-// Command loadtest is the server of the live-page load test: a dashboard over
-// Postgres, its caps lifted, and on a second port pprof and its stats. See
-// README.md.
+// Command loadtest is the server of the live-page load test. Two scenarios: a
+// dashboard over Postgres, and pages that read nothing outside the process, one
+// that subscribes to a topic and one that answers events. Its caps are lifted,
+// it can listen on several ports, and on another port it serves pprof, its
+// metrics and an endpoint that broadcasts. See README.md.
 package main
 
 import (
 	"context"
-	"encoding/json"
 	"flag"
 	"log"
+	"net"
 	"net/http"
-	"net/http/pprof"
 	"os"
+	"os/signal"
 	"runtime"
-	"runtime/metrics"
 	"strconv"
-	"strings"
+	"syscall"
 	"time"
 
 	"github.com/vuka-lang/web/v2"
@@ -23,8 +24,10 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":18090", "the app's address")
-	debug := flag.String("debug", "127.0.0.1:18091", "pprof's and the stats' address")
+	addr := flag.String("addr", "127.0.0.1:18090", "the app's address")
+	ports := flag.Int("ports", 1, "listen on this many consecutive ports from addr's: a client's connections to one address are limited by its ephemeral ports")
+	debug := flag.String("debug", "127.0.0.1:18099", "pprof's, the metrics' and the broadcast endpoint's address")
+	scenario := flag.String("scenario", "pg", "pg (the Postgres dashboard at /) or mem (/counter and /feed, no database)")
 	dbURL := flag.String("db", os.Getenv("LOADTEST_DB"), "the Postgres URL; add pool_max=N for the pool")
 	owners := flag.Int("owners", 1000, "owners to seed")
 	perOwner := flag.Int("orders", 100, "orders per owner to seed")
@@ -34,21 +37,67 @@ func main() {
 	mutex := flag.Int("mutex-fraction", 0, "runtime.SetMutexProfileFraction (0 off)")
 	flag.Parse()
 
-	ctx := context.Background()
-	if err := store.Connect(ctx, *dbURL, *owners, *perOwner); err != nil {
-		log.Fatal(err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	opts := []web.Option{pages.Routes(), web.LiveMaxConns(0), web.LiveMaxConnsPerIP(0), web.LiveCheckEvery(*checkEvery)}
+	switch *scenario {
+	case "pg":
+		if err := store.Connect(ctx, *dbURL, *owners, *perOwner); err != nil {
+			log.Fatal(err)
+		}
+		if *checks {
+			opts = append(opts, web.LiveCheck(checkOwner))
+		}
+	case "mem":
+	default:
+		log.Fatalf("unknown scenario %q", *scenario)
 	}
 	runtime.SetBlockProfileRate(*block)
 	runtime.SetMutexProfileFraction(*mutex)
-	go serveDebug(*debug)
 
-	opts := []web.Option{pages.Routes(), web.LiveMaxConns(0), web.LiveMaxConnsPerIP(0), web.LiveCheckEvery(*checkEvery)}
-	if *checks {
-		opts = append(opts, web.LiveCheck(checkOwner))
-	}
-	if err := web.New(opts...).Run(*addr); err != nil {
+	app := web.New(opts...)
+	if err := app.Start(ctx); err != nil {
 		log.Fatal(err)
 	}
+	go serveDebug(*debug, app)
+	if err := serve(ctx, app, *addr, *ports); err != nil {
+		log.Fatal(err)
+	}
+	sctx, done := context.WithTimeout(context.Background(), 10*time.Second)
+	defer done()
+	app.Stop(sctx)
+}
+
+// serve listens on ports consecutive ports from addr's and returns when ctx
+// ends.
+func serve(ctx context.Context, app *web.App, addr string, ports int) error {
+	host, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	first, err := strconv.Atoi(p)
+	if err != nil {
+		return err
+	}
+	handler := countLive(app.Handler())
+	var servers []*http.Server
+	for i := range max(1, ports) {
+		ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(first+i)))
+		if err != nil {
+			return err
+		}
+		srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+		servers = append(servers, srv)
+		log.Printf("loadtest: listening on http://%s", ln.Addr())
+		go srv.Serve(ln)
+	}
+	<-ctx.Done()
+	for _, srv := range servers {
+		sctx, done := context.WithTimeout(context.Background(), 5*time.Second)
+		srv.Shutdown(sctx)
+		done()
+	}
+	return nil
 }
 
 // checkOwner is a check as an app's would be: a query per page, per period.
@@ -60,77 +109,4 @@ func checkOwner(ctx context.Context) error {
 		}
 	}
 	return store.Check(ctx, owner)
-}
-
-func serveDebug(addr string) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/debug/pprof/", pprof.Index)
-	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
-	mux.HandleFunc("/debug/stats", stats)
-	log.Println(http.ListenAndServe(addr, mux))
-}
-
-// stats is the numbers each sample of the client's run records.
-func stats(w http.ResponseWriter, r *http.Request) {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	out := map[string]any{
-		"goroutines":   runtime.NumGoroutine(),
-		"gomaxprocs":   runtime.GOMAXPROCS(0),
-		"heap_alloc":   m.HeapAlloc,
-		"heap_inuse":   m.HeapInuse,
-		"heap_sys":     m.HeapSys,
-		"heap_idle":    m.HeapIdle,
-		"heap_released": m.HeapReleased,
-		"stack_inuse":  m.StackInuse,
-		"sys":          m.Sys,
-		"next_gc":      m.NextGC,
-		"num_gc":       m.NumGC,
-		"pause_total_ms": float64(m.PauseTotalNs) / 1e6,
-		"gc_cpu_fraction": m.GCCPUFraction,
-		"db_ms":        store.DBTime.Snapshot(),
-		"check_ms":     store.CheckTime.Snapshot(),
-	}
-	for name, key := range map[string]string{
-		"/sched/latencies:seconds":     "sched_latency_ms",
-		"/sched/pauses/total/gc:seconds": "gc_pause_ms",
-		"/sync/mutex/wait/total:seconds": "",
-		"/cpu/classes/gc/total:cpu-seconds": "",
-		"/cpu/classes/total:cpu-seconds": "",
-	} {
-		s := []metrics.Sample{{Name: name}}
-		metrics.Read(s)
-		switch s[0].Value.Kind() {
-		case metrics.KindFloat64Histogram:
-			if key != "" {
-				out[key] = quantiles(s[0].Value.Float64Histogram())
-			}
-		case metrics.KindFloat64:
-			out[strings.NewReplacer("/", "_", ":", "_").Replace(strings.TrimPrefix(name, "/"))] = s[0].Value.Float64()
-		}
-	}
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
-}
-
-func quantiles(h *metrics.Float64Histogram) map[string]float64 {
-	var total uint64
-	for _, c := range h.Counts {
-		total += c
-	}
-	out := map[string]float64{"count": float64(total)}
-	for _, q := range []struct {
-		name string
-		at   float64
-	}{{"p50", .5}, {"p99", .99}, {"p999", .999}, {"p9999", .9999}, {"max", 1}} {
-		var seen uint64
-		for i, c := range h.Counts {
-			seen += c
-			if float64(seen) >= q.at*float64(total) && total > 0 {
-				out[q.name] = h.Buckets[i+1] * 1000
-				break
-			}
-		}
-	}
-	return out
 }

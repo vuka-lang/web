@@ -1,0 +1,45 @@
+<script lang="go">
+package pages
+
+import (
+	"context"
+
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2/examples/loadtest/components"
+	"github.com/vuka-lang/web/v2/examples/loadtest/feed"
+)
+
+// Feed is the page of the database-free scenario that listens: it subscribes
+// to a topic (?topic=, "feed" by default) and shows the last tick broadcast
+// on it, its rows following the tick's sequence number. ?rows= sets the rows.
+type Feed struct {
+	ui.Live
+	Rows  int
+	Topic string
+	tick  feed.Tick
+	lines []int
+}
+
+func (p *Feed) Title() string { return "Feed" }
+
+@ui.Mount
+func (p *Feed) mount(ctx context.Context) error {
+	topic := p.Topic
+	if topic == "" {
+		topic = feed.Topic
+	}
+	p.Subscribe(topic)
+	p.lines = feed.Lines(p.Rows)
+	return nil
+}
+
+func (p *Feed) Update(t feed.Tick) { p.tick = t }
+</script>
+<main>
+	<p class="tag">{tick.Tag()}</p>
+	<ul>
+		for _, i := range lines {
+			<components.Line key={i} n={i} seq={tick.Seq}/>
+		}
+	</ul>
+</main>

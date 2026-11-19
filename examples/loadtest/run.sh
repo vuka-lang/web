@@ -4,18 +4,38 @@
 # goroutine, block and mutex profiles while measuring, which costs a little:
 # compare latencies between runs without it.
 #
-# Environment: SERVER, CLIENT (the binaries), LOADTEST_DB, SERVER_PROCS (4),
-# CLIENT_PROCS (3), EVERY (5s), MEASURE (120s), WARMUP (30s), RATE (200),
-# SERVER_ARGS, MAX_RSS_KB (7 GB), MAX_SWAP_GROWTH_MB (1024), MAX_LOAD (6).
+# Environment: SCENARIO (pg, or mem for no database), SERVER, CLIENT (the
+# binaries), LOADTEST_DB, SERVER_PROCS (4), CLIENT_PROCS (3), EVERY (5s),
+# MEASURE (120s), WARMUP (30s), RATE (200), PORTS (one per 8,000 sockets: the
+# ephemeral ports of one address are about 16,000), STEP (1000), SETTLE (10s),
+# PHASES (the client's default for the scenario), SERVER_ARGS, CLIENT_ARGS,
+# MAX_RSS_KB (7 GB), MAX_SWAP_GROWTH_MB (1024), MAX_LOAD (6).
 set -u
 sockets=$1
 out=$2
 profile=${3:-}
-: "${SERVER:=./build/server}" "${CLIENT:=./build/client}"
+: "${SCENARIO:=pg}" "${SERVER:=./build/server}" "${CLIENT:=./build/loadclient}"
 : "${SERVER_PROCS:=4}" "${CLIENT_PROCS:=3}" "${EVERY:=5s}" "${MEASURE:=120s}" "${WARMUP:=30s}" "${RATE:=200}"
+: "${PORTS:=$(((sockets + 7999) / 8000))}" "${STEP:=1000}" "${SETTLE:=10s}" "${PHASES:=}" "${CLIENT_ARGS:=}"
 : "${MAX_RSS_KB:=7340032}" "${MAX_SWAP_GROWTH_MB:=1024}" "${MAX_LOAD:=6}" "${SERVER_ARGS:=}"
-debug=127.0.0.1:18091
+debug=127.0.0.1:18099
 mkdir -p "$out"
+
+# One socket is a file descriptor in the client and one in the server, each
+# a process of its own that inherits this limit.
+need=$((sockets + 512))
+for lim in "$(ulimit -Hn)" "$(sysctl -n kern.maxfilesperproc 2>/dev/null)" "$need"; do
+	ulimit -S -n "$lim" 2>/dev/null && break
+done
+have=$(ulimit -n)
+if [ "$(uname)" = Darwin ]; then
+	cap=$(sysctl -n kern.maxfilesperproc)
+	if [ "$have" = unlimited ] || [ "$have" -gt "$cap" ]; then have=$cap; fi
+fi
+if [ "$have" != unlimited ] && [ "$have" -lt "$need" ]; then
+	echo "open files: $sockets sockets need $need descriptors per process, the limit is $have: raise ulimit -n (and kern.maxfilesperproc on macOS)" >&2
+	exit 1
+fi
 
 load1() { uptime | sed 's/.*load averages*: *//; s/,/ /g' | awk '{print $1}'; }
 swap_mb() {
@@ -34,12 +54,12 @@ while [ "$i" -lt 120 ] && awk "BEGIN{exit !($(load1) >= $MAX_LOAD)}"; do
 done
 start_load=$(load1)
 start_swap=$(swap_mb)
-echo "load before: $start_load, swap used: ${start_swap} MB, waited $((i * 5))s" | tee "$out/conditions.txt"
+echo "load before: $start_load, swap used: ${start_swap} MB, waited $((i * 5))s, open files limit: $have, ports: $PORTS" | tee "$out/conditions.txt"
 
 prof=""
 [ -n "$profile" ] && prof="-block-rate 1000000 -mutex-fraction 100"
 # shellcheck disable=SC2086
-GOMAXPROCS=$SERVER_PROCS GODEBUG=gctrace=1 "$SERVER" -debug "$debug" $prof $SERVER_ARGS >"$out/server.log" 2>&1 &
+GOMAXPROCS=$SERVER_PROCS GODEBUG=gctrace=1 "$SERVER" -scenario "$SCENARIO" -ports "$PORTS" -debug "$debug" $prof $SERVER_ARGS >"$out/server.log" 2>&1 &
 server=$!
 stop() { kill "$server" 2>/dev/null; wait "$server" 2>/dev/null; kill "${sampler:-0}" 2>/dev/null; }
 trap stop EXIT
@@ -72,7 +92,8 @@ sampler=$!
 
 mark=$out/.measuring
 rm -f "$mark"
-GOMAXPROCS=$CLIENT_PROCS "$CLIENT" -sockets "$sockets" -rate "$RATE" -every "$EVERY" -warmup "$WARMUP" -measure "$MEASURE" -mark "$mark" -out "$out/result.json" >"$out/client.log" 2>&1 &
+# shellcheck disable=SC2086
+GOMAXPROCS=$CLIENT_PROCS "$CLIENT" -scenario "$SCENARIO" -ports "$PORTS" -sockets "$sockets" -rate "$RATE" -every "$EVERY" -warmup "$WARMUP" -measure "$MEASURE" -step "$STEP" -settle "$SETTLE" -phases "$PHASES" -debug "http://$debug" -mark "$mark" -out "$out/result.json" $CLIENT_ARGS >"$out/client.log" 2>&1 &
 client=$!
 
 if [ -n "$profile" ]; then

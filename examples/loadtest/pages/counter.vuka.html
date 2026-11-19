@@ -1,0 +1,43 @@
+<script lang="go">
+package pages
+
+import (
+	"context"
+
+	"github.com/vuka-lang/ui/v2"
+	"github.com/vuka-lang/web/v2/examples/loadtest/components"
+	"github.com/vuka-lang/web/v2/examples/loadtest/feed"
+)
+
+// Counter is the interactive page of the database-free scenario: a button
+// whose event re-renders the page and its rows, none of it reading anything
+// outside the process. ?rows= sets the rows.
+type Counter struct {
+	ui.Live
+	Rows  int
+	n     int
+	lines []int
+}
+
+func (p *Counter) Title() string { return "Counter" }
+
+@ui.Mount
+func (p *Counter) mount(ctx context.Context) error {
+	p.lines = feed.Lines(p.Rows)
+	return nil
+}
+
+// Bump is the event the load client sends.
+func (p *Counter) Bump() { p.n = p.n + 1 }
+</script>
+<main>
+	<header>
+		<button id="bump" type="button" onClick={Bump}>Bump</button>
+		<span class="n">{n}</span>
+	</header>
+	<ul>
+		for _, i := range lines {
+			<components.Line key={i} n={i} seq={n}/>
+		}
+	</ul>
+</main>

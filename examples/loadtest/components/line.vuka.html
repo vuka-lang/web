@@ -1,0 +1,21 @@
+<script lang="go">
+package components
+
+import "github.com/vuka-lang/ui/v2"
+
+// Line is one row of the database-free pages: an instance whose render
+// depends only on its props.
+type Line struct {
+	ui.Live
+	N      int
+	Seq    int
+	picked bool
+}
+
+func (l *Line) Pick() { l.picked = !l.picked }
+</script>
+<li class="line" data-picked={picked}>
+	<span>{N}</span>
+	<span class="seq">{Seq * (N + 1)}</span>
+	<button type="button" onClick={Pick}>pick</button>
+</li>
