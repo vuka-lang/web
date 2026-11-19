@@ -420,10 +420,12 @@ type conn struct {
 	ahead   map[string]*aheadNav // pages mounted ahead of a click, by URL (liveprefetch.go)
 	aheadTB *tbEntry             // the toolbar record of a used prefetch's run, for navigated
 
-	mu     sync.Mutex
-	inbox  []delivery
-	wake   chan struct{}
-	ending atomic.Bool // CloseLive matched the page: it closes before anything else
+	mu      sync.Mutex
+	inbox   []delivery
+	wake    chan struct{}
+	ending  atomic.Bool // CloseLive matched the page: it closes before anything else
+	out     outbox      // the frames waiting for its socket
+	closing atomic.Bool // closeConn ran
 }
 
 type delivery struct {
@@ -499,7 +501,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer a.recoverSocket(ws, r)
-	c := &conn{app: a, ws: ws, r: r, uri: uri, tok: tok, wake: make(chan struct{}, 1)}
+	c := &conn{app: a, ws: ws, r: r, uri: uri, tok: tok, wake: make(chan struct{}, 1), out: outbox{space: make(chan struct{}, 1)}}
 	if a.tb != nil {
 		if c.tb = a.tb.liveSink(r.URL.Query().Get("tb"), uri); c.tb != nil {
 			ctx = context.WithValue(ctx, tbKey{}, c.tb)
@@ -574,10 +576,10 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			}
 			if c.ending.Load() {
 				c.noteClose(closeReload, "live: the page must load again", "CloseLive closed the page")
-				ws.Close(closeReload, "live: the page must load again")
+				c.closeConn(closeReload, "live: the page must load again")
 				return
 			}
-			if !c.handle(ctx, msg.data) {
+			if !c.handle(ctx, msg.data) || c.out.isDead() {
 				return
 			}
 			if c.s != nil {
@@ -594,15 +596,15 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 		case <-deadline.C:
 			if c.s == nil {
 				c.noteClose(websocket.StatusPolicyViolation, "live: no join in time", "the socket sent no join within "+cmp.Or(a.hub.joinTimeout, defaultLiveJoinTimeout).String())
-				ws.Close(websocket.StatusPolicyViolation, "live: no join in time")
+				c.closeConn(websocket.StatusPolicyViolation, "live: no join in time")
 			} else {
 				c.noteClose(closeIdle, "live: the page sat idle", "no message or broadcast for "+a.hub.idleTimeout.String()+" (LiveIdleTimeout)")
-				ws.Close(closeIdle, "live: the page sat idle")
+				c.closeConn(closeIdle, "live: the page sat idle")
 			}
 			return
 		case <-checks:
 			if c.s != nil && !c.check() {
-				ws.Close(closeReload, "live: the page must load again")
+				c.closeConn(closeReload, "live: the page must load again")
 				return
 			}
 			checkTimer.Reset(a.hub.checkEvery)
@@ -610,7 +612,7 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 			active()
 			if c.ending.Load() {
 				c.noteClose(closeReload, "live: the page must load again", "CloseLive closed the page")
-				ws.Close(closeReload, "live: the page must load again")
+				c.closeConn(closeReload, "live: the page must load again")
 				return
 			}
 			if !c.drain(ctx) {
@@ -622,7 +624,9 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 				defer done()
 				if err := ws.Ping(pctx); err != nil {
 					c.noteConn("drop", 0, "the browser stopped answering pings", err.Error())
-					cancel()
+					if c.closeConn(closeReload, "live: the page must load again") {
+						cancel()
+					}
 				}
 			}()
 		}
@@ -634,25 +638,6 @@ func (a *App) serveLive(w http.ResponseWriter, r *http.Request) {
 // restart) don't all check together.
 func firstCheck(every time.Duration) time.Duration {
 	return time.Duration(rand.Int64N(int64(every))) + 1
-}
-
-func (c *conn) write(ctx context.Context, m any) {
-	var buf bytes.Buffer
-	e := json.NewEncoder(&buf)
-	e.SetEscapeHTML(false) // markup as markup, not \u003c…
-	e.Encode(m)
-	b := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
-	if c.tb != nil {
-		f := newFrame("server", b)
-		f.Report = c.wire.apply(b)
-		c.frames = append(c.frames, f)
-	}
-	wctx, done := context.WithTimeout(ctx, writeTimeout)
-	defer done()
-	if err := c.ws.Write(wctx, websocket.MessageText, b); err != nil {
-		c.noteConn("drop", 0, "a write to the browser failed", err.Error())
-		c.ws.CloseNow()
-	}
 }
 
 // handle answers a client message; false ends the connection.
@@ -689,7 +674,7 @@ func (c *conn) handle(ctx context.Context, data []byte) bool {
 		c.write(ctx, reply)
 		if code != 0 {
 			c.noteClose(code, cmp.Or(reply.(live.ServerMessage).Error, "redirected to "+reply.(live.ServerMessage).URL), "the join's run of the page's route")
-			c.ws.Close(code, reply.(live.ServerMessage).Error)
+			c.closeConn(code, reply.(live.ServerMessage).Error)
 			return false
 		}
 		c.startDeferred(false)
@@ -758,7 +743,7 @@ func (c *conn) varsRefused() bool {
 		return false
 	}
 	c.noteClose(closeReload, "live: the page must load again", "a gate refused a read of the page's variables: "+err.Error())
-	c.ws.Close(closeReload, "live: the page must load again")
+	c.closeConn(closeReload, "live: the page must load again")
 	return true
 }
 
@@ -1538,8 +1523,8 @@ func (c *conn) applyLoaded(ctx context.Context, l loaded) bool {
 	if c.varsRefused() {
 		return false
 	}
-	if m != nil {
-		c.write(ctx, m)
+	if m != nil && !c.push(ctx, m) {
+		return false
 	}
 	end()
 	return true
@@ -1562,8 +1547,8 @@ func (c *conn) broadcasts(ctx context.Context, run []delivery) bool {
 	if c.varsRefused() {
 		return false
 	}
-	if m != nil {
-		c.write(ctx, m)
+	if m != nil && !c.push(ctx, m) {
+		return false
 	}
 	end()
 	return true
