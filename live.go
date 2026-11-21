@@ -447,9 +447,8 @@ type params struct {
 // patchParams finds the Update overload of t taking a URLParams struct.
 func patchParams(t reflect.Type) (*params, error) {
 	var found *params
-	pt := reflect.PointerTo(t)
-	for i := 0; i < pt.NumMethod(); i++ {
-		m := pt.Method(i)
+	for _, vm := range vuka.Methods(reflect.PointerTo(t)) {
+		m := vm.Method
 		if !ui.IsUpdate(m) {
 			continue
 		}

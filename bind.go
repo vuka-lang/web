@@ -359,7 +359,7 @@ func results(ft reflect.Type) (shape, error) {
 		if isResult(t) {
 			get, _ := t.MethodByName("Get")
 			return get.Type.Out(0), func(v reflect.Value) (reflect.Value, error) {
-				out := v.Method(get.Index).Call(nil)
+				out := v.MethodByName("Get").Call(nil)
 				if err := asErr(out[1]); err != nil {
 					return reflect.Value{}, err
 				}

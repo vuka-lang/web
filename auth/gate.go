@@ -476,8 +476,8 @@ func lifecycle(c *vuka.Call) bool {
 	if name == "Render" || name == "Mount" || name == "Update" {
 		return true
 	}
-	m, ok := reflect.TypeOf(c.Receiver).MethodByName(name)
-	return ok && ui.IsUpdate(m)
+	m, ok := vuka.MethodByName(reflect.TypeOf(c.Receiver), name)
+	return ok && ui.IsUpdate(m.Method)
 }
 
 // refuse ends a call without running the function: with err when it
