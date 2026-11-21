@@ -212,7 +212,7 @@ func (a *App) compile(s *routeSpec) (http.Handler, error) {
 		if out.data != nil && out.data.Implements(nodeType) {
 			return nil, failf("E0417", what, s.where, "returns a vuka.Node and has a view").WithHelp("drop one")
 		}
-		if v, err = compileView(*s.view, out.data); err != nil {
+		if v, err = s.view.compile(*s.view, out.data); err != nil {
 			return nil, failure("E0417", what, s.where, err)
 		}
 	}

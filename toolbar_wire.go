@@ -2,19 +2,14 @@ package web
 
 import (
 	"bytes"
-	"cmp"
 	"encoding/json"
 	"fmt"
 	"html"
-	"html/template"
-	"io"
-	"maps"
 	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/vuka-lang/ui/v2/live"
 )
@@ -815,190 +810,6 @@ func (m *wireMirror) passwordFields(target string) (map[string]bool, bool) {
 
 // The views of a message's frames: Summary, Diff and Raw.
 
-type wireView struct {
-	Seq     int
-	Client  *frameView
-	Server  []frameView
-	Changes int // diff rows in all
-}
-
-type frameView struct {
-	tbFrame
-	Label, Size, Split, Detail string
-	Bars                       []shareBar
-	JSON                       template.HTML
-}
-
-type shareBar struct {
-	Name, Text string
-	Style      template.CSS
-}
-
-func renderWire(w io.Writer, m tbRecord) error {
-	v := wireView{Seq: m.Seq}
-	for _, f := range m.Frames {
-		fv := frameView{tbFrame: f, Size: bytesText(f.Size), JSON: highlightJSON(f.Body, f.Truncated)}
-		if f.Dir == "client" {
-			fv.Label, fv.Detail = clientLabel(f.Body)
-			v.Client = &fv
-			continue
-		}
-		if r := f.Report; r != nil {
-			fv.Label = r.Type
-			if r.V == 2 || len(r.Insts) > 0 && r.Insts[0].Kind != "html" {
-				fv.Label += " · v2"
-			}
-			fv.Split = splitText(r)
-			for _, s := range r.Split {
-				if s.Bytes > 0 && r.Size > 0 {
-					fv.Bars = append(fv.Bars, shareBar{s.Name, fmt.Sprintf("%s %s", s.Name, bytesText(s.Bytes)),
-						template.CSS(fmt.Sprintf("width:%.2f%%", 100*float64(s.Bytes)/float64(r.Size)))})
-				}
-			}
-			v.Changes += len(r.Rows)
-		}
-		v.Server = append(v.Server, fv)
-	}
-	return panelTemplates.ExecuteTemplate(w, "wire", v)
-}
-
-// clientLabel is a client frame's type and what it says: "c1:1 click",
-// "/pets?page=2 (patch)", "form name, password".
-func clientLabel(body string) (string, string) {
-	var m struct {
-		Type, Target, Event, Key, URL string
-		V                             int
-		Patch                         bool
-		Form                          map[string]json.RawMessage
-	}
-	json.Unmarshal([]byte(body), &m)
-	var parts []string
-	switch m.Type {
-	case "join":
-		if m.V > 0 {
-			parts = append(parts, "protocol v"+strconv.Itoa(m.V))
-		}
-	case "navigate":
-		parts = append(parts, m.URL)
-		if m.Patch {
-			parts = append(parts, "(patch)")
-		}
-	default:
-		parts = append(parts, m.Target, m.Event)
-		if m.Key != "" {
-			parts = append(parts, "key "+m.Key)
-		}
-		if len(m.Form) > 0 {
-			names := slices.Sorted(maps.Keys(m.Form))
-			parts = append(parts, "form "+strings.Join(names, ", "))
-		}
-	}
-	return cmp.Or(m.Type, "message"), strings.TrimSpace(strings.Join(parts, " "))
-}
-
-// splitText is a frame's bytes by what they carry: "974 B: statics 610 B
-// (new fingerprints 2), dynamics 280 B, framing 84 B".
-func splitText(r *wireReport) string {
-	var parts []string
-	for _, s := range r.Split {
-		p := s.Name + " " + bytesText(s.Bytes)
-		if s.Note != "" {
-			p += " (" + s.Note + ")"
-		}
-		parts = append(parts, p)
-	}
-	return bytesText(r.Size) + ": " + strings.Join(parts, ", ")
-}
-
-// highlightJSON pretty-prints a frame and colours its keys, strings,
-// numbers and literals; a truncated frame is shown as it is.
-func highlightJSON(body string, truncated bool) template.HTML {
-	src := body
-	if !truncated {
-		var b bytes.Buffer
-		if json.Indent(&b, []byte(body), "", "  ") == nil {
-			src = b.String()
-		}
-	}
-	var out strings.Builder
-	for i := 0; i < len(src); {
-		c := src[i]
-		switch {
-		case c == '"':
-			j := i + 1
-			for j < len(src) && src[j] != '"' {
-				if src[j] == '\\' {
-					j++
-				}
-				j++
-			}
-			j = min(j+1, len(src))
-			k := j
-			for k < len(src) && (src[k] == ' ' || src[k] == '\t') {
-				k++
-			}
-			class := "js"
-			if k < len(src) && src[k] == ':' {
-				class = "jk"
-			}
-			out.WriteString(`<span class="` + class + `">` + template.HTMLEscapeString(src[i:j]) + `</span>`)
-			i = j
-		case c == '-' || c >= '0' && c <= '9':
-			j := i + 1
-			for j < len(src) && strings.IndexByte("0123456789.eE+-", src[j]) >= 0 {
-				j++
-			}
-			out.WriteString(`<span class="jn">` + src[i:j] + `</span>`)
-			i = j
-		case strings.HasPrefix(src[i:], "true") || strings.HasPrefix(src[i:], "false") || strings.HasPrefix(src[i:], "null"):
-			n := 4
-			if c == 'f' {
-				n = 5
-			}
-			out.WriteString(`<span class="jb">` + src[i:i+n] + `</span>`)
-			i += n
-		default:
-			j := i + 1
-			for j < len(src) && strings.IndexByte(`"-0123456789tfn`, src[j]) < 0 {
-				j++
-			}
-			out.WriteString(template.HTMLEscapeString(src[i:j]))
-			i = j
-		}
-	}
-	return template.HTML(out.String())
-}
-
-// marked is one side of a changed value, quoted, the part that differs from
-// the other side marked.
-func marked(a, b string, side int) template.HTML {
-	pre := 0
-	for pre < len(a) && pre < len(b) && a[pre] == b[pre] {
-		pre++
-	}
-	suf := 0
-	for suf < len(a)-pre && suf < len(b)-pre && a[len(a)-1-suf] == b[len(b)-1-suf] {
-		suf++
-	}
-	for pre > 0 && !utf8.RuneStart(a[pre]) && pre < len(a) {
-		pre--
-	}
-	for suf > 0 && len(a)-suf < len(a) && !utf8.RuneStart(a[len(a)-suf]) {
-		suf--
-	}
-	s := a
-	if side == 1 {
-		s = b
-	}
-	esc := template.HTMLEscapeString
-	mid := s[pre : len(s)-suf]
-	out := `"` + esc(s[:pre])
-	if mid != "" {
-		out += "<mark>" + esc(mid) + "</mark>"
-	}
-	return template.HTML(out + esc(s[len(s)-suf:]) + `"`)
-}
-
 // streamLines are the stream batches the instances a frame sent carry, one
 // line each: "c1 Chat messages q7.12: +1 −1, limit 200, 312 B" — the rows
 // inserted and the keys deleted, a reset, the limit, the rows' bytes.
@@ -1102,4 +913,11 @@ func rowsBytes(h string, from int) int {
 		i++
 	}
 	return -1
+}
+
+func bytesText(n int) string {
+	if n >= 10_000 {
+		return fmt.Sprintf("%.1f kB", float64(n)/1000)
+	}
+	return fmt.Sprintf("%d B", n)
 }

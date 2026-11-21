@@ -36,6 +36,9 @@ type declRoute struct {
 type declView struct {
 	file vuka.File
 	name string
+	// compile is compileView, set by Template: an app declaring no view
+	// links no html/template.
+	compile func(declView, reflect.Type) (*view, error)
 }
 
 type declController struct {
@@ -189,7 +192,7 @@ func Delete(path string) vuka.Bundle { return Handle(http.MethodDelete, path) }
 // the route's method decorator doesn't matter; from Go it is an option:
 // app.Get("/pets/{id}", ShowPet, web.Template(petView)).
 func Template(f vuka.File, name ...string) Templates {
-	v := declView{file: f}
+	v := declView{file: f, compile: compileView}
 	if len(name) > 0 {
 		v.name = name[0]
 	}

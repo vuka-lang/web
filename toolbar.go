@@ -10,7 +10,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html/template"
 	"log"
 	"log/slog"
 	"net"
@@ -39,7 +38,8 @@ import (
 // ring of the latest requests, and every full page it serves gets a
 // script drawing a handle and a drawer of panels for the request, in a
 // shadow DOM of its own. Anything else has no toolbar: nothing recorded,
-// nothing served, nothing installed.
+// nothing served, nothing installed. A release build (vuka build) has none
+// linked in: toolbar_serve.go is left out for toolbar_release.go.
 
 const (
 	toolbarJS    = livePrefix + "toolbar.js"
@@ -59,25 +59,6 @@ const (
 	toolbarMaxRows = 1000 // statements, spans, log records and notes kept per request
 )
 
-//go:embed toolbar.js
-var toolbarScript []byte
-
-//go:embed toolbar.css
-var toolbarCSS string
-
-//go:embed toolbar-logo.svg
-var toolbarLogo []byte
-
-// toolbarSource is the script served, the stylesheet of its shadow DOM in it
-// (the Vuka logo in that as a data URL).
-var toolbarSource, toolbarTag = func() ([]byte, string) {
-	logo := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString(toolbarLogo)
-	css, _ := json.Marshal(strings.Replace(toolbarCSS, "__LOGO__", logo, 1))
-	src := bytes.Replace(toolbarScript, []byte(`"__CSS__"`), css, 1)
-	src = append([]byte(devSocketJS), src...)
-	return src, cssTag(src)
-}()
-
 // toolbarInTests turns the toolbar on in this package's tests. Elsewhere a
 // test binary has none, so tests see the pages the app serves, unless the
 // test names a session directory (VUKA_DEV_DIR) as vuka run does.
@@ -92,7 +73,7 @@ func (a *App) Toolbar() bool { return a.tb != nil }
 
 func (a *App) newToolbar() *toolbar {
 	dir := os.Getenv(DevDirEnv)
-	if a.noToolbar || !a.dev && dir == "" || testing.Testing() && dir == "" && !toolbarInTests {
+	if !toolbarLinked || a.noToolbar || !a.dev && dir == "" || testing.Testing() && dir == "" && !toolbarInTests {
 		return nil
 	}
 	return &toolbar{byID: map[string]*tbEntry{}, dir: dir}
@@ -833,52 +814,6 @@ func (tb *toolbar) tag(r *http.Request) string {
 		t += ` data-vk-build`
 	}
 	return t + ` defer></script>`
-}
-
-// routeToolbar serves the script, the records and the build's state.
-func (a *App) routeToolbar() {
-	tb := a.tb
-	a.router.Handle(http.MethodGet, toolbarJS, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		serveTagged(w, r, "text/javascript; charset=utf-8", toolbarTag, toolbarSource)
-	}))
-	a.router.Handle(http.MethodGet, toolbarData, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		e := tb.get(a.router.Param(r, "id"))
-		if e == nil {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": "the toolbar keeps the latest " + strconv.Itoa(toolbarKeep) + " requests; this one is gone"})
-			return
-		}
-		rec := e.snapshot()
-		if q := r.URL.Query(); q.Has("wire") {
-			seq, _ := strconv.Atoi(q.Get("wire"))
-			i := slices.IndexFunc(rec.Live, func(m *tbEntry) bool { return m.Seq == seq })
-			if i < 0 {
-				writeJSON(w, http.StatusNotFound, map[string]any{"error": "the toolbar keeps the latest " + strconv.Itoa(toolbarLive) + " messages of a page; this one is gone"})
-				return
-			}
-			var b bytes.Buffer
-			if err := renderWire(&b, rec.Live[i].snapshot()); err != nil {
-				fmt.Fprintf(&b, "<p class=errtext>%s</p>", template.HTMLEscapeString(err.Error()))
-			}
-			writeJSON(w, http.StatusOK, map[string]any{"html": b.String()})
-			return
-		}
-		out := summary(rec)
-		if r.URL.Query().Has("panels") {
-			var b bytes.Buffer
-			if err := renderPanels(&b, rec, append(a.cronPanel(), a.graphiqlPanel()...)...); err != nil {
-				fmt.Fprintf(&b, "<p class=err>%s</p>", err)
-			}
-			out["html"] = b.String()
-		}
-		writeJSON(w, http.StatusOK, out)
-	}))
-	a.router.Handle(http.MethodGet, toolbarBuild, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, http.StatusOK, readBuildState(tb.dir, a.assets))
-	}))
-	a.routeCrons()
-	a.routeGraphiQL()
 }
 
 // buildState is how vuka run -watch's next build is going, from its
