@@ -1,3 +1,5 @@
+//go:build !vuka_release
+
 package web
 
 import (
@@ -390,13 +392,6 @@ func liveOf(msgs []*tbEntry) []liveMsg {
 		out = append(out, v)
 	}
 	return out
-}
-
-func bytesText(n int) string {
-	if n >= 10_000 {
-		return fmt.Sprintf("%.1f kB", float64(n)/1000)
-	}
-	return fmt.Sprintf("%d B", n)
 }
 
 // notePanels draws the panels the request noted values for, and those

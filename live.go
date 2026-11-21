@@ -147,14 +147,12 @@ const (
 	liveScript = livePrefix + "live.js"
 )
 
-// The runtime: live.js as written, served in development, and live.min.js,
-// its minified copy (internal/minjs), served otherwise. TestLiveMinFresh
-// fails when the copy is stale.
+// The runtime: live.js as written, served in development (liveJS, which a
+// release build doesn't have: toolbar_serve.go), and live.min.js, its
+// minified copy (internal/minjs), served otherwise. TestLiveMinFresh fails
+// when the copy is stale.
 //
 //go:generate go run -C internal/minjs . ../../live.js ../../live.min.js
-
-//go:embed live.js
-var liveJS []byte
 
 //go:embed live.min.js
 var liveMinJS []byte
