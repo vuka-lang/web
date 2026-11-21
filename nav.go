@@ -63,9 +63,10 @@ func navigation(r *http.Request) bool {
 // component loader (its manifest) and the stylesheet. A page rendered by
 // another build can't be patched into this one's document: the runtime's
 // script tag carries it (data-vk-build-id), and a navigation naming
-// another answers Vk-Reload: build.
+// another answers Vk-Reload: build. The runtime is named by live.min.js,
+// which a release build (toolbar_release.go) and any other have alike.
 func (a *App) buildID() string {
-	id := liveJSTag
+	id := liveMinJSTag
 	if a.assets != nil {
 		_, _, tag := a.assets.current()
 		id += "." + tag
