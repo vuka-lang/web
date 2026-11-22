@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -43,9 +44,15 @@ const OptionsHeader = "Vk-Options"
 
 // pushArgsParam and pushFormParam are the parameters carrying a call's
 // arguments, a JSON array, and the enclosing form's fields, a JSON object.
+// pushStatesParam carries the browser's dirty synced states (one state,
+// §12): a JSON object of key → {v, n}, applied to the call's receiver
+// before the method runs, so a method reading a state sees the truth as of
+// the call; the reply's "states" carries back what the method wrote,
+// versioned, for the browser to adopt as it does a live patch's.
 const (
-	pushArgsParam = "_vk_args"
-	pushFormParam = "_vk_form"
+	pushArgsParam   = "_vk_args"
+	pushFormParam   = "_vk_form"
+	pushStatesParam = "_vk_states"
 )
 
 // pushCalls answers the push calls a page route gets before h, its
@@ -92,12 +99,13 @@ func (a *App) pushCalls(s, page *routeSpec, h http.Handler) (http.Handler, error
 			return
 		}
 		r2 := r.Clone(r.Context())
-		var args, form string
+		var args, form, states string
 		if r.Method == http.MethodGet {
 			q := r.URL.Query()
-			args, form = q.Get(pushArgsParam), q.Get(pushFormParam)
+			args, form, states = q.Get(pushArgsParam), q.Get(pushFormParam), q.Get(pushStatesParam)
 			q.Del(pushArgsParam)
 			q.Del(pushFormParam)
+			q.Del(pushStatesParam)
 			r2.URL.RawQuery = q.Encode()
 		} else {
 			if limit > 0 && r.Body != nil && r.Body != http.NoBody {
@@ -112,7 +120,7 @@ func (a *App) pushCalls(s, page *routeSpec, h http.Handler) (http.Handler, error
 				a.writeError(w, r, BadRequest("the call doesn't parse"), false)
 				return
 			}
-			args, form = r.PostForm.Get(pushArgsParam), r.PostForm.Get(pushFormParam)
+			args, form, states = r.PostForm.Get(pushArgsParam), r.PostForm.Get(pushFormParam), r.PostForm.Get(pushStatesParam)
 			r2.Form, r2.PostForm = nil, nil
 		}
 		rq := a.newRequest(w, r2, s)
@@ -126,6 +134,12 @@ func (a *App) pushCalls(s, page *routeSpec, h http.Handler) (http.Handler, error
 		if err == nil {
 			_, err = a.loadLayouts(rq, guards, pathNames)
 		}
+		var writes map[string]ui.StateWrite
+		if err == nil && states != "" {
+			if jerr := json.Unmarshal([]byte(states), &writes); jerr != nil {
+				err = BadRequest("the call's states don't parse")
+			}
+		}
 		if err == nil {
 			var x reflect.Value
 			end := a.span(rq.ctx, "handler", call.Method())
@@ -137,13 +151,25 @@ func (a *App) pushCalls(s, page *routeSpec, h http.Handler) (http.Handler, error
 			} else {
 				x = reflect.New(t)
 			}
+			if err == nil && x.IsValid() {
+				err = ui.ApplyPushStates(x.Interface(), writes)
+			}
 			var res any
 			if err == nil {
 				res, err = call.Call(rq.ctx, x)
 			}
 			end()
 			if err == nil {
-				if d := call.Cache(); d > 0 && r.Method == http.MethodGet {
+				echoes := ui.CollectPushStates(x.Interface(), writes)
+				if len(echoes) > 0 {
+					m, ok := res.(map[string]any)
+					if !ok {
+						m = map[string]any{}
+						res = m
+					}
+					m["states"] = echoes
+				}
+				if d := call.Cache(); d > 0 && r.Method == http.MethodGet && len(echoes) == 0 {
 					w.Header().Set("Cache-Control", "private, max-age="+strconv.FormatInt(int64(d.Seconds()), 10))
 				}
 				writeJSON(w, http.StatusOK, res)
