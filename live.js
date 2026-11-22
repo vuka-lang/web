@@ -1267,6 +1267,12 @@
     if (!ws || !joined || nav) return; // a page on its way out sends nothing
     const shown = shownWith();
     if (shown.length) msg.shown = shown;
+    if (msg.type === "event") {
+      // the dirty synced states ride first, so the handler reads the truth
+      // as of the event; they stay dirty until their echo adopts them back
+      const carry = syncCarry();
+      if (carry) msg.states = carry;
+    }
     msg.ref = ++ref;
     const f = document.activeElement;
     sentField = f && isField(f) ? { el: f, shows: fieldShows(f), ref: msg.ref, edit: msg.event === "input" || msg.event === "change" } : null;
@@ -3790,8 +3796,54 @@
   // value changed.
   const store = new Map(), subs = new Map(), dirty = new Set(), bound = new WeakMap();
   const derivs = new Map(), dsubs = new Map(); // derived key → {x, deps}; a state's key → the derived keys reading it
+  // One state: a synced state ("sy" on its references) is one the server's
+  // Go code reads. The browser numbers its own writes of one (wn) and sends
+  // the dirty ones with every event (msg.states), applied before the
+  // handler; a reference whose version ("ver") advanced past the base held
+  // here is adopted — a server's own write ("sw") whatever was written
+  // since, an echo ("bn") once it covers the local writes, which also
+  // settles the dirty mark.
+  const synced = new Set(), wn = new Map(), sbase = new Map(), sdirty = new Set();
+  function sadopt(r) {
+    if (r.ver === undefined || r.x !== undefined || derivs.has(r.s)) return r;
+    const base = sbase.get(r.s) || 0;
+    if (r.ver <= base) return r;
+    sbase.set(r.s, r.ver);
+    const mine = wn.get(r.s) || 0;
+    if (!r.sw && (r.bn || 0) < mine) return r; // an older echo: newer local writes are on their way
+    sdirty.delete(r.s);
+    const was = serverWrite;
+    serverWrite = true;
+    try { swrite({ s: r.s }, r.i === undefined ? null : r.i); } finally { serverWrite = was; }
+    return r;
+  }
+  // syncCarry is the dirty synced states, for an event or an HTTP push to
+  // carry; adoptPushStates adopts a push reply's states, each under the one
+  // state held at its site when the reply names a site rather than a key.
+  function syncCarry() {
+    if (!sdirty.size) return null;
+    const out = {};
+    for (const k of sdirty) if (store.has(k)) out[k] = { v: store.get(k), n: wn.get(k) || 0 };
+    return Object.keys(out).length ? out : null;
+  }
+  const siteOfKey = (k) => { const p = String(k).split(":"); return p.length === 2 && p[0] !== "g" ? p[0] : p.length === 3 ? p[1] : ""; };
+  function adoptPushStates(states) {
+    for (const k in states) {
+      const e = states[k] || {};
+      let key = store.has(k) ? k : null;
+      if (!key) {
+        const hits = [...store.keys()].filter((x) => siteOfKey(x) === k);
+        if (hits.length !== 1) continue; // none, or several states share the site
+        key = hits[0];
+      }
+      sadopt({ s: key, i: e.v === undefined ? null : e.v, ver: e.ver, sw: e.sw, bn: e.bn });
+    }
+    if (dirty.size) flushStates();
+  }
   const sinit = (r) => {
-    if (store.has(r.s)) return r;
+    if (r.sy) synced.add(r.s);
+    if (store.has(r.s)) return sadopt(r);
+    if (r.ver !== undefined) sbase.set(r.s, r.ver);
     if (r.n) names.set(r.s, r.n);
     if (r.k || r.sh) metas.set(r.s, { k: r.k, sh: r.sh });
     if (r.sh) channel();
@@ -3813,6 +3865,7 @@
     const p = r.p || [], put = (o, i) => i === p.length ? v : { ...(o && typeof o === "object" ? o : {}), [p[i]]: put(o && o[p[i]], i + 1) };
     store.set(r.s, put(store.get(r.s), 0));
     dirty.add([r.s, ...p].join("\0"));
+    if (synced.has(r.s) && !serverWrite) { wn.set(r.s, (wn.get(r.s) || 0) + 1); sdirty.add(r.s); }
     if (pred) { pred.after = store.get(r.s); rec.push(pred); }
     if (r.w && !notifies.has(r.s)) notifies.set(r.s, r.w);
     if (!serverWrite) written.add(r.s);
@@ -3971,6 +4024,7 @@
     awaitsIn();
     for (const r of root ? rootsOf(root) : []) bindOne(r, html, r === root ? scoped : null);
     teleport(html || "");
+    if (dirty.size) flushStates(); // adopted server values reach bindings outside root
   }
   function bindOne(root, html, scoped) {
     let els;
@@ -4619,13 +4673,16 @@
     const p = preds.get(id);
     if (p) p.timer = setTimeout(() => { if (ctl) ctl.abort(); settle(id, true, null, "no reply in time"); }, a.timeout || 10000);
     const init = { credentials: "same-origin", signal: ctl ? ctl.signal : undefined, headers: { "Vk-Push": a.m } };
+    const carry = syncCarry(), states = carry ? JSON.stringify(carry) : "";
     if (a.read) {
       u.searchParams.set("_vk_args", args);
       if (form) u.searchParams.set("_vk_form", form);
+      if (states) u.searchParams.set("_vk_states", states);
     } else {
       const body = new URLSearchParams();
       body.set("_vk_args", args);
       if (form) body.set("_vk_form", form);
+      if (states) body.set("_vk_states", states);
       init.method = "POST";
       init.body = body;
       if (a.csrf) init.headers["X-CSRF-Token"] = a.csrf;
@@ -4636,6 +4693,7 @@
         return go(String(body.redirect)).catch(() => {});
       }
       if (!res.ok || body.error) return settle(id, true, null, body.error && body.error.message || "the page answered " + res.status);
+      if (body.states) adoptPushStates(body.states);
       settle(id, false, body);
     }, (err) => settle(id, true, null, err && err.name === "AbortError" ? "no reply in time" : String(err && err.message || err)));
   }
