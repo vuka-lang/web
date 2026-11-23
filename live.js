@@ -2314,8 +2314,8 @@
   const XHTML = "http://www.w3.org/1999/xhtml";
   const unreached = new Map(); // a parsed container → its loop (scoped's mark), until the morph reaches it
   const loops = new WeakSet(); // containers whose rows a morph mapped to their items, watched
-  const stirred = new WeakMap(); // of those, the ones a mutation reached since → the rows it reached, or true: the container itself
-  const rowAt = new WeakMap(); // a mapped row → its index
+  const stirred = new WeakMap(); // of those, the ones a mutation reached since → the items of the rows it reached, or true: the container itself
+  const rowAt = new WeakMap(); // a mapped row → its item (the item frame it renders, which a reorder or a removal keeps)
   const heldEls = new Set(), homeEls = new Set(); // heldServer's fields and homes' elements, to look for inside a container
   let scopedRuns = 0, fastEls = []; // containers morphed row by row, for the verify mode
   let fastRows = new Map(); // this apply's containers morphed row by row → the rows morphed: what bindIn reads
@@ -2325,7 +2325,7 @@
     for (const r of records) {
       for (let n = r.target, row = null; n; row = n, n = n.parentNode) {
         if (!loops.has(n)) continue;
-        const s = stirred.get(n), i = row ? rowAt.get(row) : undefined;
+        const s = stirred.get(n), i = row ? rowAt.get(row) : undefined; // the row's item
         if (s === true) break;
         if (i === undefined || row.parentNode !== n) stirred.set(n, true);
         else if (s) s.add(i);
@@ -2334,9 +2334,10 @@
       }
     }
   }
-  // loopTouched is the rows of a mapped container something changed since
-  // the last morph, which a morph puts back as it would whole; null when it
-  // changed the container itself (rows came or went), or isn't mapped.
+  // loopTouched is the items of the rows of a mapped container something
+  // changed since the last morph, which a morph puts back as it would
+  // whole; null when it changed the container itself (rows came or went),
+  // or isn't mapped.
   const none = new Set();
   function loopTouched(el) {
     if (!el.isConnected || !loops.has(el)) return null;
@@ -2581,11 +2582,12 @@
   function loop(el, next, mk) {
     if (keptText(el, next) || keptKids(el, next)) return void (mk.block.at = null);
     const at = mk.block.at;
-    if (mk.rows && unreached.get(next) === mk && rowsStill(el, next, mk, at) && (!mk.perm || arrange(el, mk))) { // the rows the last morph left: only the changed ones
+    if (mk.rows && unreached.get(next) === mk && rowsStill(el, next, mk, at) && (!mk.perm || arrange(el, mk, at))) { // the rows the last morph left: only the changed ones
       unreached.delete(next);
       const off = mk.shape.lead.nodes, pairs = mk.rows.map((i, j) => [el.childNodes[off + i], next.childNodes[off + j]]), was = loopKeys;
       loopKeys = at.unique;
       try { for (const [a, b] of pairs) morph(a, b); } finally { loopKeys = was; }
+      for (const i of mk.rows) rowAt.set(el.childNodes[off + i], mk.block.c[i]); // a row a morph replaced is its item's
       // a morph sets every checkbox's indeterminate from the server's markup
       const inputs = at.inputs || pairs.some(([a]) => a.querySelector("input"));
       if (inputs) for (const c of el.querySelectorAll("input")) if (checkable(c)) c.indeterminate = c.hasAttribute("data-vk-mixed");
@@ -2593,7 +2595,6 @@
       fastEls.push(el);
       fastRows.set(el, mk.rows.map((i) => off + i));
       if (window.__vkVerify) { const by = window.__vkScoped ||= {}; by[el.id] = (by[el.id] || 0) + 1; } // for the tests: each container's row-by-row morphs
-      if (mk.perm) for (let j = 0; j < mk.perm.length; j++) rowAt.set(el.childNodes[off + j], j);
       return settled(el, mk, { keys: mk.perm ? mk.perm.map((i) => at.keys[i]) : at.keys, unique: at.unique, inputs });
     }
     whole(next);
@@ -2604,9 +2605,12 @@
   function rowsStill(el, next, mk, at) {
     // what is waiting to be noted now is this morph's own: the scripts' was noted before it began
     loopWatch.takeRecords();
-    const s = stirred.get(el), perm = mk.perm, inv = perm && invert(perm);
+    const s = stirred.get(el), perm = mk.perm;
     if (!at || at.el !== el || seeding || regen && regen.contains(el) || !el.isConnected || !loops.has(el) || s === true) return false;
-    if (s) for (const i of s) if (!mk.rows.includes(inv ? inv[i] : i)) return false;
+    if (s && s.size) { // each touched row is morphed, or gone
+      const k = placesOf(mk.block.c);
+      for (const it of s) if (k.has(it) && !mk.rows.includes(k.get(it))) return false;
+    }
     const off = mk.shape.lead.nodes;
     if (el.childNodes.length !== off + at.items.length + mk.shape.trail.nodes || awayFrom(el).length) return false;
     for (const h of heldEls) if (!h.isConnected) heldEls.delete(h); else if (el.contains(h)) return false;
@@ -2625,16 +2629,24 @@
 
   // arrange puts a reordered loop's rows, as the last morph left them, in
   // the new order (perm: each row's old index), moving the fewest: the rows
-  // of a longest run already in order stay. false, moving none, when a row
-  // that would move holds the focus, which a move would blur.
-  function arrange(el, mk) {
-    const off = mk.shape.lead.nodes, perm = mk.perm, rows = perm.map((i) => el.childNodes[off + i]), stay = increasing(perm);
+  // of a longest run already in order stay. The rows perm doesn't take (at:
+  // the rows the last morph left) go first. false, changing nothing, when
+  // a row that would move holds the focus, which a move would blur.
+  function arrange(el, mk, at) {
+    const off = mk.shape.lead.nodes, perm = mk.perm, inOrder = perm.every((i, j) => !j || perm[j - 1] < i);
+    const kids = Array.from(el.childNodes); // read in order once: a NodeList read out of order walks to each index
+    const rows = inOrder ? null : perm.map((i) => kids[off + i]), stay = inOrder ? null : increasing(perm);
     const f = document.activeElement;
-    if (f && f !== document.body && rows.some((r, j) => !stay[j] && r.contains(f))) return false;
-    for (let j = perm.length - 1, ref = el.childNodes[off + perm.length] || null; j >= 0; ref = rows[j--]) if (!stay[j]) el.insertBefore(rows[j], ref);
+    if (!inOrder && f && f !== document.body && rows.some((r, j) => !stay[j] && r.contains(f))) return false;
+    if (perm.length < at.items.length) {
+      const taken = new Set(perm);
+      for (let i = 0; i < at.items.length; i++) if (!taken.has(i)) el.removeChild(kids[off + i]);
+    }
+    if (!inOrder) for (let j = perm.length - 1, ref = el.childNodes[off + perm.length] || null; j >= 0; ref = rows[j--]) if (!stay[j]) el.insertBefore(rows[j], ref);
     return true;
   }
-  const invert = (perm) => { const inv = []; perm.forEach((i, j) => { inv[i] = j; }); return inv; };
+  // placesOf maps each item of a block to its index.
+  const placesOf = (items) => { const m = new Map(); items.forEach((it, k) => m.set(it, k)); return m; };
   // increasing marks a longest increasing run of xs.
   function increasing(xs) {
     const tails = [], prev = [];
@@ -2670,7 +2682,7 @@
       try { at = { keys: Array.from({ length: n }, (_, i) => keyOf(all[off + i])), unique, inputs: !!el.querySelector("input") }; } finally { loopKeys = was; }
     }
     b.at = { el, items: b.c, keys: at.keys, unique: at.unique, inputs: at.inputs };
-    if (!kept) for (let i = 0; i < n; i++) rowAt.set(all[off + i], i);
+    if (!kept) for (let i = 0; i < n; i++) rowAt.set(all[off + i], b.c[i]);
     if (!loops.has(el)) { loops.add(el); loopWatch.observe(el, { subtree: true, childList: true, attributes: true, characterData: true }); }
     stirred.delete(el);
   }
@@ -2817,7 +2829,7 @@
         const out = [], dirty = [];
         // inPlace: only items changed where they are, no item came, went or
         // moved; perm: each new item's old index, while every item is an old
-        // one, taken once (a reorder)
+        // one, taken once (a reorder, a removal, or both)
         let i = 0, inPlace = true, perm = [];
         for (const st of x.k) {
           if (typeof st === "number") {
@@ -2840,7 +2852,7 @@
         }
         if (i !== old.c.length) inPlace = false;
         if (inPlace) return { c: out, g: gen, dirty, at: old.at };
-        if (perm && perm.length === old.c.length && new Set(perm).size === perm.length) return { c: out, g: gen, dirty, at: old.at, perm };
+        if (perm && perm.length <= old.c.length && new Set(perm).size === perm.length) return { c: out, g: gen, dirty, at: old.at, perm };
         return switched(old, { c: out, g: gen });
       }
       if (x && x.p) {
@@ -2944,13 +2956,14 @@
             if (!scans || scans.some((x) => !x.ok)) {
               d.c.forEach((it) => { out += frameHTML(it, seen); });
             } else {
-              // a reorder (perm) leaves out its rows too: the morph moves
-              // the rows the last morph left into the new order
+              // a reorder or a removal (perm) leaves out its rows too: the
+              // morph drops the rows gone and moves the rows the last morph
+              // left into the new order; a touched row gone goes with them
               const n = marks.length, at = d.at, perm = d.g === gen && d.perm || null;
-              const touched = !keep.has(n) && (d.g !== gen || d.dirty) && at && at.items.length === d.c.length &&
+              const touched = !keep.has(n) && (d.g !== gen || d.dirty) && at && (perm || at.items.length === d.c.length) &&
                 d.c.every((x, k) => x === at.items[perm ? perm[k] : k]) ? loopTouched(at.el) : null;
-              const inv = perm && touched && touched.size ? invert(perm) : null;
-              const rows = touched && [...new Set([...(d.g === gen ? d.dirty : []), ...(inv ? [...touched].map((i) => inv[i]) : touched)])].sort((a, b) => a - b);
+              const k = touched && touched.size ? placesOf(d.c) : null;
+              const rows = touched && [...new Set([...(d.g === gen ? d.dirty : []), ...(k ? [...touched].filter((it) => k.has(it)).map((it) => k.get(it)) : [])])].sort((a, b) => a - b);
               out = out.slice(0, shape.at) + ' data-vk-loop="' + n + '"' + out.slice(shape.at);
               if (rows) rows.forEach((k) => { out += infos[k].h; });
               else infos.forEach((x) => { out += x.h; });
@@ -4088,7 +4101,7 @@
     }
     const name = b.name;
     if (name === "class" && v && typeof v === "object") {
-      for (const k in v) words(k).forEach((c) => el.classList[v[k] ? "add" : "remove"](c));
+      for (const k in v) words(k).forEach((c) => classSet(el, c, !!v[k]));
       return;
     }
     const s = v === true ? (/^aria-/.test(name) ? "true" : "") : v === false ? (/^aria-/.test(name) ? "false" : null) : v == null ? null : String(v);
@@ -4097,6 +4110,17 @@
     else if (el.getAttribute(name) !== s) el.setAttribute(name, s);
     if (name === "value" && isField(el) && el.value !== (s || "")) el.value = s || "";
     if (name === "checked" && checkable(el)) el.checked = s !== null;
+  }
+
+  // classSet adds or removes class c as classList does, but leaves the
+  // attribute alone when that would write back the value it holds (c
+  // already as wanted, the attribute in the token list's own spelling): a
+  // binding put back after every patch would otherwise touch each element
+  // it binds, and a loop's rows touched are morphed again, whole.
+  function classSet(el, c, on) {
+    const l = el.classList;
+    if (l.contains(c) === on && el.getAttribute("class") === Array.from(l).join(" ")) return;
+    l[on ? "add" : "remove"](c);
   }
 
   // ui.Show: a <vk-show> (display: contents) around elements shown while
