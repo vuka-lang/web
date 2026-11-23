@@ -27,7 +27,7 @@ func (p *manyRows) fill(n int) {
 }
 
 func (p *manyRows) Fill500() { p.fill(500) }
-func (p *manyRows) Fill2k() { p.fill(2000) }
+func (p *manyRows) Fill2k()  { p.fill(2000) }
 
 func (p *manyRows) Render() ui.Node {
 	return ui.El("main", nil,
