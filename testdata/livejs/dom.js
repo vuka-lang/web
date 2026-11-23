@@ -61,6 +61,18 @@ class Node {
     for (; n; n = n.parentNode) if (n === this) return true;
     return false;
   }
+  // compareDocumentPosition, for nodes of one tree: PRECEDING (2) or FOLLOWING (4)
+  compareDocumentPosition(n) {
+    if (n === this) return 0;
+    const path = (x) => { const p = []; for (; x; x = x.parentNode) p.unshift(x); return p; };
+    const a = path(this), b = path(n);
+    let i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    if (i === a.length) return 4 | 16; // n is inside this
+    if (i === b.length) return 2 | 8; // this is inside n
+    const kids = a[i - 1].childNodes;
+    return kids.indexOf(b[i]) < kids.indexOf(a[i]) ? 2 : 4;
+  }
   insertBefore(n, ref) {
     if (n.nodeType === 11) {
       for (const c of [...n.childNodes]) this.insertBefore(c, ref);
@@ -121,6 +133,9 @@ class Node {
     return !e.defaultPrevented;
   }
 }
+
+Node.DOCUMENT_POSITION_PRECEDING = 2;
+Node.DOCUMENT_POSITION_FOLLOWING = 4;
 
 class Text extends Node {
   constructor(doc, v) { super(doc); this.nodeType = 3; this.nodeValue = v; }
