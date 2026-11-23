@@ -12,7 +12,9 @@ import (
 // page, search or sort): they read the new address as they render, which is
 // all an Update would do. A pager's link or a link between two batches moves
 // the page in place that way, instead of mounting it again with its loads.
-// Any other parameter changing, or none changing, is a navigation as ever.
+// Any other parameter changing, the path changing, or nothing changing is a
+// navigation as ever: the page mounts again unless it has an Update taking
+// web.URLParams, and in development warnNoUpdate says which applied.
 
 // urlOwner is a session that knows the parameters its components keep in the
 // address.
@@ -65,27 +67,62 @@ func (s *urlSnap) keeps(uri string) bool {
 	if s == nil {
 		return false
 	}
+	d := diffURL(s.path, s.query, s.owned, uri)
+	return !d.path && d.changed && len(d.unkept) == 0
+}
+
+// urlDiff is what a navigation changes of the page's address.
+type urlDiff struct {
+	path    bool     // the path changes
+	changed bool     // a parameter changes
+	unkept  []string // the parameters that change which no component keeps, sorted
+}
+
+// diffURL compares uri with the address path?query, owned naming the
+// parameters the page's components keep in it.
+func diffURL(path string, query url.Values, owned map[string]bool, uri string) urlDiff {
 	uri, _, _ = strings.Cut(uri, "#")
-	path, next := splitURL(uri)
-	if path != s.path {
-		return false
+	npath, next := splitURL(uri)
+	d := urlDiff{path: npath != path}
+	note := func(k string) {
+		d.changed = true
+		if !owned[k] && !slices.Contains(d.unkept, k) {
+			d.unkept = append(d.unkept, k)
+		}
 	}
-	changed := false
 	for k, vals := range next {
-		if !slices.Equal(vals, s.query[k]) {
-			if !s.owned[k] {
-				return false
-			}
-			changed = true
+		if !slices.Equal(vals, query[k]) {
+			note(k)
 		}
 	}
-	for k := range s.query {
+	for k := range query {
 		if _, ok := next[k]; !ok {
-			if !s.owned[k] {
-				return false
-			}
-			changed = true
+			note(k)
 		}
 	}
-	return changed
+	slices.Sort(d.unkept)
+	return d
+}
+
+// whyRemount says why a patch to uri can't keep the page without an Update,
+// for warnNoUpdate.
+func (c *conn) whyRemount(uri string) string {
+	var owned map[string]bool
+	if o, ok := c.s.(urlOwner); ok {
+		owned = o.URLParams()
+	}
+	path, query := splitURL(c.uri)
+	d := diffURL(path, query, owned, uri)
+	switch {
+	case d.path:
+		return "the patch moves it to another path"
+	case len(d.unkept) > 0:
+		names := make([]string, len(d.unkept))
+		for i, k := range d.unkept {
+			names[i] = "?" + k + "="
+		}
+		return "the patch changes " + strings.Join(names, ", ") + ", which no @ui.URL field or DataTable it renders keeps"
+	default:
+		return "the patch changes no parameter"
+	}
 }

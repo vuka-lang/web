@@ -1173,11 +1173,13 @@ func (a *App) liveErrorText(err error) (string, bool) {
 // navigate moves the page to m.URL over the connection: the URL's route runs
 // as for a join (X-Vuka-Live: navigate), and the page it renders becomes the
 // session's. The server decides whether it is a patch, the client's patch
-// flag only asking for one: the page's component stays mounted only when
-// the URL's route is a Live page whose type has an Update taking
-// web.URLParams, and that Update takes the URL's params; otherwise every
-// component mounts afresh, Mount seeing the new URL, even on the same
-// route. The reply carries a token for the new page, which a reconnect
+// flag only asking for one: the page's component stays mounted when the
+// URL's route is a Live page whose type has an Update taking web.URLParams,
+// and that Update takes the URL's params, or when the patch changes only
+// query parameters the page's components keep in the address (their @ui.URL
+// fields, their DataTables'), which they read again as they render
+// (liveurlonly.go); otherwise every component mounts afresh, Mount seeing
+// the new URL, even on the same route. The reply carries a token for the new page, which a reconnect
 // joins. A URL whose route answers anything but a page (a redirect, an
 // error, JSON) is the browser's to load: the reply is a redirect, refused
 // (an error, which the runtime loads the URL on) when it names a URL that
@@ -1225,7 +1227,8 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 		// The page is being left: end its deferred loads now, before the next
 		// page's route runs, so their queries hand the pool and the CPU to the
 		// navigation instead of racing it. Only a navigation asking for a
-		// patch of a page that can take one (it has an Update) may keep the
+		// patch of a page that can take one (it has an Update, or the patch
+		// changes only what its components keep in the address) may keep the
 		// page, so only then do its loads go on (startDeferred settles it
 		// once the server has decided).
 		c.endLoads()
@@ -1260,7 +1263,7 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 	urlOnly = urlOnly && j.updates == nil
 	patch := m.Patch && (j.updates != nil || urlOnly)
 	if m.Patch && !patch && !urlOnly {
-		c.app.warnNoUpdate(ctx, j)
+		c.app.warnNoUpdate(ctx, j, c.whyRemount(uri))
 	}
 	if ahead != nil && patch {
 		// a patch keeps the page's instances, and its slot, which the render
@@ -1310,16 +1313,32 @@ func (c *conn) navigate(ctx context.Context, m live.ClientMessage) (any, bool) {
 }
 
 // warnNoUpdate says, once for each route and in development only, that a
-// patch navigation asked for a live page that has no Update: it mounts
+// patch navigation asked for a live page it can't keep: the page has no
+// Update taking web.URLParams, and the patch changes more of the URL than
+// its components' @ui.URL fields and DataTables keep (why), so it mounts
 // again, as any navigation to it does.
-func (a *App) warnNoUpdate(ctx context.Context, j *join) {
+func (a *App) warnNoUpdate(ctx context.Context, j *join, why string) {
 	if !a.dev || j.route == "" {
 		return
 	}
 	if _, seen := a.noUpdate.LoadOrStore(j.route, true); seen {
 		return
 	}
-	slog.WarnContext(ctx, "a patch link targets a live page without Update, so the page mounts again: add Update(ctx, params) to keep the page on patches", "route", j.route, "page", j.where)
+	slog.WarnContext(ctx, "a patch link targets a live page without Update, so the page mounts again: "+why+
+		"; to keep it mounted, declare func (p *"+pageTypeName(j.where)+") Update(web.URLParams), or take a struct embedding web.URLParams to re-bind the new URL's parameters",
+		"route", j.route, "page", j.where)
+}
+
+// pageTypeName is the name of the page type a join's where names ("live
+// page main.Order" → "Order"); "Page" when it names none.
+func pageTypeName(where string) string {
+	name := where[strings.LastIndexByte(where, ' ')+1:]
+	name = name[strings.LastIndexByte(name, '.')+1:]
+	name = strings.TrimLeft(name, "*")
+	if name == "" {
+		return "Page"
+	}
+	return name
 }
 
 // docTitle is the title of the document the session renders, as a load of

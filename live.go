@@ -423,16 +423,20 @@ func (a *App) bindProps(v reflect.Value, props []prop, pathNames []string, r *ht
 // bound again too. Update runs before the patch renders. Mount, not Update,
 // sees the first URL.
 //
-// Only a page with such an Update stays mounted across a patch, whatever
-// the browser asks: any other mounts again, Mount seeing the new URL. So
-// Update must make every check Mount makes of what the URL names — that
-// the visitor may see order {id}, say. An error it returns fails the
+// A page with such an Update stays mounted across every patch the browser
+// asks for: Update makes every check Mount makes of what the URL names —
+// that the visitor may see order {id}, say. An error it returns fails the
 // patch: nothing of the page stays mounted, and the browser loads the URL,
 // the route answering as for any request.
 //
-// An Update taking URLParams itself keeps the page mounted taking nothing
-// of the URL: for a page whose components keep their state in it (@ui.URL
-// fields, Query), which fill from the new URL as they render.
+// A page without one needs no Update to stay mounted when a patch changes
+// only query parameters its components keep in the address — their @ui.URL
+// fields, their DataTables' pages, searches and sorts — which they read
+// again as they render. Any other patch, of its path or a parameter nothing
+// keeps, mounts it again, Mount seeing the new URL (in development a
+// warning names what kept it from staying). An Update taking URLParams
+// itself keeps the page mounted across those too, taking nothing of the
+// URL; the page's props bound from it are set again before it renders.
 type URLParams struct{}
 
 var urlParamsType = typeOf[URLParams]()

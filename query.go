@@ -10,9 +10,10 @@ import (
 // Query edits the URL of a live page from one of its events: the change is
 // a live patch of the page, sent once the event's reply is applied, that
 // keeps the other parameters and takes the current history entry's place
-// (Push adds one instead). The page then takes the URL as any patch does —
-// its Update taking web.URLParams, or else it mounts again — and its
-// components' @ui.URL fields fill from it.
+// (Push adds one instead). The page then takes the URL as any patch does:
+// it stays mounted when it has an Update taking web.URLParams or the edit
+// changes only parameters its components keep (@ui.URL fields, DataTables),
+// else it mounts again; its components' @ui.URL fields fill from it.
 //
 //	func (t *Requests) Filter(ctx context.Context, status string) {
 //		web.Query.Set(ctx, "status", status)
