@@ -72,7 +72,7 @@ func TestLivePatchWithoutUpdateWarns(t *testing.T) {
 		patch(t, srv, "/orders/1", "/orders/1?tab=2", 2, true)
 		got := logs.take()
 		if len(got) != 1 || !strings.HasPrefix(got[0], "WARN a patch link targets a live page without Update") ||
-			!strings.Contains(got[0], "add Update(ctx, params)") || !strings.Contains(got[0], "route=/orders/{id}") {
+			!strings.Contains(got[0], "changes ?tab=, which no @ui.URL field") || !strings.Contains(got[0], "func (p *secOrder) Update(web.URLParams)") || !strings.Contains(got[0], "route=/orders/{id}") {
 			t.Fatalf("logged %q", got)
 		}
 		patch(t, srv, "/orders/1", "/orders/1?tab=3", 2, true)
