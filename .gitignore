@@ -2,3 +2,5 @@
 .env
 .env*.local
 .DS_Store
+.claude/
+.DS_Store
