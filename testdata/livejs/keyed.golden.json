@@ -1,0 +1,167 @@
+[
+ {
+  "what": "loop: insert/move/remove",
+  "html": "<div data-vk-id=\"c1\"><ul><li data-vk-key=\"a\">ra</li><li data-vk-key=\"1\">r1</li><li data-vk-key=\"5\">r5 moved</li><li data-vk-key=\"2\">r2</li><li data-vk-key=\"b\">rb</li><li data-vk-key=\"c\">rc</li><li data-vk-key=\"4\">r4</li><li data-vk-key=\"6\">r6</li><li data-vk-key=\"d\">rd</li><li data-vk-key=\"e\">re</li></ul></div>",
+  "marks": [
+   "m5:UL",
+   "m12:LI",
+   "m6:LI",
+   "m10:LI",
+   "m7:LI",
+   "m13:LI",
+   "m14:LI",
+   "m9:LI",
+   "m11:LI",
+   "m15:LI",
+   "m16:LI"
+  ],
+  "focus": "m3:BODY"
+ },
+ {
+  "what": "loop: reversed",
+  "html": "<div data-vk-id=\"c1\"><ul><li data-vk-key=\"e\">re</li><li data-vk-key=\"d\">rd</li><li data-vk-key=\"6\">r6</li><li data-vk-key=\"4\">r4</li><li data-vk-key=\"c\">rc</li><li data-vk-key=\"b\">rb</li><li data-vk-key=\"2\">r2</li><li data-vk-key=\"5\">r5</li><li data-vk-key=\"1\">r1</li><li data-vk-key=\"a\">ra</li></ul></div>",
+  "marks": [
+   "m5:UL",
+   "m16:LI",
+   "m15:LI",
+   "m11:LI",
+   "m9:LI",
+   "m14:LI",
+   "m13:LI",
+   "m7:LI",
+   "m10:LI",
+   "m6:LI",
+   "m12:LI"
+  ],
+  "focus": "m3:BODY"
+ },
+ {
+  "what": "loop: all replaced",
+  "html": "<div data-vk-id=\"c1\"><ul><li data-vk-key=\"x\">rx</li><li data-vk-key=\"y\">ry</li></ul></div>",
+  "marks": [
+   "m5:UL",
+   "m17:LI",
+   "m18:LI"
+  ],
+  "focus": "m3:BODY"
+ },
+ {
+  "what": "loop: cleared",
+  "html": "<div data-vk-id=\"c1\"><ul></ul></div>",
+  "marks": [
+   "m5:UL"
+  ],
+  "focus": "m3:BODY"
+ },
+ {
+  "what": "loop: created from empty",
+  "html": "<div data-vk-id=\"c1\"><ul><li data-vk-key=\"n0\">n0</li><li data-vk-key=\"n1\">n1</li><li data-vk-key=\"n2\">n2</li><li data-vk-key=\"n3\">n3</li><li data-vk-key=\"n4\">n4</li><li data-vk-key=\"n5\">n5</li><li data-vk-key=\"n6\">n6</li><li data-vk-key=\"n7\">n7</li><li data-vk-key=\"n8\">n8</li><li data-vk-key=\"n9\">n9</li><li data-vk-key=\"n10\">n10</li><li data-vk-key=\"n11\">n11</li><li data-vk-key=\"n12\">n12</li><li data-vk-key=\"n13\">n13</li><li data-vk-key=\"n14\">n14</li><li data-vk-key=\"n15\">n15</li><li data-vk-key=\"n16\">n16</li><li data-vk-key=\"n17\">n17</li><li data-vk-key=\"n18\">n18</li><li data-vk-key=\"n19\">n19</li><li data-vk-key=\"n20\">n20</li><li data-vk-key=\"n21\">n21</li><li data-vk-key=\"n22\">n22</li><li data-vk-key=\"n23\">n23</li><li data-vk-key=\"n24\">n24</li><li data-vk-key=\"n25\">n25</li><li data-vk-key=\"n26\">n26</li><li data-vk-key=\"n27\">n27</li><li data-vk-key=\"n28\">n28</li><li data-vk-key=\"n29\">n29</li></ul></div>",
+  "marks": [
+   "m5:UL",
+   "m19:LI",
+   "m20:LI",
+   "m21:LI",
+   "m22:LI",
+   "m23:LI",
+   "m24:LI",
+   "m25:LI",
+   "m26:LI",
+   "m27:LI",
+   "m28:LI",
+   "m29:LI",
+   "m30:LI",
+   "m31:LI",
+   "m32:LI",
+   "m33:LI",
+   "m34:LI",
+   "m35:LI",
+   "m36:LI",
+   "m37:LI",
+   "m38:LI",
+   "m39:LI",
+   "m40:LI",
+   "m41:LI",
+   "m42:LI",
+   "m43:LI",
+   "m44:LI",
+   "m45:LI",
+   "m46:LI",
+   "m47:LI",
+   "m48:LI"
+  ],
+  "focus": "m3:BODY"
+ },
+ {
+  "what": "ids: duplicate on the page, id changed",
+  "html": "<div data-vk-id=\"c1\"><p id=\"y\">y</p><p id=\"x\">x</p><p id=\"w\">w (was z)</p><span>u</span></div>",
+  "marks": [
+   "m54:P",
+   "m53:P",
+   "m55:P",
+   "m56:SPAN"
+  ],
+  "focus": "m51:BODY"
+ },
+ {
+  "what": "ids: the same new id twice in one message",
+  "html": "<div data-vk-id=\"c1\"><p id=\"n\">n2</p><p id=\"w\">w</p><p id=\"y\">y</p><span>u</span></div>",
+  "marks": [
+   "m57:P",
+   "m55:P",
+   "m54:P",
+   "m56:SPAN"
+  ],
+  "focus": "m51:BODY"
+ },
+ {
+  "what": "ids: after the duplicate",
+  "html": "<div data-vk-id=\"c1\"><p id=\"w\">w</p><p id=\"n\">n</p><span>u</span><p id=\"y\">y</p></div>",
+  "marks": [
+   "m55:P",
+   "m57:P",
+   "m56:SPAN",
+   "m54:P"
+  ],
+  "focus": "m51:BODY"
+ },
+ {
+  "what": "ignore + focus: reordered",
+  "html": "<div data-vk-id=\"c1\"><ul><li data-vk-key=\"4\">r4</li><li data-vk-key=\"3\">r3</li><li id=\"keep\" data-vk-ignore>the browser's</li><li data-vk-key=\"new\">rnew</li><li data-vk-key=\"2\"><input id=\"f\"></li><li data-vk-key=\"1\">r1</li></ul></div>",
+  "marks": [
+   "m62:UL",
+   "m68:LI",
+   "m67:LI",
+   "m64:LI",
+   "m69:LI",
+   "m65:LI",
+   "m66:INPUT",
+   "m63:LI"
+  ],
+  "focus": "m66:INPUT"
+ },
+ {
+  "what": "ignore + focus: focused row first",
+  "html": "<div data-vk-id=\"c1\"><ul><li data-vk-key=\"2\"><input id=\"f\"></li><li data-vk-key=\"new2\">n2</li><li data-vk-key=\"1\">r1</li><li id=\"keep\" data-vk-ignore>the browser's</li></ul></div>",
+  "marks": [
+   "m62:UL",
+   "m65:LI",
+   "m66:INPUT",
+   "m70:LI",
+   "m63:LI",
+   "m64:LI"
+  ],
+  "focus": "m66:INPUT"
+ },
+ {
+  "what": "instances: inserted, moved",
+  "html": "<div data-vk-id=\"c1\"><section><div data-vk-id=\"c4\">four</div><div data-vk-id=\"c3\">three</div>text<b>b</b><div data-vk-id=\"c2\">two</div></section></div>",
+  "marks": [
+   "m75:SECTION",
+   "m79:DIV",
+   "m77:DIV",
+   "m78:B",
+   "m76:DIV"
+  ],
+  "focus": "m73:BODY"
+ }
+]

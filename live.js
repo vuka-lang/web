@@ -1565,20 +1565,30 @@
     const skip = (c) => { while (c && kept(c)) c = c.nextSibling; return c; };
     const outs = awayFrom(el), used = new Set();
     let cur = skip(el.firstChild), last = null, nextKeys = null, byKey = null;
-    // keyed is el's child of key k and tag: the first in el's order. The
-    // children's keys are read once; a key held once there is found at once,
-    // anything else (a key held twice, one not there at first) by a search.
+    // keyed is el's child of key k and tag: the first in el's order. byKey
+    // holds every child of el under the key it has — the element, or a Set
+    // of the elements when several had it — read once when first asked and
+    // kept as this morph puts children in el or changes one's key (index):
+    // a key it doesn't hold is held by no child. An entry may be stale (a
+    // child gone, moved off, its key changed), so each is checked.
+    const index = (c) => {
+      const ck = byKey && c.nodeType === 1 && keyOf(c);
+      if (!ck) return;
+      const h = byKey.get(ck);
+      if (!h) byKey.set(ck, c);
+      else if (h instanceof Set) h.add(c);
+      else if (h !== c) byKey.set(ck, new Set([h, c]));
+    };
     const keyed = (k, tag) => {
       if (!byKey) {
         byKey = new Map();
-        for (const c of el.children) {
-          const ck = keyOf(c);
-          if (ck) byKey.set(ck, byKey.has(ck) ? null : c);
-        }
+        for (const c of el.children) index(c);
       }
-      const c = byKey.get(k);
-      if (c && c.parentNode === el && !foreign.has(c) && keyOf(c) === k && c.tagName === tag) return c;
-      return Array.from(el.children).find((c) => !foreign.has(c) && keyOf(c) === k && c.tagName === tag) || null;
+      const h = byKey.get(k), ok = (c) => c.parentNode === el && !foreign.has(c) && keyOf(c) === k && c.tagName === tag;
+      if (!(h instanceof Set)) return h && ok(h) ? h : null;
+      let first = null;
+      for (const c of h) if (ok(c) && (!first || first.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_PRECEDING)) first = c;
+      return first;
     };
     for (const n of Array.from(next.childNodes)) {
       let match = null;
@@ -1637,10 +1647,11 @@
           const after = match.nextSibling;
           last = place(document.importNode(whole(n), true));
           el.replaceChild(last, match);
+          index(last);
           cur = skip(after);
           continue;
         }
-        if (n.nodeType === 1) morph(match, n);
+        if (n.nodeType === 1) { morph(match, n); index(match); }
         else if (match.nodeValue !== n.nodeValue) match.nodeValue = n.nodeValue;
         cur = skip(match.nextSibling);
         last = match;
@@ -1655,6 +1666,7 @@
       }
       last = place(document.importNode(whole(n), true));
       el.insertBefore(last, cur);
+      index(last);
     }
     while (cur) {
       const gone = cur;
