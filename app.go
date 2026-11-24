@@ -396,12 +396,12 @@ func (a *App) build() (http.Handler, error) {
 	specs = append(specs, formTwins(specs)...)
 	a.names = map[string]string{}
 	for _, s := range specs {
-		if s.name != "" {
-			if p, ok := a.names[s.name]; ok && p != s.path {
-				errs = append(errs, diag.New("E0401", "the route name %q is given to %s and to %s", s.name, p, s.path).WithHelp("give one of them another name"))
+		if name := s.nameOf(); name != "" {
+			if p, ok := a.names[name]; ok && p != s.path {
+				errs = append(errs, diag.New("E0401", "the route name %q is given to %s and to %s", name, p, s.path).WithHelp("give one of them another name"))
 				continue
 			}
-			a.names[s.name] = s.path
+			a.names[name] = s.path
 		}
 	}
 	rec := &recordingRouter{Router: a.router}

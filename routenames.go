@@ -21,9 +21,24 @@ import (
 // transpiled.
 
 // RouteName names the route it is given with, for Route, RouteURL and
-// RoutePath: what vuka's folder routes register for each route.
-func RouteName(name string) RouteOption {
-	return routeOpt(func(s *routeSpec) { s.name = name })
+// RoutePath. A route attribute with a method RouteName() string names it
+// too: what vuka's folder routes register for each route.
+func RouteName(name string) RouteOption { return routeName(name) }
+
+type routeName string
+
+func (n routeName) Attrs() []any      { return []any{n} }
+func (n routeName) RouteName() string { return string(n) }
+
+// nameOf is the route's name: the last attribute naming it.
+func (s *routeSpec) nameOf() string {
+	name := ""
+	for _, a := range s.attrs {
+		if n, ok := a.(interface{ RouteName() string }); ok {
+			name = n.RouteName()
+		}
+	}
+	return name
 }
 
 // RouteQuery is a link's query, the last argument of Route, RouteURL or
