@@ -16,7 +16,7 @@ func (c routeCode) MarshalText() ([]byte, error) { return []byte("c-" + string(c
 func namedApp(t *testing.T) *App {
 	t.Helper()
 	ok := func() string { return "ok" }
-	a := New()
+	a := New(Only("none"))
 	a.Get("/users", ok, RouteName("users"))
 	a.Get("/users/{user}/edit", func() string { return "edit" }, RouteName("users.edit"))
 	a.Post("/users/{user}/edit", func() string { return "post" }, RouteName("users.edit"))
@@ -59,7 +59,7 @@ func TestRoutePaths(t *testing.T) {
 }
 
 func TestRouteMountPrefix(t *testing.T) {
-	a := New()
+	a := New(Only("none"))
 	var got []string
 	a.Get("/users/{user}/edit", func(ctx context.Context) string {
 		got = append(got, Route(ctx, "users.edit", 7), RouteURL(ctx, "users.edit", 7), RoutePath(ctx, "users.edit", 7), MountPath(ctx, "/users/7/edit"))
@@ -107,7 +107,7 @@ func TestRouteMistakes(t *testing.T) {
 }
 
 func TestRouteNameTwice(t *testing.T) {
-	a := New()
+	a := New(Only("none"))
 	a.Get("/a", func() string { return "" }, RouteName("x"))
 	a.Get("/b", func() string { return "" }, RouteName("x"))
 	if err := a.Build(); err == nil || !strings.Contains(err.Error(), `the route name "x"`) {
