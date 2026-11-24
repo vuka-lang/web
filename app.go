@@ -31,6 +31,7 @@ import (
 // with decorators, and whatever was added in code.
 type App struct {
 	router Router
+	names  map[string]string // route names → their paths (RouteName)
 	c      *container
 	mw     []Middleware
 	only   map[string]bool
@@ -393,6 +394,16 @@ func (a *App) build() (http.Handler, error) {
 	}
 	specs = append(specs, a.specs...)
 	specs = append(specs, formTwins(specs)...)
+	a.names = map[string]string{}
+	for _, s := range specs {
+		if name := s.nameOf(); name != "" {
+			if p, ok := a.names[name]; ok && p != s.path {
+				errs = append(errs, diag.New("E0401", "the route name %q is given to %s and to %s", name, p, s.path).WithHelp("give one of them another name"))
+				continue
+			}
+			a.names[name] = s.path
+		}
+	}
 	rec := &recordingRouter{Router: a.router}
 	a.router = rec
 	defer func() { a.router = rec.Router }()
