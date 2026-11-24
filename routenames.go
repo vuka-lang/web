@@ -37,6 +37,8 @@ type RouteQuery map[string]any
 // checks before it runs. An unknown name, or arguments the path doesn't
 // take, panics naming the closest route under vuka run and in tests; in
 // production it is logged, and the link is "#".
+//
+//go:noinline
 func Route(ctx context.Context, name string, args ...any) string {
 	return routeLink(ctx, name, args, true, true)
 }
@@ -44,6 +46,8 @@ func Route(ctx context.Context, name string, args ...any) string {
 // RouteURL is Route as vuka compiles route("name", args…): its name and
 // arguments checked when the page was transpiled, a mismatch is logged and
 // gives "#", never a panic.
+//
+//go:noinline
 func RouteURL(ctx context.Context, name string, args ...any) string {
 	return routeLink(ctx, name, args, true, false)
 }
@@ -51,6 +55,8 @@ func RouteURL(ctx context.Context, name string, args ...any) string {
 // RoutePath is Route without the mount prefix, as routePath("name", args…)
 // compiles: for matching a request's path, or an absolute URL on another
 // base.
+//
+//go:noinline
 func RoutePath(ctx context.Context, name string, args ...any) string {
 	return routeLink(ctx, name, args, false, true)
 }
