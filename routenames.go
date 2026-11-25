@@ -5,11 +5,13 @@ import (
 	"encoding"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"reflect"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/vuka-lang/ui/v2"
 )
@@ -39,6 +41,39 @@ func (s *routeSpec) nameOf() string {
 		}
 	}
 	return name
+}
+
+// RegisterRouteNames adds route names, each with its path as the app's
+// table holds it (/users/{user}/edit), to a table Route, RouteURL and
+// RoutePath read for a name the built app doesn't have, or when no app is
+// built: vuka test registers the module's folder routes with it, so a
+// package's tests link by name without building the app.
+func RegisterRouteNames(names map[string]string) {
+	fallbackMu.Lock()
+	defer fallbackMu.Unlock()
+	if fallbackNames == nil {
+		fallbackNames = map[string]string{}
+	}
+	maps.Copy(fallbackNames, names)
+}
+
+var (
+	fallbackMu    sync.RWMutex
+	fallbackNames map[string]string
+)
+
+// lookupRoute is the path of the route name: the app's, else the
+// registered one.
+func (a *App) lookupRoute(name string) (string, bool) {
+	if a != nil {
+		if p, ok := a.names[name]; ok {
+			return p, true
+		}
+	}
+	fallbackMu.RLock()
+	defer fallbackMu.RUnlock()
+	p, ok := fallbackNames[name]
+	return p, ok
 }
 
 // RouteQuery is a link's query, the last argument of Route, RouteURL or
@@ -94,11 +129,7 @@ func routeLink(ctx context.Context, name string, args []any, mount, strict bool)
 
 // routePath formats the path of the route name with args.
 func (a *App) routePath(name string, args []any) (string, error) {
-	var path string
-	ok := false
-	if a != nil {
-		path, ok = a.names[name]
-	}
+	path, ok := a.lookupRoute(name)
 	if !ok {
 		return "", a.unknownRoute(name)
 	}
@@ -146,16 +177,17 @@ func (a *App) routePath(name string, args []any) (string, error) {
 }
 
 func (a *App) unknownRoute(name string) error {
-	if a == nil {
+	fallbackMu.RLock()
+	names := slices.Collect(maps.Keys(fallbackNames))
+	fallbackMu.RUnlock()
+	if a == nil && len(names) == 0 {
 		return fmt.Errorf("web: no route %q: no app is built", name)
 	}
-	names := slices.Sorted(func(yield func(string) bool) {
-		for n := range a.names {
-			if !yield(n) {
-				return
-			}
-		}
-	})
+	if a != nil {
+		names = slices.AppendSeq(names, maps.Keys(a.names))
+	}
+	slices.Sort(names)
+	names = slices.Compact(names)
 	if c := closest(name, names); c != "" {
 		return fmt.Errorf("web: no route %q; did you mean %q?", name, c)
 	}
