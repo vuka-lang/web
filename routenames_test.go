@@ -114,3 +114,49 @@ func TestRouteNameTwice(t *testing.T) {
 		t.Errorf("one name for two paths: %v", err)
 	}
 }
+
+// TestRegisteredRouteNames: with no app built, the names RegisterRouteNames
+// gives link as the app's would, with the same mistakes; a built app's
+// own name wins.
+func TestRegisteredRouteNames(t *testing.T) {
+	prev := lastApp.Swap(nil)
+	t.Cleanup(func() {
+		lastApp.Store(prev)
+		fallbackMu.Lock()
+		fallbackNames = nil
+		fallbackMu.Unlock()
+	})
+	ctx := context.Background()
+	if got := RouteURL(ctx, "orders.view", 3); got != "#" {
+		t.Errorf("RouteURL with nothing registered = %q, want #", got)
+	}
+	RegisterRouteNames(map[string]string{"orders.view": "/orders/{order}", "users": "/people"})
+	if got, want := RouteURL(ctx, "orders.view", 3, RouteQuery{"tab": "items"}), "/orders/3?tab=items"; got != want {
+		t.Errorf("RouteURL = %q, want %q", got, want)
+	}
+	if got, want := Route(ctx, "users"), "/people"; got != want {
+		t.Errorf("Route = %q, want %q", got, want)
+	}
+	panics := func(f func()) (msg string) {
+		defer func() {
+			if r := recover(); r != nil {
+				msg = r.(error).Error()
+			}
+		}()
+		f()
+		return ""
+	}
+	if msg := panics(func() { Route(ctx, "order.view", 3) }); !strings.Contains(msg, `did you mean "orders.view"`) {
+		t.Errorf("an unknown name: %q, want a panic naming orders.view", msg)
+	}
+	if msg := panics(func() { Route(ctx, "orders.view") }); !strings.Contains(msg, "takes 1 path parameters (order), given 0") {
+		t.Errorf("a missing parameter: %q", msg)
+	}
+	lastApp.Store(namedApp(t))
+	if got, want := Route(ctx, "users"), "/users"; got != want {
+		t.Errorf("Route with an app built = %q, want the app's %q", got, want)
+	}
+	if got, want := Route(ctx, "orders.view", 3), "/orders/3"; got != want {
+		t.Errorf("Route of a name the app lacks = %q, want %q", got, want)
+	}
+}
